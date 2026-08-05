@@ -1,0 +1,10 @@
+import { rangeFor } from '../src/utils/dateFilters.ts';
+const { fetchFeaturedLondon } = await import('../src/services/featuredEvents.ts');
+const today = rangeFor('today', new Date('2026-08-01T12:00:00+01:00'));
+const all = rangeFor('all', new Date('2026-08-01T12:00:00+01:00'));
+const f = await fetchFeaturedLondon(all);
+const reggae = f.filter((e) => /reggae|national bowl/i.test(e.title + e.venue));
+console.log('reggae featured', reggae.length);
+reggae.forEach((e) => console.log(e.startsAt.slice(0, 10), e.title, '@', e.venue));
+const t = await fetchFeaturedLondon(today);
+console.log('today', t.filter((e) => /bowl|reggae/i.test(e.title + e.venue)).map((e) => e.title));

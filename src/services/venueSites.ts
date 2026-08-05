@@ -1,6 +1,7 @@
 import { findLondonPlace } from '@/data/londonVenues';
 import type { AppEvent, EventCategory } from '@/types/event';
-import { isInRange, type DateRange } from '@/utils/dateFilters';
+import { eventOverlapsRange, isInRange, type DateRange } from '@/utils/dateFilters';
+import { cleanDescription } from '@/utils/description';
 import { defaultEndsAt } from '@/utils/duration';
 
 /**
@@ -27,6 +28,9 @@ import { defaultEndsAt } from '@/utils/duration';
  *    featuredEvents.ts until a feed is reverse-engineered.
  *  - London Stadium → site itself showed "No events!" (23 Jul 2026);
  *    West Ham fixtures come from ESPN, concerts from TM priority venue.
+ *
+ *  - FotMob club calendars → moved to fotmobCalendars.ts (free football
+ *    backbone for all major London grounds + Watford, incl. friendlies).
  *
  * ROLE: fallback layer only. events.ts drops any venue-site event within
  * ±3h of an existing API event at the same venue, so the football APIs and
@@ -78,27 +82,29 @@ const VENUE_SITES: VenueSite[] = [
     defaultSub: 'Cricket',
     icsLocationFilter: 'kia oval',
   },
+  // FotMob club calendars live in fotmobCalendars.ts (free football backbone
+  // covering all major London home grounds + Watford, incl. friendlies).
   {
     venue: 'Epsom Downs Racecourse',
-    url: 'https://www.thejockeyclub.co.uk/epsom/events/',
+    url: 'https://www.thejockeyclub.co.uk/epsom-downs/events-tickets/',
     kind: 'jsonld-crawl',
-    crawlMatch: '/epsom/events-tickets/',
+    crawlMatch: '/epsom-downs/events-tickets/',
     defaultCategory: 'sports',
     defaultSub: 'Horse Racing',
   },
   {
     venue: 'Sandown Park Racecourse',
-    url: 'https://www.thejockeyclub.co.uk/sandown/events/',
+    url: 'https://www.thejockeyclub.co.uk/sandown-park/events-tickets/',
     kind: 'jsonld-crawl',
-    crawlMatch: '/sandown/events-tickets/',
+    crawlMatch: '/sandown-park/events-tickets/',
     defaultCategory: 'sports',
     defaultSub: 'Horse Racing',
   },
   {
     venue: 'Kempton Park Racecourse',
-    url: 'https://www.thejockeyclub.co.uk/kempton/events/',
+    url: 'https://www.thejockeyclub.co.uk/kempton-park/events-tickets/',
     kind: 'jsonld-crawl',
-    crawlMatch: '/kempton/events-tickets/',
+    crawlMatch: '/kempton-park/events-tickets/',
     defaultCategory: 'sports',
     defaultSub: 'Horse Racing',
   },
@@ -170,7 +176,9 @@ const makeEvent = (
   venue: place.venue,
   latitude: place.latitude,
   longitude: place.longitude,
-  description,
+  // Same 1–2 line About rule as Ticketmaster (client, 26 Jul 2026) —
+  // venue-site feeds can carry long marketing copy too.
+  description: cleanDescription(description),
   subCategory: sub,
   url,
 });
@@ -291,6 +299,19 @@ const fetchJsonldCrawl = async (
 
 // ── ICS (calendar feeds) ─────────────────────────────────────────────────
 
+/** Parse ICS date-times: `20260801T140000Z`, `20260801T150000`, or ISO. */
+const parseIcsDateTime = (raw: string): number | null => {
+  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
+  if (compact) {
+    const [, y, mo, d, h, mi, s, z] = compact;
+    const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}${z ? 'Z' : ''}`;
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : null;
+};
+
 /** Minimal VEVENT parser: unfolds continuation lines, extracts the fields we
  *  need. Date-only DTSTART (VALUE=DATE) is treated as a cricket day: play
  *  10:30–18:30 UK time; multi-day fixtures end on their final day. */
@@ -330,17 +351,25 @@ const icsToEvents = (
         if (endDay.getTime() > Date.parse(startsAt)) endsAt = endDay.toISOString();
       }
     } else {
-      const ms = Date.parse(dtstart);
-      if (!Number.isFinite(ms)) continue;
+      const ms = parseIcsDateTime(dtstart);
+      if (ms == null) continue;
       startsAt = new Date(ms).toISOString();
+      const dtend = get('DTEND');
+      if (dtend) {
+        const endMs = parseIcsDateTime(dtend);
+        if (endMs != null && endMs > ms) endsAt = new Date(endMs).toISOString();
+      }
     }
-    if (!isInRange(startsAt, range)) continue;
+    if (!eventOverlapsRange(startsAt, endsAt, range)) continue;
+
+    // FotMob titles look like "⚽️ Millwall - Royal Antwerp" — strip emoji noise.
+    const title = summary.replace(/^[\u26BD\uFE0F\u26BE\s]+/u, '').trim();
 
     out.push(
       makeEvent(
         site,
         place,
-        summary,
+        title || summary,
         startsAt,
         endsAt,
         get('DESCRIPTION') ?? undefined,

@@ -1,6 +1,7 @@
-import { findLondonPlace } from '@/data/londonVenues';
+import { findLondonPlace, isInDriveIQArea } from '@/data/londonVenues';
 import type { AppEvent, EventCategory } from '@/types/event';
 import type { DateRange } from '@/utils/dateFilters';
+import { pickEventDescription } from '@/utils/description';
 import { defaultEndsAt } from '@/utils/duration';
 
 /**
@@ -163,18 +164,31 @@ const PRIORITY_VENUES: PriorityVenue[] = [
   { name: 'London Stadium', venueId: 'KovZ9177EX0' },
   { name: 'The Kia Oval', venueId: 'KovZ9177Qcf' },
   { name: 'Twickenham Stoop', venueId: 'KovZ9177-Kf' },
-  // Park festival venues (client request 23 Jul 2026 — festivals bring tens
-  // of thousands of guests). Verified same day: Crystal Palace Bowl carries
-  // the whole South Facing series (14 events), Victoria Park carries every
-  // All Points East day (8 events). Gunnersbury shows 0 on TM (Festival
-  // Republic sells direct) — kept for future coverage; its shows are curated
-  // in featuredEvents.ts.
+  // Park festival venues (client Jul 2026). Crystal Palace Bowl + Victoria Park
+  // carry South Facing / All Points East on TM. Boston Manor / Burgess /
+  // Gunnersbury / Finsbury / Clapham / Brockwell / Southwark often sell via
+  // RA/DICE — queried anyway so any TM listing pins; featuredEvents.ts
+  // covers the self-ticketed weeks (Junction 2, Burgess summer series).
   { name: 'Crystal Palace Bowl', venueId: 'KovZ9177tzf' },
   { name: 'Victoria Park London', venueId: 'KovZ9177Mvf' },
   { name: 'Gunnersbury Park', venueId: 'KovZ9177HYf' },
+  { name: 'Boston Manor Park', venueId: 'KovZpZAnIlaA' },
+  { name: 'Burgess Park', venueId: 'KovZpZAlFnkA' },
+  { name: 'Finsbury Park', venueId: 'KovZ9177Xaf' },
+  { name: 'Clapham Common', venueId: 'KovZ91770BV' },
+  { name: 'Brockwell Park', venueId: 'KovZ9177r20' },
+  { name: 'Southwark Park', venueId: 'KovZpZAnnneA' },
   { name: 'Hyde Park', venueId: 'KovZ9177gxV' },
   { name: 'Alexandra Palace', venueId: 'KovZpZAn61lA' },
   { name: 'ExCeL', venueId: 'KovZ91771S0' },
+  // Milton Keynes + Luton corridor (client Aug 2026). Outside TM market 202,
+  // so National Bowl / Campbell Park / Stadium MK must be queried by venueId.
+  // Football at Stadium MK / Kenilworth is still blocked on TM Sports segment —
+  // FotMob covers those fixtures; TM here is for festivals + concerts.
+  { name: 'The National Bowl', venueId: 'KovZ9177BnV' },
+  { name: 'Campbell Park', venueId: 'KovZ9177B2f' },
+  { name: 'Stadium MK', venueId: 'KovZ9177DNf' },
+  { name: 'Stockwood Park', venueId: 'KovZ917777f' },
 ];
 
 /** Map a raw Ticketmaster event to an AppEvent, or null if it should be dropped. */
@@ -187,15 +201,23 @@ function toAppEvent(e: TmEvent): AppEvent | null {
   const isSports = segName.toLowerCase() === 'sports';
   if (isSports && !isAllowedEntertainmentSport(genreName)) return null;
 
+  // Prefer TM lat/lng; if missing (common for parks like Burgess Park),
+  // resolve through the curated London venue map so the pin still lands.
+  // marketId=202 still leaks non-London venues (e.g. Electric Bristol) —
+  // drop anything outside the DriveIQ coverage box. TM also sometimes
+  // sends 0,0 when geo is missing — treat that as absent.
   const venue = e._embedded?.venues?.[0];
+  const place = findLondonPlace(venue?.name, venue?.city?.name);
   let lat = toNum(venue?.location?.latitude);
   let lon = toNum(venue?.location?.longitude);
-  if (lat == null || lon == null) {
-    const place = findLondonPlace(venue?.name, venue?.city?.name);
-    if (!place) return null;
-    lat = place.latitude;
-    lon = place.longitude;
+  if (lat === 0 && lon === 0) {
+    lat = null;
+    lon = null;
   }
+  lat = lat ?? place?.latitude ?? null;
+  lon = lon ?? place?.longitude ?? null;
+  if (lat == null || lon == null) return null;
+  if (!isInDriveIQArea(lat, lon)) return null;
 
   const startsAt = e.dates?.start?.dateTime;
   if (!startsAt) return null;
@@ -222,10 +244,13 @@ function toAppEvent(e: TmEvent): AppEvent | null {
     title: e.name,
     startsAt,
     endsAt,
-    venue: venue?.name ?? venue?.city?.name ?? 'London',
+    venue: place?.venue ?? venue?.name ?? venue?.city?.name ?? 'London',
     latitude: lat,
     longitude: lon,
-    description: e.info ?? e.description ?? e.pleaseNote,
+    // Client (26/31 Jul 2026): About must be a clean 1–2 lines. Prefer TM's
+    // real `description` over `info` (info is usually bag/doors/tier copy).
+    // pleaseNote is intentionally never a candidate.
+    description: pickEventDescription(e.description, e.info),
     subCategory,
     url: e.url,
   };
@@ -314,16 +339,26 @@ export async function fetchTicketmasterLondon(range: DateRange): Promise<AppEven
     generalRaw.push(...next.events);
   }
 
-  // 2) Priority "never-miss" venues, queried directly by venueId in parallel.
-  //    These bypass both the 1000-result cap and the market-202 filter.
-  const priorityResults = await Promise.all(
-    PRIORITY_VENUES.map(async (v) => ({
-      v,
-      events: await fetchTicketmasterVenue(v.venueId, range).catch(
-        () => [] as TmEvent[],
-      ),
-    })),
-  );
+  // 2) Priority "never-miss" venues, queried directly by venueId in batches
+  //    (batched to respect Ticketmaster's 5 req/sec rate limit and avoid 429s).
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const priorityResults: { v: PriorityVenue; events: TmEvent[] }[] = [];
+  const BATCH_SIZE = 3;
+  for (let i = 0; i < PRIORITY_VENUES.length; i += BATCH_SIZE) {
+    const batch = PRIORITY_VENUES.slice(i, i + BATCH_SIZE);
+    const res = await Promise.all(
+      batch.map(async (v) => ({
+        v,
+        events: await fetchTicketmasterVenue(v.venueId, range).catch(
+          () => [] as TmEvent[],
+        ),
+      })),
+    );
+    priorityResults.push(...res);
+    if (i + BATCH_SIZE < PRIORITY_VENUES.length) {
+      await delay(250);
+    }
+  }
 
   // 3) Map + de-duplicate by Ticketmaster event id (general first, then any
   //    priority-venue events the general pull didn't already include).

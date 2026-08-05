@@ -1,5 +1,5 @@
 import type { AppEvent } from '@/types/event';
-import { isInRange, type DateRange } from '@/utils/dateFilters';
+import { eventOverlapsRange, type DateRange } from '@/utils/dateFilters';
 
 /**
  * Curated "featured" events.
@@ -24,9 +24,66 @@ const GUNNERSBURY = {
   venue: 'Gunnersbury Park',
   latitude: 51.4997,
   longitude: -0.2875,
-  description:
-    'Festival Republic summer residency at Gunnersbury Park (7–28 Aug). Large crowds around Popes Lane / North Circular; Acton Town & Gunnersbury tubes busiest at close.',
+  description: 'Summer live music at Gunnersbury Park, West London.',
 };
+
+const BOSTON_MANOR = {
+  venue: 'Boston Manor Park',
+  latitude: 51.4936,
+  longitude: -0.3247,
+  description: 'Junction 2 electronic music festival at Boston Manor Park, Brentford.',
+};
+
+const BURGESS = {
+  venue: 'Burgess Park',
+  latitude: 51.4855,
+  longitude: -0.0765,
+  description: 'Open-air festival day at Burgess Park, South London.',
+};
+
+const NATIONAL_BOWL = {
+  venue: 'The National Bowl',
+  latitude: 52.0148,
+  longitude: -0.7562,
+  description: 'Reggae Land at Milton Keynes National Bowl.',
+};
+
+const LORDS = {
+  venue: "Lord's Cricket Ground",
+  latitude: 51.5294,
+  longitude: -0.1727,
+};
+
+const OVAL = {
+  venue: 'The Oval',
+  latitude: 51.4837,
+  longitude: -0.1145,
+};
+
+function cricketMatch(
+  id: string,
+  title: string,
+  date: string,
+  startLocal: string,
+  endLocal: string,
+  loc: { venue: string; latitude: number; longitude: number },
+  description: string,
+  subCategory = 'Cricket T20',
+): AppEvent {
+  return {
+    id: `featured-cricket-${id}`,
+    source: 'featured',
+    category: 'sports',
+    title,
+    startsAt: `${date}T${startLocal}:00+01:00`,
+    endsAt: `${date}T${endLocal}:00+01:00`,
+    venue: loc.venue,
+    latitude: loc.latitude,
+    longitude: loc.longitude,
+    description,
+    subCategory,
+  };
+}
 
 // IMPORTANT: the featured list is built LAZILY (first call), not at module
 // load. Building it at module scope crashed the app (23 Jul 2026): the array
@@ -73,24 +130,29 @@ function buildFeatured(): AppEvent[] {
   raceday('ascot-food-wine-fri', 'Ascot — Food & Wine Friday Raceday', '2026-09-04'),
   raceday('ascot-food-wine-sat', 'Ascot — Food & Wine Saturday Raceday', '2026-09-05'),
 
-  // ── Summer park festivals (client request, 23 Jul 2026) ────────────────
-  // Tens of thousands of guests per day; sold via RA/See Tickets/direct, so
-  // invisible to Ticketmaster. South Facing (Crystal Palace Bowl) and All
+  // ── Summer park festivals (client request, 23 Jul + 30 Jul 2026) ───────
+  // Tens of thousands of guests per day; often sold via RA/DICE/See Tickets,
+  // so invisible to Ticketmaster. South Facing (Crystal Palace Bowl) and All
   // Points East (Victoria Park) ARE on Ticketmaster and come through the
   // priority-venue queries — NOT curated here, to avoid double pins.
   //
   // Junction 2 — Boston Manor Park, Brentford. Dates from junction2.london
-  // (verified 23 Jul 2026). Typical hours 12:00–22:30.
+  // (verified 23 Jul 2026). Typical hours 12:00–22:30. Must stay curated —
+  // TM venue exists but listed 0 events for Jul–Sep 2026.
   ...['2026-07-24', '2026-07-25', '2026-07-26', '2026-07-31', '2026-08-01', '2026-08-02'].map(
     (date) =>
-      parkEvent('junction2', `Junction 2 Festival`, date, '12:00', '22:30', {
-        venue: 'Boston Manor Park',
-        latitude: 51.4936,
-        longitude: -0.3247,
-        description:
-          'Junction 2 electronic music festival at Boston Manor Park, Brentford. ~20k attendees/day; expect heavy traffic on the A4/M4 junction and Boston Manor Road.',
-      }),
+      parkEvent('junction2', `Junction 2 Festival`, date, '12:00', '22:30', BOSTON_MANOR),
   ),
+  // Burgess Park summer series (Elixar / Columbo) — Boiler Room, Jazz Cafe,
+  // Miniteca, Maiden Voyage, Eastern Electrics. Sold via DICE/Skiddle/RA, not
+  // Ticketmaster (TM Burgess venue returns 0). Dates from burgessparkevents.com
+  // + Southwark Council listings, verified 30 Jul 2026.
+  parkEvent('burgess', 'Boiler Room at Burgess Park', '2026-07-31', '14:00', '22:00', BURGESS),
+  parkEvent('burgess', 'Boiler Room at Burgess Park', '2026-08-01', '12:00', '22:00', BURGESS),
+  parkEvent('burgess', 'Jazz Cafe Festival at Burgess Park', '2026-08-02', '12:00', '22:00', BURGESS),
+  parkEvent('burgess', 'South London Miniteca at Burgess Park', '2026-08-07', '12:00', '21:30', BURGESS),
+  parkEvent('burgess', 'Maiden Voyage Festival at Burgess Park', '2026-08-08', '12:00', '22:00', BURGESS),
+  parkEvent('burgess', 'Eastern Electrics at Burgess Park', '2026-08-09', '12:00', '22:00', BURGESS),
   // Festival Republic residency at Gunnersbury Park — shows verified from
   // festivalrepublic.com event pages, 23 Jul 2026. TM lists 0 for this venue.
   parkEvent('gunnersbury', 'Gospel Garden Festival', '2026-08-02', '12:00', '22:00', GUNNERSBURY),
@@ -98,6 +160,43 @@ function buildFeatured(): AppEvent[] {
   parkEvent('gunnersbury', 'Roots Picnic UK — Day 1', '2026-08-08', '12:00', '22:30', GUNNERSBURY),
   parkEvent('gunnersbury', 'Roots Picnic UK — Day 2', '2026-08-09', '12:00', '22:30', GUNNERSBURY),
   parkEvent('gunnersbury', 'Lenny Kravitz live at Gunnersbury Park', '2026-08-15', '15:00', '22:30', GUNNERSBURY),
+
+  // Reggae Land 2026 — National Bowl, Milton Keynes. Fri 31 Jul – Sun 2 Aug
+  // (verified reggaeland.co.uk + thenationalbowlmk.co.uk, 1 Aug 2026). Sold
+  // out via own site / See Tickets — Ticketmaster venue returns 0 for these
+  // dates (only later Bowl shows: Diaspora Calling 7 Aug, Electric Paradise
+  // 8 Aug, Prodigy 22 Aug). Must stay curated.
+  parkEvent('reggaeland', 'Reggae Land — Day 1 (Burna Boy)', '2026-07-31', '14:00', '23:00', NATIONAL_BOWL),
+  parkEvent('reggaeland', 'Reggae Land — Day 2', '2026-08-01', '12:00', '23:00', NATIONAL_BOWL),
+  parkEvent('reggaeland', 'Reggae Land — Day 3', '2026-08-02', '12:00', '23:00', NATIONAL_BOWL),
+
+  // ── London Cricket 2026 at Lord's & The Oval ───────────────────────────
+  // The Hundred 2026 home fixtures — dates verified against ESPN web cricket
+  // calendar (league 19601 / 21376) on 30 Jul 2026. There is no London
+  // Hundred match every day; only list confirmed Lord's / Oval home days.
+  cricketMatch('hundred-oval-1', 'The Hundred: Oval Invincibles vs Manchester Originals', '2026-07-21', '18:00', '22:00', OVAL, 'The Hundred 2026 at Kennington Oval.'),
+  cricketMatch('hundred-lords-1', 'The Hundred: London Spirit vs Manchester Originals', '2026-07-23', '18:00', '22:00', LORDS, 'The Hundred 2026 at Lord\'s Cricket Ground.'),
+  cricketMatch('hundred-oval-2', 'The Hundred: Oval Invincibles vs London Spirit (Derby)', '2026-07-29', '18:00', '22:00', OVAL, 'London Derby in The Hundred at The Oval.'),
+  cricketMatch('hundred-lords-2', 'The Hundred: London Spirit vs Southern Brave', '2026-08-01', '18:00', '22:00', LORDS, 'The Hundred 2026 at Lord\'s Cricket Ground.'),
+  cricketMatch('hundred-oval-3', 'The Hundred: Oval Invincibles vs Manchester Originals', '2026-08-02', '14:30', '21:00', OVAL, 'The Hundred 2026 doubleheader at The Oval.'),
+  cricketMatch('hundred-lords-3', 'The Hundred: London Spirit vs Oval Invincibles (Derby)', '2026-08-06', '18:00', '22:00', LORDS, 'London Derby in The Hundred at Lord\'s Cricket Ground.'),
+  cricketMatch('hundred-oval-4', 'The Hundred: Oval Invincibles vs Trent Rockets', '2026-08-08', '18:00', '22:00', OVAL, 'The Hundred 2026 at The Oval.'),
+  cricketMatch('hundred-lords-4', 'The Hundred: London Spirit vs Birmingham Phoenix', '2026-08-09', '14:30', '21:00', LORDS, 'The Hundred 2026 at Lord\'s Cricket Ground.'),
+
+  ...recurringDaily({
+    idPrefix: 'featured-england-test-oval-2026',
+    title: (lbl) => `England Test Match at The Oval — ${lbl}`,
+    startDate: '2026-08-20',
+    endDate: '2026-08-24',
+    startLocal: '11:00',
+    endLocal: '18:30',
+    venue: OVAL.venue,
+    latitude: OVAL.latitude,
+    longitude: OVAL.longitude,
+    description: 'International Test Match at The Oval.',
+    subCategory: 'Cricket Test',
+    category: 'sports',
+  }),
   parkEvent('gunnersbury', 'Jimmy Eat World live at Gunnersbury Park', '2026-08-16', '15:00', '22:30', GUNNERSBURY),
 
   // ── Longines Global Champions Tour — Royal Hospital Chelsea ────────────
@@ -358,5 +457,7 @@ function wimbledonDays(): AppEvent[] {
  */
 export async function fetchFeaturedLondon(range: DateRange): Promise<AppEvent[]> {
   if (featuredCache == null) featuredCache = buildFeatured();
-  return featuredCache.filter((e) => isInRange(e.startsAt, range));
+  return featuredCache.filter((e) =>
+    eventOverlapsRange(e.startsAt, e.endsAt, range),
+  );
 }

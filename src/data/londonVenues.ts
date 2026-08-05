@@ -81,6 +81,43 @@ const VENUES = {
     venue: 'The Den',
     latitude: 51.4859,
     longitude: -0.0509,
+    // Verified: thesportsdb.com/venue/16366-the-den (Millwall vs Antwerp 1 Aug 2026).
+    sportsdbVenueId: 16366,
+  },
+  // Outside Greater London but traffic-relevant for drivers (client request
+  // Jul 2026 — pre-season friendlies at Vicarage Road were invisible).
+  watford: {
+    venue: 'Vicarage Road',
+    latitude: 51.6498,
+    longitude: -0.4017,
+    // Verified: thesportsdb.com/venue/16117-vicarage-road
+    sportsdbVenueId: 16117,
+  },
+  // Luton + Milton Keynes corridor (client Aug 2026 — Kenilworth Road
+  // friendlies + National Bowl summer festivals were invisible because the
+  // London market pull and geo box stopped short of these grounds).
+  kenilworthRoad: {
+    venue: 'Kenilworth Road',
+    latitude: 51.8842,
+    longitude: -0.4317,
+    sportsdbVenueId: null,
+  },
+  stadiumMk: {
+    venue: 'Stadium MK',
+    latitude: 52.0093,
+    longitude: -0.7345,
+    sportsdbVenueId: null,
+  },
+  nationalBowl: {
+    venue: 'The National Bowl',
+    latitude: 52.0148,
+    longitude: -0.7562,
+    sportsdbVenueId: null,
+  },
+  campbellPark: {
+    venue: 'Campbell Park',
+    latitude: 52.0499,
+    longitude: -0.7367,
     sportsdbVenueId: null,
   },
   charlton: {
@@ -119,19 +156,41 @@ const VENUES = {
     longitude: 0.1357,
     sportsdbVenueId: null,
   },
+  bromley: {
+    venue: 'Hayes Lane',
+    latitude: 51.3999,
+    longitude: 0.0148,
+    sportsdbVenueId: null,
+  },
+  woking: {
+    venue: 'Kingfield Stadium',
+    latitude: 51.3102,
+    longitude: -0.5528,
+    sportsdbVenueId: null,
+  },
+  // Isthmian/National League clubs that host pre-season friendlies
+  // vs Championship sides and attract meaningful traffic.
+  hemel: {
+    venue: 'Vauxhall Road',
+    latitude: 51.7396,
+    longitude: -0.4654,
+    sportsdbVenueId: null,
+  },
 
   // ── Cricket ─────────────────────────────────────────────────────────
   lords: {
     venue: "Lord's Cricket Ground",
     latitude: 51.5294,
     longitude: -0.1727,
+    // No reliable SportsDB venue id found — resolved at runtime via search.
     sportsdbVenueId: null,
   },
   oval: {
     venue: 'The Oval',
     latitude: 51.4837,
     longitude: -0.1145,
-    sportsdbVenueId: null,
+    // Verified: thesportsdb.com/venue/18141-the-oval (Kennington, London).
+    sportsdbVenueId: 18141,
   },
 
   // ── Rugby Union ─────────────────────────────────────────────────────
@@ -233,6 +292,12 @@ const VENUES = {
     longitude: -0.0735,
     sportsdbVenueId: null,
   },
+  royalAlbertHall: {
+    venue: 'Royal Albert Hall',
+    latitude: 51.5009,
+    longitude: -0.1773,
+    sportsdbVenueId: null,
+  },
   leeValleyVeloPark: {
     venue: 'Lee Valley VeloPark',
     latitude: 51.5471,
@@ -251,6 +316,71 @@ const VENUES = {
     longitude: 0.0297,
     sportsdbVenueId: null,
   },
+
+  // ── Parks / festival grounds (client Jul 2026 — summer festivals) ────
+  // Many sell via RA/DICE/See Tickets so TM is empty; coords still needed so
+  // any TM hit (or featured curation) can pin. Burgess Park has no lat/lng
+  // on Ticketmaster — without this entry those events were dropped.
+  bostonManorPark: {
+    venue: 'Boston Manor Park',
+    latitude: 51.4936,
+    longitude: -0.3247,
+    sportsdbVenueId: null,
+  },
+  burgessPark: {
+    venue: 'Burgess Park',
+    latitude: 51.4855,
+    longitude: -0.0765,
+    sportsdbVenueId: null,
+  },
+  gunnersburyPark: {
+    venue: 'Gunnersbury Park',
+    latitude: 51.4997,
+    longitude: -0.2875,
+    sportsdbVenueId: null,
+  },
+  crystalPalaceBowl: {
+    venue: 'Crystal Palace Bowl',
+    latitude: 51.4209,
+    longitude: -0.0674,
+    sportsdbVenueId: null,
+  },
+  victoriaPark: {
+    venue: 'Victoria Park',
+    latitude: 51.5393,
+    longitude: -0.0405,
+    sportsdbVenueId: null,
+  },
+  finsburyPark: {
+    venue: 'Finsbury Park',
+    latitude: 51.5646,
+    longitude: -0.1059,
+    sportsdbVenueId: null,
+  },
+  claphamCommon: {
+    venue: 'Clapham Common',
+    latitude: 51.4616,
+    longitude: -0.1378,
+    sportsdbVenueId: null,
+  },
+  brockwellPark: {
+    venue: 'Brockwell Park',
+    latitude: 51.4501,
+    longitude: -0.1073,
+    sportsdbVenueId: null,
+  },
+  southwarkPark: {
+    venue: 'Southwark Park',
+    latitude: 51.4921,
+    longitude: -0.0605,
+    sportsdbVenueId: null,
+  },
+  hydePark: {
+    venue: 'Hyde Park',
+    latitude: 51.5073,
+    longitude: -0.1657,
+    sportsdbVenueId: null,
+  },
 } satisfies Record<string, LondonPlace>;
 
 /**
@@ -259,6 +389,35 @@ const VENUES = {
  * isn't queried twice.
  */
 export const LONDON_VENUE_LIST: LondonPlace[] = Object.values(VENUES);
+
+/**
+ * DriveIQ map area: Greater London plus agreed traffic-relevant outskirts
+ * (Watford, Ascot, Epsom, Windsor, Sandown, Kempton, Woking, Luton,
+ * Milton Keynes / National Bowl).
+ *
+ * Ticketmaster `marketId=202` still leaks venues outside this box (e.g.
+ * Electric Bristol — Martin Kemp DJ set, Aug 2026). Always drop pins that
+ * fall outside these bounds, regardless of market/city labels.
+ */
+export const DRIVEIQ_AREA = {
+  minLat: 51.25,
+  maxLat: 52.1,
+  minLon: -0.9,
+  maxLon: 0.35,
+} as const;
+
+/** True when coords are usable and inside the DriveIQ coverage box. */
+export function isInDriveIQArea(lat: number, lon: number): boolean {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  // Ticketmaster sometimes returns 0,0 when geo is missing.
+  if (lat === 0 && lon === 0) return false;
+  return (
+    lat >= DRIVEIQ_AREA.minLat &&
+    lat <= DRIVEIQ_AREA.maxLat &&
+    lon >= DRIVEIQ_AREA.minLon &&
+    lon <= DRIVEIQ_AREA.maxLon
+  );
+}
 
 /**
  * Lookup table keyed by lower-case names. Includes both team names and
@@ -281,6 +440,10 @@ const PLACES: Record<string, LondonPlace> = {
   qpr: VENUES.qpr,
   'queens park rangers': VENUES.qpr,
   millwall: VENUES.millwall,
+  watford: VENUES.watford,
+  'luton town': VENUES.kenilworthRoad,
+  'milton keynes dons': VENUES.stadiumMk,
+  'mk dons': VENUES.stadiumMk,
   charlton: VENUES.charlton,
   'charlton athletic': VENUES.charlton,
   'leyton orient': VENUES.leytonOrient,
@@ -292,6 +455,26 @@ const PLACES: Record<string, LondonPlace> = {
   sutton: VENUES.suttonUnited,
   'dagenham and redbridge': VENUES.daghamRedbridge,
   'dagenham & redbridge': VENUES.daghamRedbridge,
+
+  // Championship & lower-league London clubs — aliases ESPN uses
+  // (with and without "FC"/"AFC", long vs short names)
+  'queens park rangers fc': VENUES.qpr,
+  'millwall fc': VENUES.millwall,
+  'watford fc': VENUES.watford,
+  'luton town fc': VENUES.kenilworthRoad,
+  'milton keynes dons fc': VENUES.stadiumMk,
+  'mk dons fc': VENUES.stadiumMk,
+  'charlton athletic fc': VENUES.charlton,
+  'leyton orient fc': VENUES.leytonOrient,
+  'afc wimbledon fc': VENUES.afcWimbledon,
+  'barnet fc': VENUES.barnet,
+  'sutton united fc': VENUES.suttonUnited,
+  'dagenham redbridge': VENUES.daghamRedbridge,
+  'dag and red': VENUES.daghamRedbridge,
+  bromley: VENUES.bromley,
+  'bromley fc': VENUES.bromley,
+  woking: VENUES.woking,
+  'woking fc': VENUES.woking,
 
   // Cricket
   surrey: VENUES.oval,
@@ -332,6 +515,17 @@ const PLACES: Record<string, LondonPlace> = {
   'kiyan prince foundation stadium': VENUES.qpr,
   'loftus road': VENUES.qpr,
   'the den': VENUES.millwall,
+  'vicarage road': VENUES.watford,
+  'vicarage road stadium': VENUES.watford,
+  'kenilworth road': VENUES.kenilworthRoad,
+  'kenilworth road stadium': VENUES.kenilworthRoad,
+  'stadium mk': VENUES.stadiumMk,
+  'stadium:mk': VENUES.stadiumMk,
+  'the national bowl': VENUES.nationalBowl,
+  'national bowl': VENUES.nationalBowl,
+  'milton keynes bowl': VENUES.nationalBowl,
+  'milton keynes national bowl': VENUES.nationalBowl,
+  'campbell park': VENUES.campbellPark,
   'the valley': VENUES.charlton,
   'brisbane road': VENUES.leytonOrient,
   'breyer group stadium': VENUES.leytonOrient,
@@ -343,6 +537,7 @@ const PLACES: Record<string, LondonPlace> = {
   lords: VENUES.lords,
   'the oval': VENUES.oval,
   'kia oval': VENUES.oval,
+  'kennington oval': VENUES.oval,
   oval: VENUES.oval,
   twickenham: VENUES.twickenham,
   'twickenham stadium': VENUES.twickenham,
@@ -367,8 +562,29 @@ const PLACES: Record<string, LondonPlace> = {
   'lee valley velopark': VENUES.leeValleyVeloPark,
   'alexandra palace': VENUES.alexandraPalace,
   'ally pally': VENUES.alexandraPalace,
+  'royal albert hall': VENUES.royalAlbertHall,
+  'albert hall': VENUES.royalAlbertHall,
   'excel london': VENUES.excel,
   excel: VENUES.excel,
+  // Parks / festival grounds
+  'boston manor park': VENUES.bostonManorPark,
+  'boston manor': VENUES.bostonManorPark,
+  'burgess park': VENUES.burgessPark,
+  'gunnersbury park': VENUES.gunnersburyPark,
+  gunnersbury: VENUES.gunnersburyPark,
+  'crystal palace bowl': VENUES.crystalPalaceBowl,
+  'victoria park': VENUES.victoriaPark,
+  'victoria park london': VENUES.victoriaPark,
+  'finsbury park': VENUES.finsburyPark,
+  'clapham common': VENUES.claphamCommon,
+  'brockwell park': VENUES.brockwellPark,
+  'southwark park': VENUES.southwarkPark,
+  'hyde park': VENUES.hydePark,
+  // New grounds
+  'hayes lane': VENUES.bromley,
+  'kingfield stadium': VENUES.woking,
+  'gander green lane': VENUES.suttonUnited,
+  'vauxhall road': VENUES.hemel,
 };
 
 const PLACE_KEYS = Object.keys(PLACES);

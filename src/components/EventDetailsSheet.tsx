@@ -12,6 +12,7 @@ import {
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
 import { formatEventDate, formatEventEndTime } from '@/utils/dateFilters';
+import { cleanDescription } from '@/utils/description';
 import { distanceKm, formatDistance, type LatLng } from '@/utils/distance';
 import { pinDescriptorFor } from '@/utils/eventIcons';
 
@@ -136,6 +137,7 @@ function SheetBody({
   const tagIcon = descriptor.kind === 'glyph' ? descriptor.icon : 'DQ';
   const categoryLabel =
     event.subCategory ?? (event.category === 'sports' ? 'Sports' : 'Event');
+  const about = cleanDescription(event.description);
 
   return (
     <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
@@ -159,10 +161,10 @@ function SheetBody({
         <Text style={styles.metaValue}>{event.venue}</Text>
       </View>
 
-      {event.description ? (
+      {about ? (
         <View style={styles.metaRow}>
           <Text style={styles.metaLabel}>About</Text>
-          <Text style={styles.metaValue}>{event.description}</Text>
+          <Text style={styles.metaValue}>{about}</Text>
         </View>
       ) : null}
     </ScrollView>

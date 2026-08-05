@@ -67,6 +67,53 @@ interface RawLine {
   lineStatuses: RawLineStatus[];
 }
 
+/**
+ * Keep the Connections panel focused on lines London drivers/riders actually
+ * use day to day. TfL's national-rail mode also includes long-distance
+ * operators (CrossCountry, Transport for Wales, etc.) whose broad operator
+ * notices create noisy false alarms in-app.
+ */
+const CONNECTION_NATIONAL_RAIL_IDS = new Set([
+  'c2c',
+  'chiltern-railways',
+  'east-midlands-railway',
+  'gatwick-express',
+  'great-northern',
+  'greater-anglia',
+  'heathrow-express',
+  'southern',
+  'south-western-railway',
+  'southeastern',
+  'thameslink',
+]);
+
+const isConnectionLine = (line: Pick<RawLine, 'id' | 'modeName'>): boolean =>
+  line.modeName !== 'national-rail' || CONNECTION_NATIONAL_RAIL_IDS.has(line.id);
+
+const effectiveSeverity = (
+  modeName: string,
+  status: Pick<RawLineStatus, 'statusSeverity' | 'statusSeverityDescription'> | null,
+): number => {
+  const sev = status?.statusSeverity ?? 10;
+  const desc = status?.statusSeverityDescription?.trim().toLowerCase() ?? '';
+  // TfL uses "Special Service" for many National Rail operator notices. These
+  // are often altered-service advisories, not hard closures, so showing them as
+  // "Closed / suspended" is too aggressive and was causing false alarms.
+  if (modeName === 'national-rail' && desc === 'special service') return 9;
+  return sev;
+};
+
+const effectiveStatusDescription = (
+  modeName: string,
+  status: Pick<RawLineStatus, 'statusSeverityDescription'> | null,
+): string => {
+  const desc = status?.statusSeverityDescription?.trim();
+  if (modeName === 'national-rail' && desc === 'Special Service') {
+    return 'Operator notice';
+  }
+  return desc || 'Good service';
+};
+
 const bucket = (sev: number): LineSeverityBucket => {
   if (sev >= 10) return 'good';
   if (sev <= 2) return 'closed';
@@ -112,20 +159,20 @@ export async function fetchLineStatuses(): Promise<LineStatus[]> {
   }
 
   const raw = (await res.json()) as RawLine[];
-  const out: LineStatus[] = raw.map((l) => {
+  const out: LineStatus[] = raw.filter(isConnectionLine).map((l) => {
     // TfL returns one entry per concurrent status. Consider only entries in
     // force right now (expired/planned ones are noise), then use the worst.
     const worst = (l.lineStatuses ?? []).filter((s) => isActiveNow(s)).reduce<RawLineStatus | null>(
       (acc, s) => (acc == null || s.statusSeverity < acc.statusSeverity ? s : acc),
       null,
     );
-    const sev = worst?.statusSeverity ?? 10;
+    const sev = effectiveSeverity(l.modeName, worst);
     return {
       id: l.id,
       name: l.name,
       modeName: l.modeName,
       severityBucket: bucket(sev),
-      statusDescription: worst?.statusSeverityDescription ?? 'Good service',
+      statusDescription: effectiveStatusDescription(l.modeName, worst),
       reason: worst?.reason?.trim(),
     };
   });
@@ -226,6 +273,7 @@ export async function fetchLineDetail(lineId: string): Promise<LineDetail | null
   const arr = (await res.json()) as RawLineDetail[];
   const raw = arr[0];
   if (!raw) return null;
+  if (!isConnectionLine(raw)) return null;
 
   // Only statuses in force right now — expired/planned engineering notices
   // (and their weeks-old incident links) must not surface as current.
@@ -234,7 +282,7 @@ export async function fetchLineDetail(lineId: string): Promise<LineDetail | null
     (acc, s) => (acc == null || s.statusSeverity < acc.statusSeverity ? s : acc),
     null,
   );
-  const sev = worst?.statusSeverity ?? 10;
+  const sev = effectiveSeverity(raw.modeName, worst);
 
   // Dedupe affected stops across the ACTIVE status entries.
   const stopMap = new Map<string, AffectedStop>();
@@ -280,7 +328,7 @@ export async function fetchLineDetail(lineId: string): Promise<LineDetail | null
     name: raw.name,
     modeName: raw.modeName,
     severityBucket: bucket(sev),
-    statusDescription: worst?.statusSeverityDescription ?? 'Good service',
+    statusDescription: effectiveStatusDescription(raw.modeName, worst),
     reason: worst?.reason?.trim(),
     disruptions,
     affectedStops: Array.from(stopMap.values()).sort((a, b) =>

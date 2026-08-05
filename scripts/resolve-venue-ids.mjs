@@ -44,6 +44,7 @@ const VENUES = [
   ['brentford',         'Gtech Community Stadium'],
   ['qpr',               'Loftus Road'],
   ['millwall',          'The Den'],
+  ['watford',           'Vicarage Road'],
   ['charlton',          'The Valley'],
   ['leytonOrient',      'Brisbane Road'],
   ['afcWimbledon',      'Plough Lane'],

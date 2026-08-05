@@ -102,6 +102,7 @@ interface RawLineStatus {
   statusSeverity: number;
   statusSeverityDescription: string;
   reason?: string;
+  validityPeriods?: { fromDate?: string; toDate?: string; isNow?: boolean }[];
 }
 
 interface RawLine {
@@ -114,6 +115,44 @@ const bucket = (sev: number): 'good' | 'minor' | 'severe' | 'closed' => {
   if (sev <= 2) return 'closed';
   if (sev <= 6) return 'severe';
   return 'minor';
+};
+
+const isActiveNow = (
+  s: RawLineStatus,
+  now: number = Date.now(),
+): boolean => {
+  const periods = s.validityPeriods ?? [];
+  if (periods.length === 0) return true;
+  return periods.some((p) => {
+    if (p.isNow) return true;
+    const from = p.fromDate ? Date.parse(p.fromDate) : NaN;
+    const to = p.toDate ? Date.parse(p.toDate) : NaN;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return false;
+    return now >= from && now <= to;
+  });
+};
+
+const effectiveSeverity = (
+  lineId: string,
+  status: RawLineStatus | null,
+): number => {
+  const sev = status?.statusSeverity ?? 10;
+  const desc = status?.statusSeverityDescription?.trim().toLowerCase() ?? '';
+  if (lineId !== 'dlr' && lineId !== 'elizabeth' && desc === 'special service') {
+    return 9;
+  }
+  return sev;
+};
+
+const effectiveStatusDescription = (
+  lineId: string,
+  status: RawLineStatus | null,
+): string => {
+  const desc = status?.statusSeverityDescription?.trim();
+  if (lineId !== 'dlr' && lineId !== 'elizabeth' && desc === 'Special Service') {
+    return 'Operator notice';
+  }
+  return desc || 'Good service';
 };
 
 export async function fetchAirportConnectionStatuses(): Promise<
@@ -143,10 +182,12 @@ export async function fetchAirportConnectionStatuses(): Promise<
   const raw = (await res.json()) as RawLine[];
   const byId = new Map<string, RawLineStatus>();
   for (const l of raw) {
-    const worst = (l.lineStatuses ?? []).reduce<RawLineStatus | null>(
+    const worst = (l.lineStatuses ?? [])
+      .filter((s) => isActiveNow(s))
+      .reduce<RawLineStatus | null>(
       (acc, s) => (acc == null || s.statusSeverity < acc.statusSeverity ? s : acc),
       null,
-    );
+      );
     if (worst) byId.set(l.id, worst);
   }
 
@@ -154,10 +195,10 @@ export async function fetchAirportConnectionStatuses(): Promise<
   for (const airport of AIRPORTS) {
     out[airport.id] = airport.connections.map((c) => {
       const s = byId.get(c.lineId);
-      const sev = s?.statusSeverity ?? 10;
+      const sev = effectiveSeverity(c.lineId, s ?? null);
       return {
         ...c,
-        statusDescription: s?.statusSeverityDescription ?? 'Unknown',
+        statusDescription: effectiveStatusDescription(c.lineId, s ?? null),
         severityBucket: bucket(sev),
         reason: s?.reason?.trim(),
       };

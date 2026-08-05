@@ -129,6 +129,41 @@ export function isInRange(iso: string, range: DateRange): boolean {
   return t >= range.start.getTime() && t <= range.end.getTime();
 }
 
+/**
+ * Returns true if an event should appear for a date filter. Single-day
+ * events match on `startsAt`; multi-day fixtures (Tests, county championship)
+ * also match on any day their [startsAt, endsAt] window overlaps the range.
+ */
+export function eventOverlapsRange(
+  startsAt: string,
+  endsAt: string | undefined | null,
+  range: DateRange,
+): boolean {
+  if (isInRange(startsAt, range)) return true;
+  if (!endsAt) return false;
+  return isSpanningRange(startsAt, endsAt, range);
+}
+
+/**
+ * Returns true if an event whose play spans [startIso, endIso] overlaps
+ * the requested date range at all. Used for multi-day events (cricket Tests,
+ * county championship) so they appear in the day-filter on every day of
+ * play, not just the day they start.
+ *
+ * Overlap condition: event starts before range ends AND event ends after
+ * range starts.
+ */
+export function isSpanningRange(
+  startIso: string,
+  endIso: string,
+  range: DateRange,
+): boolean {
+  const s = new Date(startIso).getTime();
+  const e = new Date(endIso).getTime();
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return false;
+  return s <= range.end.getTime() && e >= range.start.getTime();
+}
+
 /** Format an ISO date for display: "Tue 5 May · 19:30". */
 export function formatEventDate(iso: string): string {
   const d = new Date(iso);

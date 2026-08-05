@@ -1,6 +1,6 @@
 {
   "name": "driveiq",
-  "version": "5.2.0",
+  "version": "5.2.4",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",

@@ -1,211 +1,266 @@
 import { findLondonPlace } from '@/data/londonVenues';
 import type { AppEvent } from '@/types/event';
-import { isInRange, type DateRange } from '@/utils/dateFilters';
+import {
+  eventOverlapsRange,
+  type DateRange,
+} from '@/utils/dateFilters';
 import { defaultEndsAt } from '@/utils/duration';
 
 /**
- * ESPN Cricinfo — cricket fixtures.
+ * London cricket fixtures via ESPN's web cricket API.
  *
- * ESPN's main site.api.espn.com endpoints have weak cricket coverage. Their
- * actual cricket data lives on a separate sub-domain under the Cricinfo
- * brand — Cricinfo is owned by ESPN but uses different infrastructure.
+ * ESPN's main site.api.espn.com cricket scoreboard feeds use stale numeric
+ * league IDs (e.g. 19531 → a 2019 Kenya tour) and return 0 events for the
+ * current season. The hs-consumer-api.espncricinfo.com endpoints are Akamai-
+ * blocked from many networks (403).
  *
- * Endpoints (unofficial, no auth required):
- *   https://hsapi.espncricinfo.com/v1/pages/series?lang=en&latest=true
- *   https://hsapi.espncricinfo.com/v1/pages/matches?lang=en&latest=true
- *   https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en
+ * What works (verified Jul 2026):
+ *   1. Personalized header — lists every active cricket series + today's matches
+ *      GET site.web.api.espn.com/.../scoreboard/header?sport=cricket&region=gb
+ *   2. Per-series calendar — scoreboard?limit=200 returns a `calendar[]` of match
+ *      days for that series
+ *   3. Per-day fixtures — scoreboard?dates=YYYYMMDD returns that day's slate
+ *      with full venue names (Lord's, Kennington Oval, …)
  *
- * IMPORTANT: same unofficial / unsupported caveat as the rest of the ESPN
- * pipeline. We use it because there's no comparable free + commercial
- * cricket schedule source for London venues.
- *
- * Coverage during May–September is heavy: England Tests at Lord's & Oval,
- * Middlesex / Surrey home games at the same venues, T20 Blast group stage,
- * One-Day Cup, The Hundred (Lord's: London Spirit; Oval: Oval Invincibles).
+ * We discover series dynamically from the header, walk each series' calendar
+ * for days overlapping the requested range, and resolve venues through the
+ * curated London map. Still undocumented / unsupported — same caveat as the
+ * rest of the ESPN pipeline.
  */
 
-const ENDPOINTS = [
-  // Current and upcoming matches across all formats.
-  'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en',
-  // Series listing, used as a fallback if the matches endpoint is empty.
-  'https://hs-consumer-api.espncricinfo.com/v1/pages/series?lang=en&latest=true',
+const WEB_BASE = 'https://site.web.api.espn.com/apis/site/v2/sports/cricket';
+const HEADER_URL =
+  'https://site.web.api.espn.com/apis/personalized/v2/scoreboard/header?sport=cricket&region=gb&tz=Europe/London';
+
+/** Used when the personalized header is empty or unreachable. IDs verified Jul 2026. */
+const FALLBACK_LEAGUES: { id: string; name: string }[] = [
+  { id: '19601', name: "The Hundred Men's Competition" },
+  { id: '21376', name: "The Hundred Women's Competition" },
+  { id: '8335', name: 'Royal London One-Day Cup' },
 ];
 
-interface CricVenue {
-  id?: number;
-  name?: string;
+interface EspnVenue {
   fullName?: string;
-  city?: string;
-  country?: { name?: string };
+  address?: { city?: string; country?: string };
 }
-
-interface CricTeamObj {
-  team?: { name?: string; longName?: string; abbreviation?: string };
+interface EspnTeam {
+  displayName?: string;
+  shortDisplayName?: string;
+  abbreviation?: string;
+}
+interface EspnCompetitor {
+  homeAway?: 'home' | 'away' | string;
+  team?: EspnTeam;
   score?: string;
 }
-
-interface CricMatch {
-  id?: number;
-  objectId?: number;
-  slug?: string;
-  startTime?: string; // ISO
-  endTime?: string;
-  status?: string;
-  stage?: string;
-  format?: string;
-  series?: { name?: string; alternateName?: string };
-  venue?: CricVenue;
-  teams?: CricTeamObj[];
+interface EspnCompetition {
+  venue?: EspnVenue;
+  competitors?: EspnCompetitor[];
+}
+interface EspnEvent {
+  id: string;
+  date: string;
+  endDate?: string;
+  name?: string;
+  shortName?: string;
+  competitions?: EspnCompetition[];
+}
+interface EspnScoreboardResponse {
+  leagues?: { calendar?: string[]; name?: string }[];
+  events?: EspnEvent[];
+}
+interface EspnHeaderLeague {
+  id?: string | number;
+  name?: string;
+  events?: EspnEvent[];
+}
+interface EspnHeaderResponse {
+  sports?: { leagues?: EspnHeaderLeague[] }[];
 }
 
-interface CricResponse {
-  content?: {
-    matches?: CricMatch[];
-    series?: { matches?: CricMatch[] }[];
-  };
-  matches?: CricMatch[];
-}
+const yyyymmdd = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}${m}${day}`;
+};
 
-const fetchOne = async (url: string): Promise<CricMatch[]> => {
+const subCategoryFor = (seriesName: string, description: string): string => {
+  const hay = `${seriesName} ${description}`.toLowerCase();
+  if (hay.includes('hundred') || hay.includes('t20 blast') || hay.includes('t20'))
+    return 'Cricket T20';
+  if (hay.includes('one-day') || hay.includes('one day') || hay.includes('odi'))
+    return 'Cricket ODI';
+  if (hay.includes('test')) return 'Cricket Test';
+  if (hay.includes('county') || hay.includes('championship')) return 'Cricket';
+  return 'Cricket';
+};
+
+const buildTitle = (event: EspnEvent): string => {
+  const comp = event.competitions?.[0];
+  const home = comp?.competitors?.find((c) => c.homeAway === 'home');
+  const away = comp?.competitors?.find((c) => c.homeAway === 'away');
+  const homeName =
+    home?.team?.abbreviation ??
+    home?.team?.shortDisplayName ??
+    home?.team?.displayName ??
+    '';
+  const awayName =
+    away?.team?.abbreviation ??
+    away?.team?.shortDisplayName ??
+    away?.team?.displayName ??
+    '';
+  if (homeName && awayName) {
+    const hs = home?.score;
+    const as = away?.score;
+    if (hs || as) return `${homeName} ${hs ?? '-'} vs ${awayName} ${as ?? '-'}`;
+    return `${homeName} vs ${awayName}`;
+  }
+  return event.shortName ?? event.name ?? 'Cricket match';
+};
+
+const fetchJson = async <T>(url: string): Promise<T | null> => {
   try {
-    // Cricinfo's CDN (Akamai) 403s when the request looks too bot-ish.
-    // Send a regular mobile UA + Referer/Origin from espncricinfo.com so the
-    // edge accepts us. Still unsupported — they can break this any time.
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        Referer: 'https://www.espncricinfo.com/',
-        Origin: 'https://www.espncricinfo.com',
-      },
-    });
-    if (!res.ok) {
-      // 403 here means Akamai is blocking the request from this network.
-      // Quiet log — the wider events fetch still succeeds via other providers.
-      console.warn('[cricinfo] non-OK', res.status);
-      return [];
-    }
-    const json = (await res.json()) as CricResponse;
-    // The "matches" feed returns content.matches; the "series" feed wraps
-    // matches inside content.series[].matches. Merge BOTH shapes always —
-    // previously series matches were only used when the direct feed was
-    // empty, which silently dropped county fixtures (Middlesex at Lord's,
-    // Surrey at the Oval) whenever internationals filled the featured feed.
-    // That's how today's cricket vanished from both grounds (client report,
-    // 8 July 2026). The caller dedupes by match id.
-    const direct = json.content?.matches ?? json.matches ?? [];
-    const fromSeries = (json.content?.series ?? []).flatMap(
-      (s) => s.matches ?? [],
-    );
-    return [...direct, ...fromSeries];
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return (await res.json()) as T;
   } catch (e) {
-    console.warn('[cricinfo] network error', e);
-    return [];
+    console.warn('[cricinfo] network error', url, e);
+    return null;
   }
 };
 
-const buildTitle = (m: CricMatch): string => {
-  const teams = m.teams ?? [];
-  const a =
-    teams[0]?.team?.abbreviation ??
-    teams[0]?.team?.name ??
-    teams[0]?.team?.longName ??
-    '';
-  const b =
-    teams[1]?.team?.abbreviation ??
-    teams[1]?.team?.name ??
-    teams[1]?.team?.longName ??
-    '';
-  const aScore = teams[0]?.score;
-  const bScore = teams[1]?.score;
-  if (a && b) {
-    if (aScore || bScore) {
-      return `${a} ${aScore ?? '-'} vs ${b} ${bScore ?? '-'}`;
-    }
-    return `${a} vs ${b}`;
+/** Active cricket series IDs from the personalized header. */
+const discoverLeagueIds = async (): Promise<{ id: string; name: string }[]> => {
+  const json = await fetchJson<EspnHeaderResponse>(HEADER_URL);
+  const leagues = json?.sports?.[0]?.leagues ?? [];
+  const out: { id: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const l of leagues) {
+    const id = l.id != null ? String(l.id) : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name: l.name ?? 'Cricket' });
   }
-  return m.series?.name ?? 'Cricket match';
+  if (out.length > 0) return out;
+  console.warn('[cricinfo] header empty/unreachable — using fallback league list');
+  return FALLBACK_LEAGUES;
+};
+
+const calendarDaysInRange = (
+  calendar: string[],
+  range: DateRange,
+): string[] => {
+  const startMs = range.start.getTime();
+  const endMs = range.end.getTime();
+  const days = new Set<string>();
+  for (const iso of calendar) {
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) continue;
+    // Match day = local calendar date of the ISO timestamp.
+    const dayStart = new Date(d);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(d);
+    dayEnd.setHours(23, 59, 59, 999);
+    if (dayStart.getTime() <= endMs && dayEnd.getTime() >= startMs) {
+      days.add(yyyymmdd(d));
+    }
+  }
+  return [...days];
+};
+
+const normaliseEvent = (
+  event: EspnEvent,
+  seriesName: string,
+  range: DateRange,
+): AppEvent | null => {
+  if (!event.date) return null;
+
+  const comp = event.competitions?.[0];
+  const venueName = comp?.venue?.fullName ?? null;
+  const home = comp?.competitors?.find((c) => c.homeAway === 'home');
+  const homeName =
+    home?.team?.displayName ?? home?.team?.shortDisplayName ?? '';
+
+  const place = findLondonPlace(venueName, homeName);
+  if (!place) return null;
+
+  const subCategory = subCategoryFor(seriesName, event.name ?? '');
+  const endsAt = event.endDate ?? defaultEndsAt(event.date, subCategory);
+  if (!eventOverlapsRange(event.date, endsAt, range)) return null;
+
+  return {
+    id: `cric-${event.id}`,
+    source: 'espn',
+    category: 'sports',
+    title: buildTitle(event),
+    startsAt: event.date,
+    endsAt,
+    venue: place.venue,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    description: seriesName,
+    subCategory,
+  };
 };
 
 export async function fetchCricinfoLondon(
   range: DateRange,
 ): Promise<AppEvent[]> {
-  // Hit both endpoints in parallel; merge + dedupe by match id.
-  const results = await Promise.all(ENDPOINTS.map(fetchOne));
-  const seenIds = new Set<number>();
-  const matches: CricMatch[] = [];
-  for (const list of results) {
-    for (const m of list) {
-      const id = m.id ?? m.objectId;
-      if (id == null || seenIds.has(id)) continue;
-      seenIds.add(id);
-      matches.push(m);
-    }
+  const leagues = await discoverLeagueIds();
+  if (leagues.length === 0) {
+    console.warn('[cricinfo] no cricket series available');
+    return [];
   }
 
+  const out: AppEvent[] = [];
+  const seenIds = new Set<string>();
+  let rawMatches = 0;
   let droppedNotLondon = 0;
   let droppedOutOfRange = 0;
-  let droppedNoDate = 0;
-  const out: AppEvent[] = [];
-  const seen = new Set<string>();
 
-  for (const m of matches) {
-    const id = `cric-${m.id ?? m.objectId ?? m.slug ?? ''}`;
-    if (seen.has(id)) continue;
+  // Walk each active series: calendar → per-day scoreboard.
+  await Promise.all(
+    leagues.map(async ({ id, name }) => {
+      const meta = await fetchJson<EspnScoreboardResponse>(
+        `${WEB_BASE}/${id}/scoreboard?limit=200`,
+      );
+      const calendar = meta?.leagues?.[0]?.calendar ?? [];
+      const days = calendarDaysInRange(calendar, range);
+      if (days.length === 0) return;
 
-    if (!m.startTime) {
-      droppedNoDate++;
-      continue;
-    }
+      const dayResults = await Promise.all(
+        days.map((day) =>
+          fetchJson<EspnScoreboardResponse>(
+            `${WEB_BASE}/${id}/scoreboard?dates=${day}&limit=50`,
+          ),
+        ),
+      );
 
-    const venueName = m.venue?.fullName ?? m.venue?.name ?? null;
-
-    // Resolve via curated London venue map. We don't synthesise coords from a
-    // city name alone — without a known venue the pin would land arbitrarily.
-    const place = findLondonPlace(venueName);
-    if (!place) {
-      droppedNotLondon++;
-      continue;
-    }
-
-    if (!isInRange(m.startTime, range)) {
-      droppedOutOfRange++;
-      continue;
-    }
-
-    // Cricinfo gives us a real endTime for multi-day formats; for limited-
-    // overs games it's the scheduled close of play. Fall back to a duration
-    // default keyed off the format (T20 vs ODI vs Test) when missing.
-    const subCategory =
-      m.format === 'T20' || m.format === 'T20I'
-        ? 'Cricket T20'
-        : m.format === 'ODI'
-          ? 'Cricket ODI'
-          : m.format === 'Test'
-            ? 'Cricket Test'
-            : 'Cricket';
-    const endsAt = m.endTime ?? defaultEndsAt(m.startTime, subCategory);
-
-    seen.add(id);
-    out.push({
-      id,
-      source: 'espn',
-      category: 'sports',
-      title: buildTitle(m),
-      startsAt: m.startTime,
-      endsAt,
-      venue: place.venue,
-      latitude: place.latitude,
-      longitude: place.longitude,
-      description: m.series?.name ?? m.format ?? 'Cricket',
-      subCategory,
-    });
-  }
+      for (const board of dayResults) {
+        for (const event of board?.events ?? []) {
+          rawMatches++;
+          const norm = normaliseEvent(event, name, range);
+          if (!norm) {
+            const comp = event.competitions?.[0];
+            const venueName = comp?.venue?.fullName ?? '';
+            if (venueName && !findLondonPlace(venueName)) droppedNotLondon++;
+            else droppedOutOfRange++;
+            continue;
+          }
+          if (seenIds.has(norm.id)) continue;
+          seenIds.add(norm.id);
+          out.push(norm);
+        }
+      }
+    }),
+  );
 
   console.log(
-    `[cricinfo] ${matches.length} raw matches → ${out.length} London events ` +
-      `(dropped: ${droppedNotLondon} non-London, ${droppedOutOfRange} out of range, ${droppedNoDate} no-date)`,
+    `[cricinfo] ${rawMatches} raw cricket fixtures across ${leagues.length} series → ${out.length} London events ` +
+      `(dropped: ${droppedNotLondon} non-London, ${droppedOutOfRange} out of range)`,
   );
-  return out;
+  return out.sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
+  );
 }

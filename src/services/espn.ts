@@ -61,10 +61,9 @@ const SPORT_FEEDS: SportFeed[] = [
   { path: 'soccer/uefa.europa', label: 'UEFA Europa League', sub: 'Football' },
   { path: 'soccer/fifa.world', label: 'FIFA World Cup', sub: 'Football' },
 
-  // ── Cricket ─────────────────────────────────────────────────────────
-  // Cricket lives on a separate ESPN domain (hsapi.espncricinfo.com) so we
-  // call it through a dedicated `cricinfo.ts` service instead of this
-  // scoreboard pipeline. No slugs here.
+  // Cricket is fetched separately via fetchCricinfoLondon() (ESPN web cricket
+  // calendar API). The static cricket/* scoreboard slugs here use stale league
+  // IDs and return 0 current-season fixtures — do not re-add them.
 
   // ── Rugby ───────────────────────────────────────────────────────────
   // Twickenham, StoneX (Saracens), the Stoop (Harlequins).

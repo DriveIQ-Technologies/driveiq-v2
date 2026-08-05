@@ -13,6 +13,7 @@ export interface AppEvent {
     | 'thesportsdb'
     | 'football-data'
     | 'espn'
+    | 'fotmob'
     | 'ticketmaster'
     | 'venue-site'
     | 'sample'

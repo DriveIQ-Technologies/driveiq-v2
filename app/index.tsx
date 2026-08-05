@@ -99,6 +99,7 @@ import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
 import {
   buildFilterChips,
+  eventOverlapsRange,
   isInRange,
   rangeFor,
   type FilterKey,
@@ -418,7 +419,7 @@ export default function MapScreen() {
   const visibleEvents = useMemo(() => {
     const range = rangeFor(filter);
     return events.filter((e) => {
-      if (!isInRange(e.startsAt, range)) return false;
+      if (!eventOverlapsRange(e.startsAt, e.endsAt, range)) return false;
       if (categories.size === 0) return true;
       return categories.has(categoryFilterFor(e));
     });
@@ -509,7 +510,7 @@ export default function MapScreen() {
       const range = rangeFor(key);
       let n = 0;
       for (const e of events) {
-        if (!isInRange(e.startsAt, range)) continue;
+        if (!eventOverlapsRange(e.startsAt, e.endsAt, range)) continue;
         if (categories.size > 0 && !categories.has(categoryFilterFor(e))) continue;
         n++;
       }
