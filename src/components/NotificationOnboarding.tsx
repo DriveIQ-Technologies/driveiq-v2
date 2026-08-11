@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/theme/colors';
+import { track, trackScreen } from '@/services/analytics';
 import {
   ensurePermission,
   hasSeenOnboarding,
@@ -65,7 +66,10 @@ export function NotificationOnboarding({ onDone }: Props) {
         // Small delay so it doesn't fire at the exact same instant as the
         // map markers appearing.
         setTimeout(() => {
-          if (!cancelled) setVisible(true);
+          if (!cancelled) {
+            setVisible(true);
+            trackScreen('notification_onboarding');
+          }
         }, 900);
       } else {
         onDone();
@@ -77,8 +81,10 @@ export function NotificationOnboarding({ onDone }: Props) {
   }, [onDone]);
 
   const handleEnable = async () => {
+    track('notification_onboarding_enabled');
     setBusy(true);
-    await ensurePermission();
+    const granted = await ensurePermission();
+    track('notification_permission_result', { granted });
     await markOnboardingSeen();
     setVisible(false);
     setBusy(false);
@@ -86,6 +92,7 @@ export function NotificationOnboarding({ onDone }: Props) {
   };
 
   const handleSkip = async () => {
+    track('notification_onboarding_skipped');
     await markOnboardingSeen();
     setVisible(false);
     onDone();

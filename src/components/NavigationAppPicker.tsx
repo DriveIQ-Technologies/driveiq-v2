@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/theme/colors';
+import { track, trackScreen } from '@/services/analytics';
 
 export interface NavDestination {
   label: string;
@@ -109,8 +110,14 @@ const launchExternalApp = (
 export function NavigationAppPicker({ destination, onClose, onPickDriveIQ }: Props) {
   const visible = destination != null;
 
+  React.useEffect(() => {
+    if (!destination) return;
+    trackScreen('navigation_app_picker');
+  }, [destination]);
+
   const handlePick = async (id: AppOption['id']) => {
     if (!destination) return;
+    track('navigation_app_selected', { app: id });
     if (id === 'driveiq') {
       onPickDriveIQ(destination);
       onClose();

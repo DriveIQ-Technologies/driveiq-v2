@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/providers/AuthProvider';
+import { track, trackScreen } from '@/services/analytics';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
 
@@ -69,6 +70,10 @@ export function SidebarMenu({
 }: Props) {
   const { user, logout } = useAuth();
   const signedIn = user != null;
+
+  React.useEffect(() => {
+    if (visible) trackScreen('sidebar_menu', { signed_in: signedIn });
+  }, [visible, signedIn]);
 
   if (!visible) return null;
 
@@ -200,7 +205,11 @@ export function SidebarMenu({
   const renderRow = (row: MenuRow) => (
     <Pressable
       key={row.key}
-      onPress={() => (row.handler ? row.handler() : placeholder(row.label))}
+      onPress={() => {
+        track('sidebar_row_tapped', { row_key: row.key, signed_in: signedIn });
+        if (row.handler) row.handler();
+        else placeholder(row.label);
+      }}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       accessibilityRole="button"
     >

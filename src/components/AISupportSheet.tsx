@@ -23,6 +23,7 @@ import {
   getAiQuota,
   type AiQuota,
 } from '@/services/aiQuota';
+import { track, trackScreen } from '@/services/analytics';
 import { showProPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
@@ -314,6 +315,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
 
   useEffect(() => {
     if (!visible) return;
+    trackScreen('ai_support_sheet');
     getAiQuota().then(setQuota);
   }, [visible]);
   // SafeAreaView's top edge doesn't apply reliably inside a Modal, which left
@@ -334,6 +336,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
           icon: 'notifications-outline',
           onPress: () => {
             onSaveEvent(e);
+            track('ai_event_action_tapped', { action: 'remind', source: 'chat' });
             pushBot(`Reminder set for “${e.title}”. I’ll nudge you an hour before it starts.`);
           },
         });
@@ -345,6 +348,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
         icon: 'calendar-outline',
         onPress: () => {
           onAddToCalendar(offer[0]);
+          track('ai_event_action_tapped', { action: 'calendar', source: 'chat' });
           pushBot(`Added “${offer[0].title}” to your calendar.`);
         },
       });
@@ -359,6 +363,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
 
     // Daily quota gate — free plan only.
     if (quota && !quota.pro && quota.remaining <= 0) {
+      track('ai_question_blocked_limit', { tier: 'free' });
       setMessages((prev) => [
         ...prev,
         userMsg,
@@ -379,6 +384,10 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
       return;
     }
+    track('ai_question_asked', {
+      tier: quota?.pro ? 'pro' : 'free',
+      remaining_before: quota?.remaining,
+    });
     void consumeAiQuestion().then(setQuota);
 
     const eventResult =
@@ -474,7 +483,14 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
 
             <View style={styles.suggestionWrap}>
               {SUGGESTIONS.map((s) => (
-                <Pressable key={s} style={styles.suggestion} onPress={() => send(s)}>
+                <Pressable
+                  key={s}
+                  style={styles.suggestion}
+                  onPress={() => {
+                    track('ai_suggestion_tapped', { suggestion: s });
+                    send(s);
+                  }}
+                >
                   <Text style={styles.suggestionText}>{s}</Text>
                 </Pressable>
               ))}

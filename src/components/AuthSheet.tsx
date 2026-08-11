@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
+import { track, trackScreen } from '@/services/analytics';
 import { colors } from '@/theme/colors';
 
 type Mode = 'signin' | 'signup';
@@ -49,6 +50,7 @@ export function AuthSheet({ visible, onClose, initialMode = 'signin' }: Props) {
       setError(null);
       setNotice(null);
       setBusy(false);
+      trackScreen('auth_sheet', { mode: initialMode });
     }
   }, [visible, initialMode]);
 
@@ -73,6 +75,7 @@ export function AuthSheet({ visible, onClose, initialMode = 'signin' }: Props) {
     }
     try {
       setBusy(true);
+      track('auth_submit_started', { mode });
       if (isSignup) {
         await signup(name, email.trim(), password);
       } else {
@@ -82,6 +85,7 @@ export function AuthSheet({ visible, onClose, initialMode = 'signin' }: Props) {
       setPassword('');
       onClose();
     } catch (e) {
+      track('auth_submit_failed', { mode });
       setError(friendlyAuthError(e));
     } finally {
       setBusy(false);
@@ -98,8 +102,10 @@ export function AuthSheet({ visible, onClose, initialMode = 'signin' }: Props) {
     try {
       setBusy(true);
       await sendReset(email.trim());
+      track('auth_reset_requested');
       setNotice('Password reset email sent. Check your inbox.');
     } catch (e) {
+      track('auth_reset_failed');
       setError(friendlyAuthError(e));
     } finally {
       setBusy(false);
@@ -141,6 +147,7 @@ export function AuthSheet({ visible, onClose, initialMode = 'signin' }: Props) {
                     setMode(m);
                     setError(null);
                     setNotice(null);
+                    track('auth_mode_switched', { mode: m });
                   }}
                   style={[styles.segmentBtn, mode === m && styles.segmentBtnActive]}
                 >

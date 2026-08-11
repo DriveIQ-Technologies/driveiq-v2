@@ -38,6 +38,7 @@
     },
     "plugins": [
       "expo-router",
+      "posthog-react-native/expo",
       [
         "expo-location",
         {

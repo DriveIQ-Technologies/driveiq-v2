@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/theme/colors';
+import { track, trackScreen } from '@/services/analytics';
 import type { AppEvent } from '@/types/event';
 import { formatEventDate, formatEventEndTime } from '@/utils/dateFilters';
 import { cleanDescription } from '@/utils/description';
@@ -40,6 +41,14 @@ export function EventDetailsSheet({
 }: EventDetailsSheetProps) {
   const visible = event != null;
 
+  React.useEffect(() => {
+    if (!event) return;
+    trackScreen('event_details_sheet', {
+      event_id: event.id,
+      category: event.category,
+    });
+  }, [event]);
+
   return (
     <Modal
       visible={visible}
@@ -53,7 +62,10 @@ export function EventDetailsSheet({
           <View style={styles.actions}>
             {event && onNavigate ? (
               <Pressable
-                onPress={() => onNavigate(event)}
+                onPress={() => {
+                  track('event_details_directions_tapped', { event_id: event.id });
+                  onNavigate(event);
+                }}
                 style={styles.directionsBtn}
                 accessibilityRole="button"
                 accessibilityLabel="Get directions to this event"
@@ -67,7 +79,13 @@ export function EventDetailsSheet({
               <View style={styles.secondaryRow}>
                 {onToggleSave ? (
                   <Pressable
-                    onPress={() => onToggleSave(event)}
+                    onPress={() => {
+                      track('event_details_save_tapped', {
+                        event_id: event.id,
+                        next_state: saved ? 'unsave' : 'save',
+                      });
+                      onToggleSave(event);
+                    }}
                     style={[styles.secondaryBtn, saved && styles.secondaryBtnActive]}
                     accessibilityRole="button"
                     accessibilityLabel={saved ? 'Remove saved event' : 'Save event'}
@@ -89,7 +107,10 @@ export function EventDetailsSheet({
                 ) : null}
                 {onAddToCalendar ? (
                   <Pressable
-                    onPress={() => onAddToCalendar(event)}
+                    onPress={() => {
+                      track('event_details_calendar_tapped', { event_id: event.id });
+                      onAddToCalendar(event);
+                    }}
                     style={styles.secondaryBtn}
                     accessibilityRole="button"
                     accessibilityLabel="Add event to calendar"

@@ -27,6 +27,7 @@ import type { LineStatus } from './tflLines';
 import type { AppEvent } from '@/types/event';
 import type { AirportFlight } from './aerodatabox';
 import type { SavedFlight } from './savedFlights';
+import { track } from './analytics';
 
 export type NotificationChannel =
   | 'road-accidents'
@@ -228,8 +229,12 @@ const fire = async (
       content: { title, body, data, sound: 'default' },
       trigger: null, // fire immediately
     });
+    track('notification_dispatched', {
+      kind: typeof data.kind === 'string' ? data.kind : 'unknown',
+    });
   } catch (e) {
     console.warn('[notif] schedule failed', e);
+    track('notification_dispatch_failed');
   }
 };
 
@@ -405,6 +410,7 @@ export async function scheduleEventReminder(
           },
           trigger: { date: new Date(fireAt) },
         });
+        track('event_reminder_scheduled', { phase: 'pre_start', event_id: event.id });
       } catch (e) {
         console.warn('[notif] event reminder failed', e);
       }
@@ -428,6 +434,7 @@ export async function scheduleEventReminder(
           },
           trigger: { date: new Date(fireAt) },
         });
+        track('event_reminder_scheduled', { phase: 'pre_end', event_id: event.id });
       } catch (e) {
         console.warn('[notif] event end reminder failed', e);
       }

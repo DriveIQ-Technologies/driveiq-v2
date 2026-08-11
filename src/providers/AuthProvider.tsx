@@ -21,6 +21,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // runtime in here. All actual calls go through the lazily-loaded `authApi`.
 import type { User } from 'firebase/auth';
 
+import {
+  identifyFirebaseUser,
+  refreshUserTraits,
+  resetAnalyticsUser,
+  track,
+} from '@/services/analytics';
 import { auth, authApi } from '@/services/firebase';
 
 export interface AuthContextValue {
@@ -56,6 +62,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const unsub = authApi.onAuthStateChanged(auth, async (u) => {
       setUser(u);
+      if (u) {
+        await identifyFirebaseUser(u);
+        track('auth_state_changed', { signed_in: true });
+      } else {
+        resetAnalyticsUser();
+        track('auth_state_changed', { signed_in: false });
+      }
       if (u?.email) {
         try {
           await AsyncStorage.setItem(LAST_EMAIL_KEY, u.email);
@@ -89,7 +102,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       initializing,
       login: async (email, password) => {
         const { a, api } = requireAuth();
-        await api.signInWithEmailAndPassword(a, email, password);
+        const cred = await api.signInWithEmailAndPassword(a, email, password);
+        await identifyFirebaseUser(cred.user);
+        track('auth_sign_in_succeeded');
       },
       signup: async (name, email, password) => {
         const { a, api } = requireAuth();
@@ -99,26 +114,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await api.updateProfile(cred.user, { displayName: trimmed });
           setUser({ ...cred.user });
         }
+        // Identify immediately with the name we just set (auth listener also runs).
+        await identifyFirebaseUser({
+          ...cred.user,
+          displayName: trimmed || cred.user.displayName,
+        });
+        track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
       },
       logout: async () => {
         const { a, api } = requireAuth();
         await api.signOut(a);
+        track('auth_sign_out');
       },
       sendReset: async (email) => {
         const { a, api } = requireAuth();
         await api.sendPasswordResetEmail(a, email);
+        track('auth_password_reset_sent');
       },
       changePassword: async (currentPassword, newPassword) => {
         const { a, api } = requireAuth();
         await reauth(currentPassword);
         if (!a.currentUser) throw new Error('No authenticated user');
         await api.updatePassword(a.currentUser, newPassword);
+        track('auth_password_changed');
       },
       updateDisplayName: async (name) => {
         const { a, api } = requireAuth();
         if (!a.currentUser) throw new Error('No authenticated user');
         await api.updateProfile(a.currentUser, { displayName: name.trim() });
         setUser({ ...a.currentUser });
+        await refreshUserTraits({ $name: name.trim() });
+        track('account_profile_updated');
       },
       updateUserEmail: async (currentPassword, newEmail) => {
         const { a, api } = requireAuth();
@@ -126,6 +152,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!a.currentUser) throw new Error('No authenticated user');
         await api.updateEmail(a.currentUser, newEmail.trim());
         setUser({ ...a.currentUser });
+        await refreshUserTraits({
+          $email: newEmail.trim(),
+          email_verified: false,
+        });
+        track('account_email_updated');
       },
     }),
     [user, initializing],

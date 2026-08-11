@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '@/theme/colors';
+import { track, trackScreen } from '@/services/analytics';
 import { hasSeenTour, markTourSeen } from '@/services/onboarding';
 
 interface Props {
@@ -70,7 +71,10 @@ export function OnboardingTour({ onDone }: Props) {
       } else {
         // Let the map paint first.
         setTimeout(() => {
-          if (!cancelled) setVisible(true);
+          if (!cancelled) {
+            setVisible(true);
+            trackScreen('onboarding_tour');
+          }
         }, 500);
       }
     })();
@@ -80,6 +84,7 @@ export function OnboardingTour({ onDone }: Props) {
   }, [onDone]);
 
   const finish = async () => {
+    track('onboarding_tour_completed', { steps_seen: step + 1 });
     await markTourSeen();
     setVisible(false);
     onDone();
@@ -89,6 +94,7 @@ export function OnboardingTour({ onDone }: Props) {
     if (step >= STEPS.length - 1) {
       finish();
     } else {
+      track('onboarding_tour_next', { step: step + 1 });
       setStep((s) => s + 1);
     }
   };
@@ -101,7 +107,14 @@ export function OnboardingTour({ onDone }: Props) {
     <Modal transparent animationType="fade" visible onRequestClose={finish}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          <Pressable onPress={finish} style={styles.skip} hitSlop={10}>
+          <Pressable
+            onPress={() => {
+              track('onboarding_tour_skipped', { step: step + 1 });
+              void finish();
+            }}
+            style={styles.skip}
+            hitSlop={10}
+          >
             <Text style={styles.skipText}>Skip</Text>
           </Pressable>
 

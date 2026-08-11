@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
+import { track, trackScreen } from '@/services/analytics';
 import { colors } from '@/theme/colors';
 
 /** Which sub-form the account sheet opens to. */
@@ -49,6 +50,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
       setNewPassword('');
       setError(null);
       setBusy(false);
+      trackScreen('account_sheet', { section });
     }
   }, [visible, section, user]);
 
@@ -70,6 +72,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
           return;
         }
         await updateDisplayName(name);
+        track('account_profile_save_succeeded');
         done('Profile updated.');
       } else if (section === 'email') {
         if (!email.trim() || !currentPassword) {
@@ -77,6 +80,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
           return;
         }
         await updateUserEmail(currentPassword, email);
+        track('account_email_save_succeeded');
         done('Email updated.');
       } else {
         if (!currentPassword || !newPassword) {
@@ -88,9 +92,11 @@ export function AccountSheet({ visible, section, onClose }: Props) {
           return;
         }
         await changePassword(currentPassword, newPassword);
+        track('account_password_save_succeeded');
         done('Password changed.');
       }
     } catch (e) {
+      track('account_save_failed', { section });
       setError(friendlyAuthError(e));
     } finally {
       setBusy(false);

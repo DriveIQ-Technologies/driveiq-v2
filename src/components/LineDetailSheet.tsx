@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/theme/colors';
+import { track, trackScreen } from '@/services/analytics';
 import {
   fetchLineDetail,
   SEVERITY_COLOR,
@@ -107,6 +108,7 @@ export function LineDetailSheet({
       setError(null);
       return;
     }
+    trackScreen('line_detail_sheet', { line_id: lineId });
     load('initial');
   }, [lineId, load]);
 
@@ -216,7 +218,10 @@ export function LineDetailSheet({
                       ) : null}
                       {d.link ? (
                         <Pressable
-                          onPress={() => Linking.openURL(d.link!)}
+                          onPress={() => {
+                            track('line_operator_notice_opened', { line_id: lineId });
+                            Linking.openURL(d.link!).catch(() => undefined);
+                          }}
                           style={styles.linkBtn}
                           accessibilityRole="link"
                         >

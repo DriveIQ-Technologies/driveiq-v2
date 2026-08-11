@@ -16,6 +16,7 @@ import {
   fetchAirportConnectionStatuses,
   type ConnectionStatus,
 } from '@/services/airports';
+import { track, trackScreen } from '@/services/analytics';
 import { LineDetailSheet } from '@/components/LineDetailSheet';
 
 interface Props {
@@ -40,6 +41,7 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
 
   useEffect(() => {
     if (!visible) return;
+    trackScreen('airports_panel');
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -94,6 +96,7 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
                 <View key={airport.id} style={styles.airport}>
                   <Pressable
                     onPress={() => {
+                      track('airport_selected_from_panel', { airport_id: airport.id });
                       onPickAirport?.(airport.latitude, airport.longitude);
                       onClose();
                     }}
@@ -109,14 +112,18 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
 
                   {onNavigate ? (
                     <Pressable
-                      onPress={() =>
+                      onPress={() => {
+                        track('airport_navigate_tapped', {
+                          airport_id: airport.id,
+                          source: 'airports_panel',
+                        });
                         onNavigate({
                           id: airport.id,
                           name: airport.name,
                           latitude: airport.latitude,
                           longitude: airport.longitude,
-                        })
-                      }
+                        });
+                      }}
                       style={styles.directionsBtn}
                       accessibilityRole="button"
                       accessibilityLabel={`Get directions to ${airport.name}`}
@@ -141,6 +148,12 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
                           pressed && styles.connRowPressed,
                         ]}
                         onPress={() => setOpenConn(c)}
+                        onPressIn={() =>
+                          track('airport_connection_line_opened', {
+                            airport_id: airport.id,
+                            line_id: c.lineId,
+                          })
+                        }
                         accessibilityRole="button"
                         accessibilityLabel={`Open details for ${c.label}`}
                       >

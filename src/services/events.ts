@@ -1,6 +1,7 @@
 import { isInDriveIQArea } from '@/data/londonVenues';
 import type { AppEvent } from '@/types/event';
 import type { DateRange } from '@/utils/dateFilters';
+import { track } from './analytics';
 
 import { fetchCricinfoLondon } from './cricinfo';
 import { fetchEspnLondon } from './espn';
@@ -77,6 +78,7 @@ export async function fetchAllEvents(
     label: string,
     fn: () => Promise<AppEvent[]>,
   ) => {
+    const started = Date.now();
     try {
       buckets[key] = await withTimeout(
         fn(),
@@ -84,9 +86,18 @@ export async function fetchAllEvents(
         [],
         label,
       );
+      track('events_provider_loaded', {
+        provider: label,
+        count: buckets[key].length,
+        duration_ms: Date.now() - started,
+      });
     } catch (e) {
       console.warn(`[events] ${label} failed`, e);
       buckets[key] = [];
+      track('events_provider_failed', {
+        provider: label,
+        duration_ms: Date.now() - started,
+      });
     }
     emit();
   };
@@ -123,6 +134,7 @@ function withTimeout<T>(
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       console.warn(`[events] ${label} timed out after ${ms}ms`);
+      track('events_provider_timed_out', { provider: label, timeout_ms: ms });
       resolve(fallback);
     }, ms);
     promise

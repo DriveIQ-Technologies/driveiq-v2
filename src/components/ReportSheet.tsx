@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/theme/colors';
+import { track, trackScreen } from '@/services/analytics';
 import {
   REPORT_META,
   REPORT_ORDER,
@@ -40,15 +41,21 @@ export function ReportSheet({ visible, onClose, onSubmit }: Props) {
   };
 
   const handleClose = () => {
+    track('report_sheet_closed');
     reset();
     onClose();
   };
 
   const handleSubmit = () => {
     if (!category) return;
+    track('report_submit_tapped', { category, has_note: Boolean(note.trim()) });
     onSubmit(category, note.trim());
     reset();
   };
+
+  React.useEffect(() => {
+    if (visible) trackScreen('report_sheet');
+  }, [visible]);
 
   return (
     <Modal
@@ -83,7 +90,10 @@ export function ReportSheet({ visible, onClose, onSubmit }: Props) {
               return (
                 <Pressable
                   key={key}
-                  onPress={() => setCategory(key)}
+                  onPress={() => {
+                    track('report_category_selected', { category: key });
+                    setCategory(key);
+                  }}
                   style={[
                     styles.chip,
                     active && { borderColor: meta.color, backgroundColor: colors.primarySoft },

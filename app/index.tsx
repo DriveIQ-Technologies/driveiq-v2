@@ -73,6 +73,7 @@ import {
 import { fetchAirportFlights } from '@/services/aerodatabox';
 import { loadSavedFlights, type SavedFlightMap } from '@/services/savedFlights';
 import { setJSON } from '@/services/storage';
+import { track, trackScreen } from '@/services/analytics';
 import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
 import { gateStationAccess, getFreeStationId } from '@/services/stationAccess';
 import { hasProAccess } from '@/services/subscription';
@@ -276,7 +277,12 @@ export default function MapScreen() {
   );
 
   const toggleLayer = useCallback((key: LayerKey) => {
+    track('map_layer_toggled', { layer: key, enabled: !layers[key] });
     setLayers((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, [layers]);
+
+  useEffect(() => {
+    trackScreen('map_home');
   }, []);
 
   // Ask for location permission once on mount.
@@ -365,6 +371,7 @@ export default function MapScreen() {
         setEvents(cached);
         setLoading(false);
         console.log(`[events] painted ${cached.length} from disk cache`);
+        track('events_cache_loaded', { count: cached.length });
       }
 
       try {
@@ -375,12 +382,14 @@ export default function MapScreen() {
             // (Ticketmaster) are still catching up.
             setEvents((prev) => (partial.length >= prev.length ? partial : prev));
             setLoading(false);
+            track('events_partial_loaded', { count: partial.length });
           },
         });
         if (cancelled) return;
         setEvents(list);
         setLoading(false);
         logCoverage(list);
+        track('events_loaded', { count: list.length });
         void saveCachedEvents(list);
       } catch (e) {
         if (cancelled) return;
@@ -388,6 +397,7 @@ export default function MapScreen() {
         if (!cached?.length) {
           setErrorMsg('Could not load events. Pull to retry.');
         }
+        track('events_load_failed');
         setLoading(false);
       }
     })();
@@ -488,6 +498,14 @@ export default function MapScreen() {
     });
   }, [events, filter, categories]);
 
+  useEffect(() => {
+    track('map_filters_changed', {
+      date_filter: filter,
+      category_count: categories.size,
+      visible_events: visibleEvents.length,
+    });
+  }, [filter, categories, visibleEvents.length]);
+
   // Two-level congestion handling (client spec, clarified 6 July 2026):
   //
   //  1. SAME LOCATION → one pin per venue. Events sharing coordinates
@@ -534,6 +552,7 @@ export default function MapScreen() {
   // tight for fitToCoordinates to change anything, jump straight below the
   // clustering threshold so it breaks apart into venue pins.
   const handleClusterPress = useCallback((cluster: EventCluster) => {
+    track('event_cluster_opened', { venue_count: cluster.events.length });
     const lats = cluster.events.map((e) => e.latitude);
     const lngs = cluster.events.map((e) => e.longitude);
     const span = Math.max(
@@ -652,6 +671,7 @@ export default function MapScreen() {
   // represents several events at the same location, open the venue list;
   // otherwise open the event details directly.
   const handlePinPress = useCallback((event: AppEvent) => {
+    track('event_pin_tapped', { event_id: event.id, category: event.category });
     const group = venueGroupsRef.current.get(event.id);
     if (group && group.length > 1) {
       setVenueEvents(group);
@@ -693,6 +713,7 @@ export default function MapScreen() {
   const handleStationPress = useCallback(
     async (station: MajorStation) => {
       const result = await gateStationAccess(station);
+      track('station_pin_tapped', { station_id: station.id, gate_result: result });
       await refreshStationAccess();
       if (result === 'open') setStationHub(station);
     },
@@ -704,6 +725,10 @@ export default function MapScreen() {
   const handleToggleSave = useCallback((event: AppEvent) => {
     setSavedEvents((prev) => {
       const isSaved = event.id in prev;
+      track(isSaved ? 'event_unsaved' : 'event_saved', {
+        event_id: event.id,
+        category: event.category,
+      });
       if (isSaved) {
         const next = { ...prev };
         delete next[event.id];
@@ -720,6 +745,7 @@ export default function MapScreen() {
   // Export an event to the device calendar (start + end + 1h alarm).
   const handleAddToCalendar = useCallback(async (event: AppEvent) => {
     const res = await addEventToCalendar(event);
+    track('event_calendar_attempted', { event_id: event.id, result: res.ok ? 'ok' : res.reason });
     if (res.ok) {
       Alert.alert('Added to calendar', `“${event.title}” is in your calendar.`);
     } else if (res.reason === 'denied') {
@@ -759,6 +785,7 @@ export default function MapScreen() {
         longitude: region.longitude,
       })
         .then((next) => {
+          track('report_submitted', { category, has_note: Boolean(note) });
           setReports(next);
           setReportSheetOpen(false);
           Alert.alert(
@@ -773,6 +800,7 @@ export default function MapScreen() {
 
   // Tap an existing report → details + option to remove it.
   const handleReportPress = useCallback((report: UserReport) => {
+    track('report_opened', { category: report.category, report_id: report.id });
     const meta = REPORT_META[report.category] ?? REPORT_META.other;
     const when = new Date(report.createdAt).toLocaleTimeString([], {
       hour: '2-digit',
@@ -794,6 +822,7 @@ export default function MapScreen() {
   }, []);
 
   const recenter = () => {
+    track('map_recenter_tapped');
     const target = userLocation ?? {
       latitude: LONDON_REGION.latitude,
       longitude: LONDON_REGION.longitude,
@@ -832,6 +861,7 @@ export default function MapScreen() {
 
   const startRouting = useCallback(
     async (dest: Destination) => {
+      track('route_requested', { destination_kind: dest.kind });
       const origin = await ensureLocation();
       if (!origin) {
         Alert.alert(
@@ -857,6 +887,7 @@ export default function MapScreen() {
 
       setRouteLoading(false);
       if (result.error) {
+        track('route_failed', { destination_kind: dest.kind });
         setRouteError(result.error);
         setRoutes([]);
         // Still centre on the destination so it's visible.
@@ -873,6 +904,10 @@ export default function MapScreen() {
       }
 
       setRoutes(result.routes);
+      track('route_loaded', {
+        destination_kind: dest.kind,
+        route_count: result.routes.length,
+      });
       setSelectedRouteIdx(0);
 
       // Fit both endpoints + the fastest route's polyline into view.
@@ -895,6 +930,7 @@ export default function MapScreen() {
   const handleSelectRoute = useCallback(
     (idx: number) => {
       if (idx < 0 || idx >= routes.length) return;
+      track('route_alternative_selected', { index: idx + 1 });
       setSelectedRouteIdx(idx);
       const route = routes[idx];
       if (route?.polyline?.length && userLocation && destination) {
@@ -915,6 +951,7 @@ export default function MapScreen() {
   );
 
   const clearRoute = useCallback(() => {
+    track('route_cleared');
     setDestination(null);
     setRoutes([]);
     setSelectedRouteIdx(0);
@@ -1082,6 +1119,7 @@ export default function MapScreen() {
 
   const startNavigation = useCallback(() => {
     if (!activeRoute) return;
+    track('navigation_started');
     setCurrentStepIdx(0);
     setCameraDetached(false);
     setOffRoute(false);
@@ -1100,6 +1138,7 @@ export default function MapScreen() {
   }, [activeRoute, userLocation, userHeading]);
 
   const recenterNav = useCallback(() => {
+    track('navigation_recenter_tapped');
     setCameraDetached(false);
     const ref = navUserPos ?? userLocation;
     if (ref && mapRef.current) {
@@ -1111,6 +1150,7 @@ export default function MapScreen() {
   }, [navUserPos, userLocation, userHeading]);
 
   const exitNavigation = useCallback(() => {
+    track('navigation_exited');
     setIsNavigating(false);
     clearRoute();
     if (userLocation && mapRef.current) {
@@ -1295,7 +1335,10 @@ export default function MapScreen() {
         <SafeAreaView edges={['top']} style={styles.topOverlay} pointerEvents="box-none">
           <View style={styles.brandRow}>
             <Pressable
-              onPress={() => setSidebarOpen(true)}
+              onPress={() => {
+                track('sidebar_opened');
+                setSidebarOpen(true);
+              }}
               style={styles.brandPill}
               accessibilityRole="button"
               accessibilityLabel="Open menu"
@@ -1314,14 +1357,23 @@ export default function MapScreen() {
           </View>
           <FilterBar
             active={filter}
-            onChange={setFilter}
+            onChange={(next) => {
+              track('date_filter_selected', { filter: next });
+              setFilter(next);
+            }}
             chips={filterChips}
             counts={filterCounts}
           />
           <CategoryFilterBar
             selected={categories}
-            onToggle={toggleCategory}
-            onReset={resetCategories}
+            onToggle={(key) => {
+              track('category_filter_toggled', { category: key });
+              toggleCategory(key);
+            }}
+            onReset={() => {
+              track('category_filters_reset');
+              resetCategories();
+            }}
           />
         </SafeAreaView>
       ) : null}
@@ -1356,21 +1408,30 @@ export default function MapScreen() {
             key: 'report',
             label: 'Report something',
             icon: 'add-circle',
-            onPress: () => setReportSheetOpen(true),
+            onPress: () => {
+              track('report_sheet_opened');
+              setReportSheetOpen(true);
+            },
             active: reportSheetOpen,
           },
           {
             key: 'connections',
             label: 'Live transit connections',
             icon: 'train',
-            onPress: () => setConnectionsOpen(true),
+            onPress: () => {
+              track('connections_panel_opened');
+              setConnectionsOpen(true);
+            },
             active: connectionsOpen,
           },
           {
             key: 'airports',
             label: 'London airports',
             icon: 'airplane',
-            onPress: () => setAirportsOpen(true),
+            onPress: () => {
+              track('airports_panel_opened');
+              setAirportsOpen(true);
+            },
             active: airportsOpen,
           },
           {
@@ -1385,14 +1446,20 @@ export default function MapScreen() {
             key: 'layers',
             label: 'Map layers',
             icon: 'layers',
-            onPress: () => setLayersOpen(true),
+            onPress: () => {
+              track('layers_panel_opened');
+              setLayersOpen(true);
+            },
             active: layersOpen,
           },
           {
             key: 'notifications',
             label: 'Notifications',
             icon: 'notifications',
-            onPress: () => setNotifSettingsOpen(true),
+            onPress: () => {
+              track('notification_settings_opened');
+              setNotifSettingsOpen(true);
+            },
             active: notifSettingsOpen,
           },
         ]}
@@ -1403,6 +1470,7 @@ export default function MapScreen() {
         events={venueEvents}
         onClose={() => setVenueEvents(null)}
         onPickEvent={(event) => {
+          track('venue_event_selected', { event_id: event.id, category: event.category });
           setVenueEvents(null);
           setSelected(event);
         }}
@@ -1416,6 +1484,7 @@ export default function MapScreen() {
         onAddToCalendar={handleAddToCalendar}
         onClose={() => setSelected(null)}
         onNavigate={(event) => {
+          track('event_navigate_tapped', { event_id: event.id, category: event.category });
           setSelected(null);
           setPickerDestination({
             label: event.title,
@@ -1435,6 +1504,7 @@ export default function MapScreen() {
         incident={selectedIncident}
         onClose={() => setSelectedIncident(null)}
         onNavigate={(inc) => {
+          track('traffic_navigate_tapped', { incident_id: inc.id, severity: inc.severity });
           setSelectedIncident(null);
           setPickerDestination({
             label: inc.location ?? `${inc.severity} incident`,
@@ -1455,6 +1525,7 @@ export default function MapScreen() {
         visible={connectionsOpen}
         onClose={() => setConnectionsOpen(false)}
         onNavigateToStation={(station: MajorStation) => {
+          track('connections_station_navigate', { station_id: station.id });
           setConnectionsOpen(false);
           mapRef.current?.animateToRegion(
             {
@@ -1490,13 +1561,34 @@ export default function MapScreen() {
       <SidebarMenu
         visible={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        onOpenNotifications={() => setNotifSettingsOpen(true)}
-        onOpenAuth={(mode) => setAuthSheet({ open: true, mode })}
-        onOpenAccount={(section) => setAccountSheet({ open: true, section })}
-        onOpenHelp={() => setHelpOpen(true)}
-        onOpenFeedback={() => setFeedbackOpen(true)}
-        onOpenAbout={() => setAboutOpen(true)}
-        onOpenAISupport={() => setAiSupportOpen(true)}
+        onOpenNotifications={() => {
+          track('notification_settings_opened', { source: 'sidebar' });
+          setNotifSettingsOpen(true);
+        }}
+        onOpenAuth={(mode) => {
+          track('auth_sheet_opened', { mode, source: 'sidebar' });
+          setAuthSheet({ open: true, mode });
+        }}
+        onOpenAccount={(section) => {
+          track('account_sheet_opened', { section, source: 'sidebar' });
+          setAccountSheet({ open: true, section });
+        }}
+        onOpenHelp={() => {
+          track('help_opened');
+          setHelpOpen(true);
+        }}
+        onOpenFeedback={() => {
+          track('feedback_opened');
+          setFeedbackOpen(true);
+        }}
+        onOpenAbout={() => {
+          track('about_opened');
+          setAboutOpen(true);
+        }}
+        onOpenAISupport={() => {
+          track('ai_support_opened', { source: 'sidebar' });
+          setAiSupportOpen(true);
+        }}
       />
 
       <HelpSheet
@@ -1544,6 +1636,7 @@ export default function MapScreen() {
         station={stationHub}
         onClose={() => setStationHub(null)}
         onNavigate={(station) => {
+          track('station_hub_navigate', { station_id: station.id });
           setStationHub(null);
           mapRef.current?.animateToRegion(
             {
@@ -1567,6 +1660,7 @@ export default function MapScreen() {
         airport={flightsAirport}
         onClose={() => setFlightsAirport(null)}
         onNavigate={(airport) => {
+          track('airport_navigate_tapped', { airport_id: airport.id, source: 'sheet' });
           setFlightsAirport(null);
           setPickerDestination({
             label: airport.name,
@@ -1586,6 +1680,7 @@ export default function MapScreen() {
           );
         }}
         onNavigate={(airport) => {
+          track('airport_navigate_tapped', { airport_id: airport.id, source: 'panel' });
           setAirportsOpen(false);
           setPickerDestination({
             label: airport.name,

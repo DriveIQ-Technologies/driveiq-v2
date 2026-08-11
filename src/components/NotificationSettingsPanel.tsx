@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/theme/colors';
+import { track, trackScreen } from '@/services/analytics';
 import {
   ensurePermission,
   loadLineSubscriptions,
@@ -75,6 +76,7 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
 
   useEffect(() => {
     if (!visible) return;
+    trackScreen('notification_settings');
     loadPrefs().then(setPrefs);
     loadLineSubscriptions().then(setLineSubs);
     ensurePermission();
@@ -94,6 +96,7 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
     const next = { ...prefs, [key]: !prefs[key] };
     setPrefs(next);
     savePrefs(next);
+    track('notification_channel_toggled', { channel: key, enabled: next[key] });
   };
 
   const toggleLine = (lineId: string) => {
@@ -104,6 +107,7 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
     if (!next[lineId]) delete next[lineId];
     setLineSubs(next);
     saveLineSubscriptions(next);
+    track('notification_line_toggled', { line_id: lineId, enabled: Boolean(next[lineId]) });
   };
 
   // True if the user has opted into at least one specific line — drives

@@ -12,6 +12,7 @@ import {
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
 import { StationHubSheet } from '@/components/StationHubSheet';
+import { track, trackScreen } from '@/services/analytics';
 import { gateStationAccess, getFreeStationId } from '@/services/stationAccess';
 import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
 import { hasProAccess } from '@/services/subscription';
@@ -82,6 +83,7 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
 
   useEffect(() => {
     if (!visible) return;
+    trackScreen('connections_panel');
     let cancelled = false;
     Promise.all([hasProAccess(), getFreeStationId()]).then(([pro, freeId]) => {
       if (!cancelled) setAccess({ pro, freeId });
@@ -93,6 +95,7 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
 
   const handleStationTap = async (station: MajorStation) => {
     const result = await gateStationAccess(station);
+    track('connections_station_tapped', { station_id: station.id, gate_result: result });
     const [pro, freeId] = await Promise.all([hasProAccess(), getFreeStationId()]);
     setAccess({ pro, freeId });
     if (result === 'open') setOpenStation(station);
@@ -207,6 +210,12 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
                         pressed && styles.lineRowPressed,
                       ]}
                       onPress={() => setOpenLine(l)}
+                      onPressIn={() =>
+                        track('connections_line_opened', {
+                          line_id: l.id,
+                          severity: l.severityBucket,
+                        })
+                      }
                       accessibilityRole="button"
                       accessibilityLabel={`Open details for ${l.name}`}
                     >

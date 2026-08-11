@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { track, trackScreen } from '@/services/analytics';
 import {
   fetchStationLineStatuses,
   type MajorStation,
@@ -50,6 +51,7 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
 
   useEffect(() => {
     if (!station) return;
+    trackScreen('station_hub_sheet', { station_id: station.id });
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -94,7 +96,10 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
         <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           {onNavigate ? (
             <Pressable
-              onPress={() => onNavigate(station)}
+              onPress={() => {
+                track('station_hub_directions_tapped', { station_id: station.id });
+                onNavigate(station);
+              }}
               style={styles.directionsBtn}
               accessibilityRole="button"
               accessibilityLabel={`Get directions to ${station.name}`}
@@ -132,6 +137,12 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
                 key={`${l.modeName}-${l.id}`}
                 style={({ pressed }) => [styles.lineRow, pressed && styles.lineRowPressed]}
                 onPress={() => setOpenLine(l)}
+                onPressIn={() =>
+                  track('station_hub_line_opened', {
+                    station_id: station.id,
+                    line_id: l.id,
+                  })
+                }
                 accessibilityRole="button"
                 accessibilityLabel={`Open details for ${l.displayName}`}
               >

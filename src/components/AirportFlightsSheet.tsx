@@ -25,6 +25,7 @@ import {
   unsaveFlight,
   type SavedFlightMap,
 } from '@/services/savedFlights';
+import { track, trackScreen } from '@/services/analytics';
 import { hasProAccess, showProPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import { ensurePermission, loadPrefs } from '@/services/notifications';
@@ -107,6 +108,11 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     hasProAccess().then(setIsPro);
     loadSavedFlights().then(setSaved);
   }, []);
+
+  useEffect(() => {
+    if (!airport) return;
+    trackScreen('airport_flights_sheet', { airport_id: airport.id });
+  }, [airport]);
 
   // Rail-link statuses for this airport (same source as the sidebar Airports tab).
   useEffect(() => {
@@ -193,9 +199,11 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
 
   const toggleFullDay = async () => {
     if (!isPro) {
+      track('flights_full_day_blocked_free', { airport_id: airport.id });
       upgrade();
       return;
     }
+    track('flights_full_day_toggled', { airport_id: airport.id, enabled: !fullDay });
     setFullDay((v) => !v);
   };
 
@@ -203,12 +211,18 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     if (saved[f.id]) {
       const next = await unsaveFlight(f.id);
       setSaved(next);
+      track('flight_unsaved', {
+        airport_id: airport.id,
+        flight_id: f.id,
+        direction: f.direction,
+      });
       return;
     }
 
     // Enforce the watch quota before saving.
     const watchedCount = Object.keys(saved).length;
     if (!isPro && watchedCount >= FREE_WATCH_LIMIT) {
+      track('flight_save_blocked_limit', { tier: 'free', watched_count: watchedCount });
       Alert.alert(
         'Flight watch limit',
         `Free plan tracks ${FREE_WATCH_LIMIT} flight at a time — you're already watching one. Upgrade to DriveIQ Pro to track up to ${PRO_WATCH_LIMIT}, or stop watching your current flight first.`,
@@ -220,6 +234,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
       return;
     }
     if (isPro && watchedCount >= PRO_WATCH_LIMIT) {
+      track('flight_save_blocked_limit', { tier: 'pro', watched_count: watchedCount });
       Alert.alert(
         'Flight watch limit',
         `Pro tracks up to ${PRO_WATCH_LIMIT} flights at a time. Stop watching one to add another.`,
@@ -237,6 +252,11 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     }
     const next = await saveFlight(airport.id, f);
     setSaved(next);
+    track('flight_saved', {
+      airport_id: airport.id,
+      flight_id: f.id,
+      direction: f.direction,
+    });
     Alert.alert(
       'Watching flight',
       `${f.flightNumber} — we’ll ping you if it’s delayed or cancelled.`,
@@ -339,7 +359,13 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
               return (
                 <Pressable
                   key={d}
-                  onPress={() => setDirection(d)}
+                  onPress={() => {
+                    track('flights_direction_changed', {
+                      airport_id: airport.id,
+                      direction: d,
+                    });
+                    setDirection(d);
+                  }}
                   style={[styles.segmentBtn, active && styles.segmentBtnActive]}
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
@@ -395,7 +421,14 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
                     styles.flightRow,
                     pressed && styles.flightRowPressed,
                   ]}
-                  onPress={() => setSelectedFlight(f)}
+                  onPress={() => {
+                    track('flight_row_opened', {
+                      airport_id: airport.id,
+                      flight_id: f.id,
+                      direction: f.direction,
+                    });
+                    setSelectedFlight(f);
+                  }}
                   accessibilityRole="button"
                   accessibilityLabel={`${f.flightNumber} ${flightStatusLabel(f)}`}
                 >
