@@ -14,8 +14,8 @@
  *
  * Config values are public by design (Firebase web config is safe in the
  * client — access is gated by Auth + Security Rules). They're read from
- * EXPO_PUBLIC_FIREBASE_* when set, else fall back to the `driveiq-63d75`
- * project the app already uses.
+ * EXPO_PUBLIC_FIREBASE_* when set, else fall back to the `driveiq-app`
+ * project.
  */
 import type { Auth } from 'firebase/auth';
 import type * as FirebaseAuthModule from 'firebase/auth';
@@ -23,21 +23,21 @@ import type * as FirebaseAuthModule from 'firebase/auth';
 const firebaseConfig = {
   apiKey:
     process.env.EXPO_PUBLIC_FIREBASE_API_KEY ??
-    'AIzaSyBMCgmj5s60HVC8gASpgt6OKSZF0e7CIOk',
+    'AIzaSyC9pJGmUuNqkb_tF_F-cPV2YXXxm8D0luM',
   authDomain:
     process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ??
-    'driveiq-63d75.firebaseapp.com',
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? 'driveiq-63d75',
+    'driveiq-app.firebaseapp.com',
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? 'driveiq-app',
   storageBucket:
     process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET ??
-    'driveiq-63d75.appspot.com',
+    'driveiq-app.firebasestorage.app',
   messagingSenderId:
-    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? '535728521231',
+    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? '327546397871',
   appId:
     process.env.EXPO_PUBLIC_FIREBASE_APP_ID ??
-    '1:535728521231:web:dcc5fedbfdd6d92d96a37a',
+    '1:327546397871:web:43d18eaf32d0eab2f3205a',
   measurementId:
-    process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? 'G-DQMEZK1DXR',
+    process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? 'G-773PM468TY',
 };
 
 /** The whole `firebase/auth` module surface, or null if Firebase failed. */

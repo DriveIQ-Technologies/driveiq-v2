@@ -43,7 +43,7 @@ Same structure: two subscription products with a 7-day free trial, linked in Rev
 Covered in detail in `DriveIQ-tracking-and-data-setup.md`, but the short answer to "which is best to use": **stay on Firebase** (already integrated for accounts). Concretely:
 - **Firebase Analytics + Crashlytics** for usage + crash data **[dev to integrate]** — your part now: nothing, it uses the existing project.
 - **Cloud Firestore** (same Firebase project) when we want saved events/preferences synced across devices and tied to accounts — your part now: none; it's a dev task once accounts matter more.
-- Your part today from that doc: make the company Google account **Owner** of Firebase project `driveiq-63d75`, and start the privacy policy.
+- Your part today from that doc: make the company Google account **Owner** of Firebase project `driveiq-app`, and start the privacy policy.
 
 ## 4. Still to plan (design workstream — not blocking the above)
 - Onboarding & app tour: the app already has a first-launch tour component; it needs extending to a proper walkthrough (map → filters → pin → save → airports → AI) shown after first sign-up/login, replayable from Help.

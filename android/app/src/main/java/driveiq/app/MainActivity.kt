@@ -1,4 +1,4 @@
-package com.driveiq.app
+package driveiq.app
 
 import android.os.Build
 import android.os.Bundle

@@ -12,14 +12,21 @@ import { fetchSportsLondon } from './sportsdb';
 import { fetchTicketmasterLondon } from './ticketmaster';
 import { fetchVenueSiteEvents } from './venueSites';
 
+/** Per-provider budget so one hung host can't pad cold start forever. */
+const PROVIDER_TIMEOUT_MS = 12_000;
+
+export type FetchAllEventsOptions = {
+  /** Called whenever a provider lands and the merged list changes. */
+  onPartial?: (events: AppEvent[]) => void;
+};
+
 /**
  * Single entry-point used by the UI. Fans out to every provider in parallel,
- * merges the result, de-duplicates by id, and falls back to sample data if
- * none of them returned anything (e.g. no API keys configured yet).
+ * merges progressively (so the map can paint before Ticketmaster finishes),
+ * de-duplicates by id, and falls back to sample data if none returned anything.
  *
  * Coverage layers (venue-first redundancy — no single feed can blank a sport):
- *   - fotmob        → FREE home football calendars (friendlies + league),
- *                     no API key — primary SportsDB Premium alternative
+ *   - fotmob        → FREE home football calendars (friendlies + league)
  *   - sportsdb      → optional Premium venue loop (all sports) if key set
  *   - espn          → soccer / rugby / NFL / NBA / boxing / UFC
  *   - cricinfo      → cricket via ESPN web calendar API
@@ -28,64 +35,119 @@ import { fetchVenueSiteEvents } from './venueSites';
  *   - featured      → curated seasonal safety net
  *   - ticketmaster  → non-sports entertainment
  */
-export async function fetchAllEvents(range: DateRange): Promise<AppEvent[]> {
-  const [espn, cricinfo, footballData, sports, fotmob, ticketmaster, featured, venueSites] =
-    await Promise.all([
-      fetchEspnLondon(range).catch((e) => {
-        console.warn('[events] espn failed', e);
-        return [] as AppEvent[];
-      }),
-      fetchCricinfoLondon(range).catch((e) => {
-        console.warn('[events] cricinfo failed', e);
-        return [] as AppEvent[];
-      }),
-      fetchFootballDataLondon(range).catch((e) => {
-        console.warn('[events] football-data failed', e);
-        return [] as AppEvent[];
-      }),
-      fetchSportsLondon(range).catch((e) => {
-        console.warn('[events] sportsdb failed', e);
-        return [] as AppEvent[];
-      }),
-      fetchFotmobLondon(range).catch((e) => {
-        console.warn('[events] fotmob failed', e);
-        return [] as AppEvent[];
-      }),
-      fetchTicketmasterLondon(range).catch((e) => {
-        console.warn('[events] ticketmaster failed', e);
-        return [] as AppEvent[];
-      }),
-      fetchFeaturedLondon(range).catch((e) => {
-        console.warn('[events] featured failed', e);
-        return [] as AppEvent[];
-      }),
-      fetchVenueSiteEvents(range).catch((e) => {
-        console.warn('[events] venue-sites failed', e);
-        return [] as AppEvent[];
-      }),
-    ]);
+export async function fetchAllEvents(
+  range: DateRange,
+  opts: FetchAllEventsOptions = {},
+): Promise<AppEvent[]> {
+  const buckets: {
+    espn: AppEvent[];
+    cricinfo: AppEvent[];
+    footballData: AppEvent[];
+    sports: AppEvent[];
+    fotmob: AppEvent[];
+    ticketmaster: AppEvent[];
+    featured: AppEvent[];
+    venueSites: AppEvent[];
+  } = {
+    espn: [],
+    cricinfo: [],
+    footballData: [],
+    sports: [],
+    fotmob: [],
+    ticketmaster: [],
+    featured: [],
+    venueSites: [],
+  };
+
+  const emit = () => {
+    opts.onPartial?.(finalize(buckets, /* allowSample */ false));
+  };
+
+  const run = async (
+    key: keyof typeof buckets,
+    label: string,
+    fn: () => Promise<AppEvent[]>,
+  ) => {
+    try {
+      buckets[key] = await withTimeout(fn(), PROVIDER_TIMEOUT_MS, [], label);
+    } catch (e) {
+      console.warn(`[events] ${label} failed`, e);
+      buckets[key] = [];
+    }
+    emit();
+  };
+
+  await Promise.all([
+    run('espn', 'espn', () => fetchEspnLondon(range)),
+    run('cricinfo', 'cricinfo', () => fetchCricinfoLondon(range)),
+    run('footballData', 'football-data', () => fetchFootballDataLondon(range)),
+    run('sports', 'sportsdb', () => fetchSportsLondon(range)),
+    run('fotmob', 'fotmob', () => fetchFotmobLondon(range)),
+    run('ticketmaster', 'ticketmaster', () => fetchTicketmasterLondon(range)),
+    run('featured', 'featured', () => fetchFeaturedLondon(range)),
+    run('venueSites', 'venue-sites', () => fetchVenueSiteEvents(range)),
+  ]);
 
   console.log(
-    `[events] provider counts: espn=${espn.length} cric=${cricinfo.length} ` +
-      `football-data=${footballData.length} sportsdb=${sports.length} ` +
-      `fotmob=${fotmob.length} tm=${ticketmaster.length} ics=${venueSites.length} ` +
-      `featured=${featured.length}`,
+    `[events] provider counts: espn=${buckets.espn.length} cric=${buckets.cricinfo.length} ` +
+      `football-data=${buckets.footballData.length} sportsdb=${buckets.sports.length} ` +
+      `fotmob=${buckets.fotmob.length} tm=${buckets.ticketmaster.length} ics=${buckets.venueSites.length} ` +
+      `featured=${buckets.featured.length}`,
   );
 
-  // FotMob is a first-class free football source (not a last-resort scrape).
+  const merged = await finalizeAsync(buckets, range);
+  warnOnEmptyCoverageVenues(merged);
+  return merged;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+  label: string,
+): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[events] ${label} timed out after ${ms}ms`);
+      resolve(fallback);
+    }, ms);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((e) => {
+        clearTimeout(timer);
+        console.warn(`[events] ${label} failed`, e);
+        resolve(fallback);
+      });
+  });
+}
+
+function finalize(
+  buckets: {
+    espn: AppEvent[];
+    cricinfo: AppEvent[];
+    footballData: AppEvent[];
+    sports: AppEvent[];
+    fotmob: AppEvent[];
+    ticketmaster: AppEvent[];
+    featured: AppEvent[];
+    venueSites: AppEvent[];
+  },
+  allowSample: boolean,
+): AppEvent[] {
   const apiCombined = [
-    ...espn,
-    ...cricinfo,
-    ...footballData,
-    ...sports,
-    ...fotmob,
-    ...ticketmaster,
+    ...buckets.espn,
+    ...buckets.cricinfo,
+    ...buckets.footballData,
+    ...buckets.sports,
+    ...buckets.fotmob,
+    ...buckets.ticketmaster,
   ];
 
-  // Venue-site scrapers are a FALLBACK (Oval ICS, RAH, etc.). Drop any scrape
-  // that clashes with an API/FotMob event at the same venue within ±3h.
   const THREE_H = 3 * 60 * 60 * 1000;
-  const venueSiteUnique = venueSites.filter((v) => {
+  const venueSiteUnique = buckets.venueSites.filter((v) => {
     const t = new Date(v.startsAt).getTime();
     return !apiCombined.some(
       (a) =>
@@ -95,18 +157,12 @@ export async function fetchAllEvents(range: DateRange): Promise<AppEvent[]> {
   });
   apiCombined.push(...venueSiteUnique);
 
-  // Curated featured events always ride alongside the API results. When no
-  // API keys are configured we still want the demo to look populated, so
-  // fall back to sample data — but keep featured on top.
-  const base = apiCombined.length === 0 ? await fetchSampleEvents(range) : apiCombined;
-  const combined = [...featured, ...base];
+  const base = apiCombined.length === 0 && allowSample ? null : apiCombined;
+  const combined = [...buckets.featured, ...(base ?? [])];
 
-  // De-duplicate (featured wins since it's inserted first).
   const byId = new Map<string, AppEvent>();
   for (const e of combined) if (!byId.has(e.id)) byId.set(e.id, e);
 
-  // Final geo gate — providers can still leak far-away venues (TM Bristol,
-  // mis-geocoded coords). Keep only pins inside the DriveIQ coverage box.
   let droppedGeo = 0;
   const merged = Array.from(byId.values())
     .filter((e) => {
@@ -117,20 +173,38 @@ export async function fetchAllEvents(range: DateRange): Promise<AppEvent[]> {
     .sort(
       (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
     );
-  if (droppedGeo > 0) {
+  if (droppedGeo > 0 && allowSample) {
     console.warn(`[events] dropped ${droppedGeo} outside DriveIQ area`);
   }
-  warnOnEmptyCoverageVenues(merged);
   return merged;
+}
+
+async function finalizeAsync(
+  buckets: Parameters<typeof finalize>[0],
+  range: DateRange,
+): Promise<AppEvent[]> {
+  const apiEmpty =
+    buckets.espn.length +
+      buckets.cricinfo.length +
+      buckets.footballData.length +
+      buckets.sports.length +
+      buckets.fotmob.length +
+      buckets.ticketmaster.length +
+      buckets.venueSites.length ===
+    0;
+
+  if (apiEmpty) {
+    const samples = fetchSampleEvents(range);
+    const withSamples = { ...buckets, ticketmaster: samples };
+    return finalize(withSamples, true);
+  }
+
+  return finalize(buckets, true);
 }
 
 /**
  * Coverage tripwire: grounds that must not go silently empty when fixtures
- * exist. An empty result in the next 7 days is often a provider gap (Lord's /
- * Oval cricket Jul 2026; The Den friendlies Jul 2026) — shout before users do.
- *
- * Match substrings cover provider name variants (TM "Allianz Stadium,
- * Twickenham", FotMob "Vicarage Road Stadium", etc.).
+ * exist. An empty result in the next 7 days is often a provider gap.
  */
 const COVERAGE_VENUES: { label: string; match: string[] }[] = [
   { label: "Lord's", match: ["lord's"] },

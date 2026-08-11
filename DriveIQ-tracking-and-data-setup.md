@@ -8,7 +8,7 @@ For the company to own and operate DriveIQ's user data, analytics and API accoun
 
 | Data | Where it lives | Notes |
 |---|---|---|
-| Account (email + password) | Firebase Authentication, project `driveiq-63d75` | Only if the user signs up; the app works without an account |
+| Account (email + password) | Firebase Authentication, project `driveiq-app` | Only if the user signs up; the app works without an account |
 | Location | On the device only | Used to centre the map, show distance and routing. Never uploaded to a server. "While Using the App" permission only — no background tracking |
 | Saved events, reports, preferences | On the device only (local storage) | Not synced to any server |
 | Feedback | Email to feedback@driveiq.app | Via the user's own mail app |
@@ -17,7 +17,7 @@ There is **no analytics SDK installed yet** — no usage tracking, no crash repo
 
 ## 2. Take ownership of the accounts (no dev needed)
 
-1. **Firebase / Google Cloud** — the core. Go to [console.firebase.google.com](https://console.firebase.google.com) → project `driveiq-63d75` → Project settings → Users and permissions → add the company Google account as **Owner**. Once confirmed, demote/remove personal accounts.
+1. **Firebase / Google Cloud** — the core. Go to [console.firebase.google.com](https://console.firebase.google.com) → project `driveiq-app` → Project settings → Users and permissions → add the company Google account as **Owner**. Once confirmed, demote/remove personal accounts.
 2. **Apple Developer account** — App Store distribution, push certificates. If currently on a personal account, plan a transfer to a company Apple Developer account (needs a D-U-N-S number).
 3. **Google Play Console** — same for Android when it ships.
 4. **API keys** — the app uses these services; each account should be registered to a company email:
@@ -46,7 +46,7 @@ Recommended: **Firebase Analytics + Crashlytics** — free, integrates with the 
 
 ## 5. Checklist (in order)
 
-- [ ] Company Google account made Owner of Firebase project `driveiq-63d75`
+- [ ] Company Google account made Owner of Firebase project `driveiq-app`
 - [ ] All six API keys re-registered / billing moved to company accounts
 - [ ] Privacy policy drafted and hosted
 - [ ] Firebase Analytics + Crashlytics integrated **[dev]** and funnel events agreed

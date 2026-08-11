@@ -17,8 +17,9 @@ import type { TrafficIncident } from './tflTraffic';
 // upstream feed is ignored to keep the long tail of minor regional events
 // out of London-area users' faces.
 const ROADS_OF_INTEREST = new Set<string>([
-  'M1', 'M11', 'M20', 'M23', 'M25', 'M3', 'M4', 'M40',
-  'A1(M)', 'A2', 'A3(M)', 'A12', 'A13', 'A20', 'A40',
+  'M1', 'M11', 'M2', 'M20', 'M23', 'M25', 'M3', 'M4', 'M40',
+  'A1(M)', 'A1', 'A2', 'A3(M)', 'A3', 'A4', 'A10', 'A12', 'A13',
+  'A20', 'A40', 'A406', 'A205',
 ]);
 
 interface RawEvent {

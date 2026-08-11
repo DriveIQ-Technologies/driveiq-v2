@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -17,6 +17,13 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
+import {
+  consumeAiQuestion,
+  FREE_DAILY_LIMIT,
+  getAiQuota,
+  type AiQuota,
+} from '@/services/aiQuota';
+import { showProPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
 import {
@@ -300,7 +307,15 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
     },
   ]);
   const [input, setInput] = useState('');
+  // Free plan: FREE_DAILY_LIMIT questions/day; Pro unlimited. Reloaded each
+  // open so the counter is always current.
+  const [quota, setQuota] = useState<AiQuota | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    getAiQuota().then(setQuota);
+  }, [visible]);
   // SafeAreaView's top edge doesn't apply reliably inside a Modal, which left
   // the header (and the close button) jammed under the status bar. Read the
   // inset directly and pad the header so the X is always reachable.
@@ -342,6 +357,30 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
     if (!trimmed) return;
     const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
 
+    // Daily quota gate — free plan only.
+    if (quota && !quota.pro && quota.remaining <= 0) {
+      setMessages((prev) => [
+        ...prev,
+        userMsg,
+        {
+          id: `b-${Date.now()}`,
+          role: 'bot',
+          text: `You've used all ${FREE_DAILY_LIMIT} free questions for today — they reset at midnight. DriveIQ Pro includes unlimited AI questions.`,
+          actions: [
+            {
+              label: 'See DriveIQ Pro',
+              icon: 'star-outline',
+              onPress: () => showProPaywall('Unlimited AI questions'),
+            },
+          ],
+        },
+      ]);
+      setInput('');
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+      return;
+    }
+    void consumeAiQuestion().then(setQuota);
+
     const eventResult =
       events && events.length > 0
         ? answerNamedTimeQuery(trimmed, events) ?? answerEventQuery(trimmed, events)
@@ -373,7 +412,13 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
             </View>
             <View>
               <Text style={styles.headerTitle}>DriveIQ AI Support</Text>
-              <Text style={styles.headerSub}>Here to help you get around</Text>
+              <Text style={styles.headerSub}>
+                {quota == null
+                  ? 'Here to help you get around'
+                  : quota.pro
+                    ? 'Pro · unlimited questions'
+                    : `${quota.remaining} of ${FREE_DAILY_LIMIT} free questions left today`}
+              </Text>
             </View>
           </View>
           <Pressable onPress={onClose} hitSlop={12}>

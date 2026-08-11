@@ -159,28 +159,66 @@ export async function fetchLineStatuses(): Promise<LineStatus[]> {
   }
 
   const raw = (await res.json()) as RawLine[];
-  const out: LineStatus[] = raw.filter(isConnectionLine).map((l) => {
-    // TfL returns one entry per concurrent status. Consider only entries in
-    // force right now (expired/planned ones are noise), then use the worst.
-    const worst = (l.lineStatuses ?? []).filter((s) => isActiveNow(s)).reduce<RawLineStatus | null>(
-      (acc, s) => (acc == null || s.statusSeverity < acc.statusSeverity ? s : acc),
-      null,
-    );
-    const sev = effectiveSeverity(l.modeName, worst);
-    return {
-      id: l.id,
-      name: l.name,
-      modeName: l.modeName,
-      severityBucket: bucket(sev),
-      statusDescription: effectiveStatusDescription(l.modeName, worst),
-      reason: worst?.reason?.trim(),
-    };
-  });
+  const out: LineStatus[] = raw.filter(isConnectionLine).map((l) => mapRawLine(l));
 
   // Sort: worst-first so problems surface at the top of the panel.
   out.sort((a, b) => SEVERITY_RANK[a.severityBucket] - SEVERITY_RANK[b.severityBucket]);
   console.log(`[tfl-lines] ${out.length} lines (${out.filter((l) => l.severityBucket !== 'good').length} disrupted)`);
   return out;
+}
+
+/**
+ * Fetch statuses for an explicit set of line ids (station hubs). Unlike
+ * `fetchLineStatuses`, this does NOT apply the day-to-day Connections
+ * allowlist — termini need GWR / Avanti / etc. even when the main list
+ * stays quieter.
+ */
+export async function fetchLineStatusesByIds(
+  lineIds: string[],
+): Promise<LineStatus[]> {
+  const unique = Array.from(new Set(lineIds.filter(Boolean)));
+  if (unique.length === 0) return [];
+
+  const url = `https://api.tfl.gov.uk/Line/${unique
+    .map(encodeURIComponent)
+    .join(',')}/Status?_=${Date.now()}${
+    APP_KEY ? `&app_key=${encodeURIComponent(APP_KEY)}` : ''
+  }`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: 'no-store' });
+  } catch (e) {
+    console.warn('[tfl-lines] byIds network error', e);
+    return [];
+  }
+  if (!res.ok) {
+    console.warn('[tfl-lines] byIds non-OK', res.status);
+    return [];
+  }
+
+  const raw = (await res.json()) as RawLine[];
+  const out = raw.map((l) => mapRawLine(l));
+  out.sort((a, b) => SEVERITY_RANK[a.severityBucket] - SEVERITY_RANK[b.severityBucket]);
+  return out;
+}
+
+function mapRawLine(l: RawLine): LineStatus {
+  const worst = (l.lineStatuses ?? [])
+    .filter((s) => isActiveNow(s))
+    .reduce<RawLineStatus | null>(
+      (acc, s) => (acc == null || s.statusSeverity < acc.statusSeverity ? s : acc),
+      null,
+    );
+  const sev = effectiveSeverity(l.modeName, worst);
+  return {
+    id: l.id,
+    name: l.name,
+    modeName: l.modeName,
+    severityBucket: bucket(sev),
+    statusDescription: effectiveStatusDescription(l.modeName, worst),
+    reason: worst?.reason?.trim(),
+  };
 }
 
 // ---------- Line detail (affected stations + raw disruptions) ----------
@@ -273,7 +311,8 @@ export async function fetchLineDetail(lineId: string): Promise<LineDetail | null
   const arr = (await res.json()) as RawLineDetail[];
   const raw = arr[0];
   if (!raw) return null;
-  if (!isConnectionLine(raw)) return null;
+  // Station hubs open lines outside the day-to-day Connections allowlist
+  // (GWR, Avanti, …). Detail by id must still work for those.
 
   // Only statuses in force right now — expired/planned engineering notices
   // (and their weeks-old incident links) must not surface as current.

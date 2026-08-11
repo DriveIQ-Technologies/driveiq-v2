@@ -44,6 +44,7 @@ import { RouteInfoPanel } from '@/components/RouteInfoPanel';
 import { SplashLoading } from '@/components/SplashLoading';
 import { TrafficIncidentSheet } from '@/components/TrafficIncidentSheet';
 import { TrafficMarker } from '@/components/TrafficMarker';
+import { loadCachedEvents, saveCachedEvents } from '@/services/eventCache';
 import { fetchAllEvents } from '@/services/events';
 import {
   fetchRoutes,
@@ -63,11 +64,20 @@ import { fetchLineStatuses, type LineStatus } from '@/services/tflLines';
 import {
   diffAndNotifyIncidents,
   diffAndNotifyLines,
+  diffAndNotifyFlights,
   ensurePermission,
   loadPrefs,
   scheduleEventReminder,
   type NotificationPrefs,
 } from '@/services/notifications';
+import { fetchAirportFlights } from '@/services/aerodatabox';
+import { loadSavedFlights, type SavedFlightMap } from '@/services/savedFlights';
+import { setJSON } from '@/services/storage';
+import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
+import { gateStationAccess, getFreeStationId } from '@/services/stationAccess';
+import { hasProAccess } from '@/services/subscription';
+import { StationPin } from '@/components/StationPin';
+import { StationHubSheet } from '@/components/StationHubSheet';
 import {
   loadSavedEvents,
   saveEvent,
@@ -118,7 +128,7 @@ import {
 
 interface Destination {
   /** What kind of pin spawned this route. */
-  kind: 'event' | 'incident' | 'airport';
+  kind: 'event' | 'incident' | 'airport' | 'station';
   label: string;
   latitude: number;
   longitude: number;
@@ -195,6 +205,13 @@ export default function MapScreen() {
   const [airportsOpen, setAirportsOpen] = useState(false);
   // Airport whose live flights board is open (tapped an airport map pin).
   const [flightsAirport, setFlightsAirport] = useState<Airport | null>(null);
+  // Station hub sheet opened from a map pin, plus the current user's access
+  // (Pro sees all hubs; free users see their one claimed station unlocked).
+  const [stationHub, setStationHub] = useState<MajorStation | null>(null);
+  const [stationAccess, setStationAccess] = useState<{
+    pro: boolean;
+    freeId: string | null;
+  }>({ pro: false, freeId: null });
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -314,47 +331,67 @@ export default function MapScreen() {
     return () => sub.remove();
   }, []);
 
-  // Fetch the full week's events once on mount; date-filter chips then narrow
-  // the in-memory list rather than re-querying the providers.
+  // Load events: paint disk cache immediately (SWR), then refresh providers
+  // progressively so pins appear in seconds instead of waiting ~30s for TM.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setErrorMsg(null);
-    fetchAllEvents(rangeFor('all'))
-      .then((list) => {
+
+    const logCoverage = (list: AppEvent[]) => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const buckets: Record<string, number> = {};
+      for (const e of list) {
+        const d = new Date(e.startsAt);
+        const localDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        buckets[localDay] = (buckets[localDay] ?? 0) + 1;
+      }
+      const next7: string[] = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() + i);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const label = i === 0 ? 'today' : i === 1 ? 'tomorrow' : `+${i}d`;
+        next7.push(`${key}(${label})=${buckets[key] ?? 0}`);
+      }
+      console.log(`[events] ${list.length} total cached; next 7 days: ${next7.join(', ')}`);
+    };
+
+    (async () => {
+      const cached = await loadCachedEvents();
+      if (cancelled) return;
+      if (cached?.length) {
+        setEvents(cached);
+        setLoading(false);
+        console.log(`[events] painted ${cached.length} from disk cache`);
+      }
+
+      try {
+        const list = await fetchAllEvents(rangeFor('all'), {
+          onPartial: (partial) => {
+            if (cancelled || partial.length === 0) return;
+            // Don't shrink below the disk-cache paint while slow providers
+            // (Ticketmaster) are still catching up.
+            setEvents((prev) => (partial.length >= prev.length ? partial : prev));
+            setLoading(false);
+          },
+        });
         if (cancelled) return;
         setEvents(list);
-
-        // Diagnostic: how many events fall on each of the next 7 local days.
-        // If "Tomorrow" returns 0 we want to see whether tomorrow genuinely
-        // has no events or whether a timezone offset is bucketing them onto
-        // the wrong day.
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const buckets: Record<string, number> = {};
-        for (const e of list) {
-          const d = new Date(e.startsAt);
-          const localDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          buckets[localDay] = (buckets[localDay] ?? 0) + 1;
-        }
-        const next7: string[] = [];
-        for (let i = 0; i < 7; i++) {
-          const d = new Date(today);
-          d.setDate(d.getDate() + i);
-          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          const label = i === 0 ? 'today' : i === 1 ? 'tomorrow' : `+${i}d`;
-          next7.push(`${key}(${label})=${buckets[key] ?? 0}`);
-        }
-        console.log(`[events] ${list.length} total cached; next 7 days: ${next7.join(', ')}`);
-      })
-      .catch((e) => {
+        setLoading(false);
+        logCoverage(list);
+        void saveCachedEvents(list);
+      } catch (e) {
         if (cancelled) return;
         console.warn('[events] fetch failed', e);
-        setErrorMsg('Could not load events. Pull to retry.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+        if (!cached?.length) {
+          setErrorMsg('Could not load events. Pull to retry.');
+        }
+        setLoading(false);
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
@@ -400,6 +437,30 @@ export default function MapScreen() {
       if (prefs) {
         diffAndNotifyIncidents(incidentList, prefs).catch(() => undefined);
         diffAndNotifyLines(lines as LineStatus[], prefs).catch(() => undefined);
+
+        // Watched-flight delay/cancel pings — refresh FIDS only for airports
+        // the user is actually watching (keeps AeroDataBox quota sane).
+        if (prefs['saved-flights']) {
+          const watchedMap = await loadSavedFlights();
+          const watched = Object.values(watchedMap);
+          if (watched.length > 0) {
+            const airportIds = Array.from(
+              new Set(watched.map((f) => f.airportId).filter(Boolean)),
+            );
+            const liveById: Record<string, import('@/services/aerodatabox').AirportFlight> =
+              {};
+            await Promise.all(
+              airportIds.map(async (aid) => {
+                const res = await fetchAirportFlights(aid);
+                for (const f of res.flights) liveById[f.id] = f;
+              }),
+            );
+            const updated = await diffAndNotifyFlights(liveById, watched, prefs);
+            const next: SavedFlightMap = {};
+            for (const f of updated) next[f.id] = f;
+            await setJSON('driveiq.savedFlights.v1', next);
+          }
+        }
       }
     };
     // Bootstrap prefs + permission once, then start the poll loop.
@@ -408,7 +469,9 @@ export default function MapScreen() {
       await ensurePermission();
       load();
     })();
-    const id = setInterval(load, 5 * 60 * 1000);
+    // 3-minute cadence: incidents / line closures / watched flights should
+    // land close to real time without hammering the upstream feeds.
+    const id = setInterval(load, 3 * 60 * 1000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -616,6 +679,25 @@ export default function MapScreen() {
       cancelled = true;
     };
   }, []);
+
+  // Station hub access (Pro flag + claimed free-station slot) for pin badges.
+  const refreshStationAccess = useCallback(async () => {
+    const [pro, freeId] = await Promise.all([hasProAccess(), getFreeStationId()]);
+    setStationAccess({ pro, freeId });
+  }, []);
+  useEffect(() => {
+    void refreshStationAccess();
+  }, [refreshStationAccess]);
+
+  // Station pin tap → free-slot / Pro gate → hub sheet.
+  const handleStationPress = useCallback(
+    async (station: MajorStation) => {
+      const result = await gateStationAccess(station);
+      await refreshStationAccess();
+      if (result === 'open') setStationHub(station);
+    },
+    [refreshStationAccess],
+  );
 
   // Save / unsave an event. Saving also schedules the 1-hour-before reminder
   // (no-op if notifications aren't granted / available).
@@ -1103,6 +1185,19 @@ export default function MapScreen() {
             />
           ))}
 
+        {/* Major rail termini → tap opens the live line board (free users get
+            one station of their choice; the rest are Pro). */}
+        {!destination &&
+          MAJOR_STATIONS.map((s) => (
+            <StationPin
+              key={`station-${s.id}`}
+              station={s}
+              locked={!stationAccess.pro && stationAccess.freeId !== s.id}
+              onPress={handleStationPress}
+              rasterEpoch={rasterEpoch}
+            />
+          ))}
+
         {!destination &&
           reports.map((report) => (
             <Marker
@@ -1359,6 +1454,24 @@ export default function MapScreen() {
       <ConnectionsPanel
         visible={connectionsOpen}
         onClose={() => setConnectionsOpen(false)}
+        onNavigateToStation={(station: MajorStation) => {
+          setConnectionsOpen(false);
+          mapRef.current?.animateToRegion(
+            {
+              latitude: station.latitude,
+              longitude: station.longitude,
+              latitudeDelta: 0.04,
+              longitudeDelta: 0.04,
+            },
+            500,
+          );
+          setDestination({
+            kind: 'station',
+            label: station.name,
+            latitude: station.latitude,
+            longitude: station.longitude,
+          });
+        }}
       />
 
       {/* First-launch onboarding popup. Renders nothing once the user has
@@ -1424,6 +1537,29 @@ export default function MapScreen() {
           setNotifSettingsOpen(false);
           // Re-read prefs so the next poll picks up the user's changes.
           prefsRef.current = await loadPrefs();
+        }}
+      />
+
+      <StationHubSheet
+        station={stationHub}
+        onClose={() => setStationHub(null)}
+        onNavigate={(station) => {
+          setStationHub(null);
+          mapRef.current?.animateToRegion(
+            {
+              latitude: station.latitude,
+              longitude: station.longitude,
+              latitudeDelta: 0.04,
+              longitudeDelta: 0.04,
+            },
+            500,
+          );
+          setDestination({
+            kind: 'station',
+            label: station.name,
+            latitude: station.latitude,
+            longitude: station.longitude,
+          });
         }}
       />
 

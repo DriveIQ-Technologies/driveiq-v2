@@ -8,6 +8,7 @@
  *      moving into the "Closed" or "Severe" status bucket.
  *   3. saved-events — pings the day-of and an hour before each event the
  *      user has saved or followed.
+ *   4. saved-flights — delay / cancel changes on flights the user is watching.
  *
  * Implementation strategy: we run all of this with `expo-notifications`
  * scheduling **local** notifications from the foreground/background poll
@@ -24,22 +25,27 @@
 import type { TrafficIncident } from './tflTraffic';
 import type { LineStatus } from './tflLines';
 import type { AppEvent } from '@/types/event';
+import type { AirportFlight } from './aerodatabox';
+import type { SavedFlight } from './savedFlights';
 
 export type NotificationChannel =
   | 'road-accidents'
   | 'line-closures'
-  | 'saved-events';
+  | 'saved-events'
+  | 'saved-flights';
 
 export interface NotificationPrefs {
   'road-accidents': boolean;
   'line-closures': boolean;
   'saved-events': boolean;
+  'saved-flights': boolean;
 }
 
 export const DEFAULT_PREFS: NotificationPrefs = {
   'road-accidents': true,
   'line-closures': true,
   'saved-events': true,
+  'saved-flights': true,
 };
 
 const STORAGE_KEY_PREFS = 'driveiq.notif.prefs.v1';
@@ -201,6 +207,12 @@ export async function ensurePermission(): Promise<boolean> {
   }
 }
 
+/** "2026-06-26 08:05+01:00" | "2026-06-26T08:05+01:00" → "08:05". */
+const localHhmm = (local: string): string => {
+  const sep = local.includes('T') ? 'T' : ' ';
+  return (local.split(sep)[1] ?? '').slice(0, 5);
+};
+
 const fire = async (
   title: string,
   body: string,
@@ -221,9 +233,31 @@ const fire = async (
   }
 };
 
+// ─── Key London corridors ────────────────────────────────────────────────
+// The big motorways / A-roads that connect London and are usually busy or
+// under roadworks — closures on these ALWAYS warrant a ping, even below the
+// Severe/Serious threshold (client, 8 Aug 2026).
+const KEY_ROAD_RE =
+  /\b(M25|M23|M20|M11|M40|M4|M3|M2|M1|A406|A205|A1\(M\)|A3\(M\)|A40|A41|A13|A12|A10|A20|A102|A1|A2|A3|A4)\b/i;
+
+/** Pull the headline road (e.g. "M25") out of an incident's text, if any. */
+const matchKeyRoad = (inc: TrafficIncident): string | null => {
+  const hay = `${inc.location ?? ''} ${inc.comments ?? ''}`;
+  const m = hay.match(KEY_ROAD_RE);
+  return m ? m[1].toUpperCase() : null;
+};
+
+/** Trim incident copy to one clean notification line. */
+const cleanIncidentText = (s: string | undefined): string =>
+  (s ?? '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 /**
  * Compare a fresh traffic snapshot against the last one we saw and ping
- * the user about anything new and meaningful (severe/serious or closures).
+ * the user about anything new and meaningful: severe/serious incidents,
+ * accidents, and ANY closure on the key London corridors (M25, M4, A40…).
  */
 export async function diffAndNotifyIncidents(
   next: TrafficIncident[],
@@ -249,20 +283,33 @@ export async function diffAndNotifyIncidents(
 
   for (const inc of next) {
     if (prevIds.has(inc.id)) continue;
+    const keyRoad = matchKeyRoad(inc);
+    const isAccident = String(inc.category).toLowerCase() === 'accident';
     const isMajor =
-      inc.severity === 'Severe' ||
-      inc.severity === 'Serious' ||
-      inc.hasClosures ||
-      String(inc.category).toLowerCase() === 'accident';
-    if (!isMajor) continue;
+      inc.severity === 'Severe' || inc.severity === 'Serious' || inc.hasClosures;
+    // Closures / roadworks on the key corridors ping even at lower severity.
+    const isKeyRoadClosure =
+      keyRoad != null &&
+      (inc.hasClosures || String(inc.category).toLowerCase() === 'closure');
+    if (!isMajor && !isAccident && !isKeyRoadClosure) continue;
     if (isFirstRun) continue;
 
-    const where = inc.location ?? 'major route';
-    await fire(
-      `${inc.severity} on ${where}`,
-      inc.comments ?? `${inc.category}${inc.hasClosures ? ' · closure' : ''}`,
-      { kind: 'road-accident', incidentId: inc.id },
-    );
+    const where = inc.location ?? keyRoad ?? 'a major route';
+    const detail = cleanIncidentText(inc.comments);
+    let title: string;
+    if (inc.hasClosures || isKeyRoadClosure) {
+      title = keyRoad ? `${keyRoad} closure — plan around it` : `Road closed: ${where}`;
+    } else if (isAccident) {
+      title = keyRoad ? `Accident on the ${keyRoad}` : `Accident: ${where}`;
+    } else {
+      title = keyRoad
+        ? `${inc.severity} delays on the ${keyRoad}`
+        : `${inc.severity} incident: ${where}`;
+    }
+    const body =
+      (detail ? `${detail} ` : `${inc.category} at ${where}. `) +
+      'Tap to see it on the DriveIQ map and route around it.';
+    await fire(title, body, { kind: 'road-accident', incidentId: inc.id });
   }
 
   await safeSet(STORAGE_KEY_INCIDENTS, JSON.stringify(next.map((i) => i.id)));
@@ -313,10 +360,13 @@ export async function diffAndNotifyLines(
     if (isFirstRun) continue;
     if (!isLineSubscribed(l.id, lineSubs)) continue;
 
+    const reason = l.reason?.replace(/https?:\/\/\S+/gi, '').trim();
     await fire(
-      `${l.name}: ${l.statusDescription}`,
-      l.reason?.replace(/https?:\/\/\S+/gi, '').trim() ||
-        'Tap Connections for full details.',
+      after === 'closed'
+        ? `${l.name} is down — take a look`
+        : `${l.name}: ${l.statusDescription}`,
+      (reason ? `${reason} ` : '') +
+        'Check Connections in DriveIQ before you set off.',
       { kind: 'line-closure', lineId: l.id },
     );
   }
@@ -325,9 +375,11 @@ export async function diffAndNotifyLines(
 }
 
 /**
- * Schedule a one-shot reminder for a saved event, fired one hour before
- * the start time. No-ops if `saved-events` is disabled or the event is
- * already past.
+ * Schedule reminders for a saved event:
+ *   - 1 hour before the start ("time to plan your route"), and
+ *   - ~25 minutes before the end ("crowds leaving — heading off?"), so
+ *     drivers get out ahead of the post-event traffic surge.
+ * No-ops if `saved-events` is disabled or the times are already past.
  */
 export async function scheduleEventReminder(
   event: AppEvent,
@@ -338,21 +390,107 @@ export async function scheduleEventReminder(
   if (!N) return;
 
   const startMs = Date.parse(event.startsAt);
-  if (!Number.isFinite(startMs)) return;
-  const fireAt = startMs - 60 * 60 * 1000;
-  if (fireAt < Date.now() + 30_000) return; // skip if it's already too late
-
-  try {
-    await N.scheduleNotificationAsync({
-      content: {
-        title: `${event.title} starts in 1 hour`,
-        body: event.venue ? `at ${event.venue}` : 'Tap to plan your route.',
-        data: { kind: 'saved-event', eventId: event.id },
-        sound: 'default',
-      },
-      trigger: { date: new Date(fireAt) },
-    });
-  } catch (e) {
-    console.warn('[notif] event reminder failed', e);
+  if (Number.isFinite(startMs)) {
+    const fireAt = startMs - 60 * 60 * 1000;
+    if (fireAt >= Date.now() + 30_000) {
+      try {
+        await N.scheduleNotificationAsync({
+          content: {
+            title: `${event.title} starts in 1 hour`,
+            body:
+              (event.venue ? `Doors at ${event.venue}. ` : '') +
+              'Tap for the fastest route with live traffic.',
+            data: { kind: 'saved-event', eventId: event.id },
+            sound: 'default',
+          },
+          trigger: { date: new Date(fireAt) },
+        });
+      } catch (e) {
+        console.warn('[notif] event reminder failed', e);
+      }
+    }
   }
+
+  const endMs = Date.parse(event.endsAt ?? '');
+  if (Number.isFinite(endMs)) {
+    const fireAt = endMs - 25 * 60 * 1000;
+    if (fireAt >= Date.now() + 30_000) {
+      try {
+        await N.scheduleNotificationAsync({
+          content: {
+            title: `${event.title} is about to end`,
+            body:
+              `Wrapping up in about 25 minutes — expect traffic around ` +
+              `${event.venue ?? 'the venue'} as crowds leave. Heading off? ` +
+              'Tap for the quickest way out.',
+            data: { kind: 'saved-event-end', eventId: event.id },
+            sound: 'default',
+          },
+          trigger: { date: new Date(fireAt) },
+        });
+      } catch (e) {
+        console.warn('[notif] event end reminder failed', e);
+      }
+    }
+  }
+}
+
+/**
+ * Diff live FIDS rows against the user's watched flights and ping on
+ * cancel / new delay / delay worsened by ≥15 minutes.
+ * Call after refreshing boards for airports that have saved flights.
+ */
+export async function diffAndNotifyFlights(
+  liveById: Record<string, AirportFlight>,
+  watched: SavedFlight[],
+  prefs: NotificationPrefs,
+): Promise<SavedFlight[]> {
+  if (!prefs['saved-flights'] || watched.length === 0) return watched;
+
+  const updated: SavedFlight[] = [];
+  for (const prev of watched) {
+    const next = liveById[prev.id];
+    if (!next) {
+      updated.push(prev);
+      continue;
+    }
+
+    const becameCancelled = !prev.cancelled && next.cancelled;
+    const becameDelayed = !prev.delayed && next.delayed;
+    const delayWorsened =
+      prev.delayed &&
+      next.delayed &&
+      (next.delayMinutes ?? 0) >= (prev.delayMinutes ?? 0) + 15;
+
+    const routeText = `${next.direction === 'departure' ? 'to' : 'from'} ${next.counterpart}`;
+    if (becameCancelled) {
+      await fire(
+        `${next.flightNumber} has been cancelled`,
+        `Your watched flight ${routeText} was cancelled` +
+          (next.airline ? ` — check with ${next.airline} for rebooking.` : '.') +
+          ' Tap for the live board.',
+        { kind: 'saved-flight', flightId: next.id },
+      );
+    } else if (becameDelayed || delayWorsened) {
+      const mins =
+        next.delayMinutes != null ? ` by ${next.delayMinutes} min` : '';
+      await fire(
+        `${next.flightNumber} is running late${mins}`,
+        `Your watched flight ${routeText}` +
+          (next.revisedLocal
+            ? ` is now estimated ${localHhmm(next.revisedLocal)}.`
+            : ' has a new delay.') +
+          " We'll keep an eye on it for you.",
+        { kind: 'saved-flight', flightId: next.id },
+      );
+    }
+
+    updated.push({
+      ...prev,
+      ...next,
+      airportId: prev.airportId,
+      savedAt: prev.savedAt,
+    });
+  }
+  return updated;
 }

@@ -19,13 +19,27 @@ import {
   type AirportFlight,
   type FlightDirection,
 } from '@/services/aerodatabox';
+import {
+  loadSavedFlights,
+  saveFlight,
+  unsaveFlight,
+  type SavedFlightMap,
+} from '@/services/savedFlights';
+import { hasProAccess, showProPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
+import { ensurePermission, loadPrefs } from '@/services/notifications';
 
 interface Props {
   airport: Airport | null;
   onClose: () => void;
   onNavigate?: (airport: Airport) => void;
 }
+
+// Tier limits (client 8 Aug 2026): free = 3h board + 1 watched flight,
+// Pro = full local day + 5 watched flights.
+const FREE_WINDOW_HOURS = 3;
+const FREE_WATCH_LIMIT = 1;
+const PRO_WATCH_LIMIT = 5;
 
 const SEVERITY_COLOR: Record<ConnectionStatus['severityBucket'], string> = {
   good: '#26C281',
@@ -84,6 +98,15 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
   const [flightsLoading, setFlightsLoading] = useState(false);
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [direction, setDirection] = useState<FlightDirection>('departure');
+  const [fullDay, setFullDay] = useState(false);
+  const [isPro, setIsPro] = useState(false);
+  const [saved, setSaved] = useState<SavedFlightMap>({});
+  const [selectedFlight, setSelectedFlight] = useState<AirportFlight | null>(null);
+
+  useEffect(() => {
+    hasProAccess().then(setIsPro);
+    loadSavedFlights().then(setSaved);
+  }, []);
 
   // Rail-link statuses for this airport (same source as the sidebar Airports tab).
   useEffect(() => {
@@ -106,14 +129,14 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     };
   }, [airport]);
 
-  // Live flights (Pro) for this airport.
+  // Live flights for this airport (standard ~11h, or full local day on Pro).
   useEffect(() => {
     if (!airport) return;
     let cancelled = false;
     setFlightsLoading(true);
     setFlightsError(null);
     setFlights([]);
-    fetchAirportFlights(airport.id)
+    fetchAirportFlights(airport.id, new Date(), { fullDay: fullDay && isPro })
       .then((res) => {
         if (cancelled) return;
         setFlights(res.flights);
@@ -146,25 +169,79 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [airport]);
+  }, [airport, fullDay, isPro]);
 
   // Only relevant flights: drop anything more than 30 min in the past so we
-  // never show flights that left/landed hours ago. Sorted soonest-first, capped.
+  // never show flights that left/landed hours ago. Sorted soonest-first.
+  // Tiering (client 8 Aug 2026): free board = next 3 hours only; Pro gets
+  // the standard ~11h window, or the full local day with the toggle on.
   const shownFlights = useMemo(() => {
     const cutoff = Date.now() - 30 * 60 * 1000;
-    return flights
+    let list = flights
       .filter((f) => f.direction === direction)
-      .filter((f) => f.scheduledMs === 0 || f.scheduledMs >= cutoff)
-      .slice(0, 40);
-  }, [flights, direction]);
+      .filter((f) => f.scheduledMs === 0 || f.scheduledMs >= cutoff);
+    if (!isPro) {
+      const horizon = Date.now() + FREE_WINDOW_HOURS * 60 * 60 * 1000;
+      list = list.filter((f) => f.scheduledMs === 0 || f.scheduledMs <= horizon);
+    }
+    return fullDay && isPro ? list : list.slice(0, 40);
+  }, [flights, direction, fullDay, isPro]);
 
   if (!airport) return null;
 
-  const upgrade = () =>
+  const upgrade = () => showProPaywall('Live flight tracking & full-day boards');
+
+  const toggleFullDay = async () => {
+    if (!isPro) {
+      upgrade();
+      return;
+    }
+    setFullDay((v) => !v);
+  };
+
+  const toggleSave = async (f: AirportFlight) => {
+    if (saved[f.id]) {
+      const next = await unsaveFlight(f.id);
+      setSaved(next);
+      return;
+    }
+
+    // Enforce the watch quota before saving.
+    const watchedCount = Object.keys(saved).length;
+    if (!isPro && watchedCount >= FREE_WATCH_LIMIT) {
+      Alert.alert(
+        'Flight watch limit',
+        `Free plan tracks ${FREE_WATCH_LIMIT} flight at a time — you're already watching one. Upgrade to DriveIQ Pro to track up to ${PRO_WATCH_LIMIT}, or stop watching your current flight first.`,
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'See Pro', onPress: upgrade },
+        ],
+      );
+      return;
+    }
+    if (isPro && watchedCount >= PRO_WATCH_LIMIT) {
+      Alert.alert(
+        'Flight watch limit',
+        `Pro tracks up to ${PRO_WATCH_LIMIT} flights at a time. Stop watching one to add another.`,
+      );
+      return;
+    }
+
+    await ensurePermission();
+    const prefs = await loadPrefs();
+    if (!prefs['saved-flights']) {
+      Alert.alert(
+        'Flight alerts off',
+        'Turn on “Watched flights” in Notification settings to get delay and cancel pings.',
+      );
+    }
+    const next = await saveFlight(airport.id, f);
+    setSaved(next);
     Alert.alert(
-      'DriveIQ Pro',
-      'Live flight tracking will be part of DriveIQ Pro. Subscriptions aren’t live yet — this is a preview.',
+      'Watching flight',
+      `${f.flightNumber} — we’ll ping you if it’s delayed or cancelled.`,
     );
+  };
 
   return (
     <Modal transparent animationType="slide" visible onRequestClose={onClose}>
@@ -236,16 +313,24 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
             ))
           )}
 
-          {/* ── Live flights (Pro) ── */}
+          {/* ── Live flights ── */}
           <Pressable style={styles.proBanner} onPress={upgrade} accessibilityRole="button">
             <Ionicons name="star" size={16} color={colors.primaryDark} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.proTitle}>DriveIQ Pro — Live flights</Text>
-              <Text style={styles.proBody}>Arrivals, departures, delays & cancellations</Text>
+              <Text style={styles.proTitle}>
+                {isPro ? 'DriveIQ Pro' : 'DriveIQ Pro — Full-day flights'}
+              </Text>
+              <Text style={styles.proBody}>
+                {isPro
+                  ? `Full-day board + ${PRO_WATCH_LIMIT} watched flights unlocked. Tap a flight to watch it.`
+                  : `Free: next ${FREE_WINDOW_HOURS}h · ${FREE_WATCH_LIMIT} watched flight — Pro: full day · ${PRO_WATCH_LIMIT} watched`}
+              </Text>
             </View>
-            <View style={styles.proCta}>
-              <Text style={styles.proCtaText}>Subscribe</Text>
-            </View>
+            {!isPro ? (
+              <View style={styles.proCta}>
+                <Text style={styles.proCtaText}>Subscribe</Text>
+              </View>
+            ) : null}
           </Pressable>
 
           <View style={styles.segment}>
@@ -267,6 +352,21 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
             })}
           </View>
 
+          <Pressable
+            onPress={toggleFullDay}
+            style={styles.fullDayToggle}
+            accessibilityRole="button"
+          >
+            <Ionicons
+              name={fullDay && isPro ? 'checkbox' : 'square-outline'}
+              size={18}
+              color={colors.primary}
+            />
+            <Text style={styles.fullDayText}>
+              Full day of flights {isPro ? '' : '(Pro)'}
+            </Text>
+          </Pressable>
+
           {flightsLoading && (
             <View style={styles.loading}>
               <ActivityIndicator color={colors.primary} />
@@ -278,52 +378,75 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
 
           {!flightsLoading && !flightsError && shownFlights.length === 0 && (
             <Text style={styles.empty}>
-              No {direction === 'departure' ? 'departures' : 'arrivals'} in the next few hours.
+              No {direction === 'departure' ? 'departures' : 'arrivals'}{' '}
+              {isPro
+                ? 'in this window.'
+                : `in the next ${FREE_WINDOW_HOURS} hours — Pro shows the full day.`}
             </Text>
           )}
 
           {!flightsLoading &&
-            shownFlights.map((f) => (
-              <View key={f.id} style={styles.flightRow}>
-                <View style={[styles.flightBar, { backgroundColor: flightBarColor(f) }]} />
-                <View style={styles.timeCol}>
-                  <Text
-                    style={[
-                      styles.time,
-                      (f.cancelled || f.delayed) && styles.timeStruck,
-                    ]}
-                  >
-                    {hhmm(f.scheduledLocal)}
-                  </Text>
-                  {f.cancelled ? (
-                    <Text style={styles.subCancelled}>Cancelled</Text>
-                  ) : f.delayed && f.revisedLocal ? (
-                    <Text style={styles.subDelayed}>Est. {hhmm(f.revisedLocal)}</Text>
-                  ) : (
-                    <Text style={styles.subSched}>Sched.</Text>
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.route} numberOfLines={1}>
-                    {direction === 'departure' ? 'To ' : 'From '}
-                    {f.counterpart}
-                    {f.counterpartIata ? ` (${f.counterpartIata})` : ''}
-                  </Text>
-                  <Text style={styles.flightMeta} numberOfLines={1}>
-                    {f.flightNumber}
-                    {f.airline ? ` · ${f.airline}` : ''}
-                    {f.terminal ? ` · T${f.terminal}` : ''}
-                  </Text>
-                </View>
-                <View
-                  style={[styles.flightStatusPill, { backgroundColor: flightStatusBg(f) }]}
+            shownFlights.map((f) => {
+              const watching = !!saved[f.id];
+              return (
+                <Pressable
+                  key={f.id}
+                  style={({ pressed }) => [
+                    styles.flightRow,
+                    pressed && styles.flightRowPressed,
+                  ]}
+                  onPress={() => setSelectedFlight(f)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${f.flightNumber} ${flightStatusLabel(f)}`}
                 >
-                  <Text style={[styles.flightStatusText, { color: flightStatusText(f) }]}>
-                    {flightStatusLabel(f)}
-                  </Text>
-                </View>
-              </View>
-            ))}
+                  <View style={[styles.flightBar, { backgroundColor: flightBarColor(f) }]} />
+                  <View style={styles.timeCol}>
+                    <Text
+                      style={[
+                        styles.time,
+                        (f.cancelled || f.delayed) && styles.timeStruck,
+                      ]}
+                    >
+                      {hhmm(f.scheduledLocal)}
+                    </Text>
+                    {f.cancelled ? (
+                      <Text style={styles.subCancelled}>Cancelled</Text>
+                    ) : f.delayed && f.revisedLocal ? (
+                      <Text style={styles.subDelayed}>Est. {hhmm(f.revisedLocal)}</Text>
+                    ) : (
+                      <Text style={styles.subSched}>Sched.</Text>
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.route} numberOfLines={1}>
+                      {direction === 'departure' ? 'To ' : 'From '}
+                      {f.counterpart}
+                      {f.counterpartIata ? ` (${f.counterpartIata})` : ''}
+                    </Text>
+                    <Text style={styles.flightMeta} numberOfLines={1}>
+                      {f.flightNumber}
+                      {f.airline ? ` · ${f.airline}` : ''}
+                      {f.terminal ? ` · T${f.terminal}` : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.flightTrailing}>
+                    <View
+                      style={[styles.flightStatusPill, { backgroundColor: flightStatusBg(f) }]}
+                    >
+                      <Text style={[styles.flightStatusText, { color: flightStatusText(f) }]}>
+                        {flightStatusLabel(f)}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={watching ? 'bookmark' : 'bookmark-outline'}
+                      size={16}
+                      color={watching ? colors.primary : colors.textSecondary}
+                      style={{ marginTop: 6 }}
+                    />
+                  </View>
+                </Pressable>
+              );
+            })}
         </ScrollView>
       </View>
 
@@ -334,6 +457,59 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
         initialSeverity={openConn?.severityBucket}
         onClose={() => setOpenConn(null)}
       />
+
+      {selectedFlight ? (
+        <Modal transparent animationType="fade" visible onRequestClose={() => setSelectedFlight(null)}>
+          <Pressable style={styles.detailBackdrop} onPress={() => setSelectedFlight(null)} />
+          <View style={styles.detailCard}>
+            <Text style={styles.detailTitle}>{selectedFlight.flightNumber}</Text>
+            <Text style={styles.detailBody}>
+              {selectedFlight.direction === 'departure' ? 'To' : 'From'}{' '}
+              {selectedFlight.counterpart}
+              {selectedFlight.counterpartIata
+                ? ` (${selectedFlight.counterpartIata})`
+                : ''}
+            </Text>
+            <Text style={styles.detailMeta}>
+              {selectedFlight.airline || 'Airline TBA'}
+              {selectedFlight.terminal ? ` · Terminal ${selectedFlight.terminal}` : ''}
+            </Text>
+            <Text style={styles.detailMeta}>
+              Scheduled {hhmm(selectedFlight.scheduledLocal)}
+              {selectedFlight.revisedLocal
+                ? ` · Revised ${hhmm(selectedFlight.revisedLocal)}`
+                : ''}
+            </Text>
+            <Text
+              style={[
+                styles.detailStatus,
+                { color: flightStatusText(selectedFlight) },
+              ]}
+            >
+              {flightStatusLabel(selectedFlight)}
+            </Text>
+            <Pressable
+              style={styles.watchBtn}
+              onPress={() => {
+                void toggleSave(selectedFlight);
+              }}
+              accessibilityRole="button"
+            >
+              <Ionicons
+                name={saved[selectedFlight.id] ? 'bookmark' : 'bookmark-outline'}
+                size={18}
+                color={colors.textOnPrimary}
+              />
+              <Text style={styles.watchBtnText}>
+                {saved[selectedFlight.id] ? 'Stop watching' : 'Watch for delays'}
+              </Text>
+            </Pressable>
+            <Pressable onPress={() => setSelectedFlight(null)} style={styles.detailClose}>
+              <Text style={styles.detailCloseText}>Close</Text>
+            </Pressable>
+          </View>
+        </Modal>
+      ) : null}
     </Modal>
   );
 }
@@ -445,6 +621,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
+  flightRowPressed: { backgroundColor: colors.surfaceMuted },
   flightBar: { width: 4, height: 40, borderRadius: 2 },
   timeCol: { width: 58 },
   time: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
@@ -454,6 +631,7 @@ const styles = StyleSheet.create({
   subSched: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
   route: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
   flightMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  flightTrailing: { alignItems: 'flex-end' },
   flightStatusPill: {
     paddingHorizontal: 9,
     paddingVertical: 5,
@@ -463,4 +641,42 @@ const styles = StyleSheet.create({
   flightStatusText: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
   statusPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, maxWidth: 120 },
   statusText: { fontSize: 11, fontWeight: '800', color: colors.textOnPrimary, textAlign: 'center' },
+  fullDayToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  fullDayText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  detailBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  detailCard: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: '28%',
+    backgroundColor: colors.surface,
+    borderRadius: 18,
+    padding: 18,
+  },
+  detailTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
+  detailBody: { fontSize: 15, fontWeight: '600', color: colors.textPrimary, marginTop: 6 },
+  detailMeta: { fontSize: 13, color: colors.textSecondary, marginTop: 6 },
+  detailStatus: { fontSize: 14, fontWeight: '800', marginTop: 10 },
+  watchBtn: {
+    marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: colors.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+  },
+  watchBtnText: { color: colors.textOnPrimary, fontWeight: '800', fontSize: 14 },
+  detailClose: { alignItems: 'center', marginTop: 12, paddingVertical: 8 },
+  detailCloseText: { color: colors.textSecondary, fontWeight: '600' },
 });

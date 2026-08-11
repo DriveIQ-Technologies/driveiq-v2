@@ -2,6 +2,7 @@ import { findLondonPlace } from '@/data/londonVenues';
 import type { AppEvent } from '@/types/event';
 import { eventOverlapsRange, type DateRange } from '@/utils/dateFilters';
 import { defaultEndsAt } from '@/utils/duration';
+import { ukOffset } from '@/utils/ukTime';
 
 /**
  * FotMob team ICS calendars — free football home-fixture backbone.
@@ -95,7 +96,10 @@ const parseIcsDateTime = (raw: string): number | null => {
   const compact = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
   if (compact) {
     const [, y, mo, d, h, mi, s, z] = compact;
-    const ms = Date.parse(`${y}-${mo}-${d}T${h}:${mi}:${s}${z ? 'Z' : ''}`);
+    // Floating (no-Z) ICS times are London wall-clock — parse with the UK
+    // offset, not the device timezone (wrong for users travelling abroad).
+    const suffix = z ? 'Z' : ukOffset(`${y}-${mo}-${d}`);
+    const ms = Date.parse(`${y}-${mo}-${d}T${h}:${mi}:${s}${suffix}`);
     return Number.isFinite(ms) ? ms : null;
   }
   const ms = Date.parse(raw);
@@ -140,9 +144,10 @@ const icsToHomeEvents = (
     if (!club.locationMatch.some((m) => location.includes(m))) continue;
 
     const startMs = /^\d{8}$/.test(dtstart)
-      ? Date.parse(
-          `${dtstart.slice(0, 4)}-${dtstart.slice(4, 6)}-${dtstart.slice(6, 8)}T15:00:00+01:00`,
-        )
+      ? (() => {
+          const d = `${dtstart.slice(0, 4)}-${dtstart.slice(4, 6)}-${dtstart.slice(6, 8)}`;
+          return Date.parse(`${d}T15:00:00${ukOffset(d)}`);
+        })()
       : parseIcsDateTime(dtstart);
     if (startMs == null) continue;
 
@@ -151,9 +156,10 @@ const icsToHomeEvents = (
     let endsAt: string | null = null;
     if (dtend) {
       const endMs = /^\d{8}$/.test(dtend)
-        ? Date.parse(
-            `${dtend.slice(0, 4)}-${dtend.slice(4, 6)}-${dtend.slice(6, 8)}T17:00:00+01:00`,
-          )
+        ? (() => {
+            const d = `${dtend.slice(0, 4)}-${dtend.slice(4, 6)}-${dtend.slice(6, 8)}`;
+            return Date.parse(`${d}T17:00:00${ukOffset(d)}`);
+          })()
         : parseIcsDateTime(dtend);
       if (endMs != null && endMs > startMs) endsAt = new Date(endMs).toISOString();
     }

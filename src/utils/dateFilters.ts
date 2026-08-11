@@ -1,9 +1,17 @@
 /**
- * Date-range helpers that power the Today / Tomorrow / Next 3 Days / This Week filter bar.
+ * Date-range helpers that power the Today / Tomorrow / day-chip filter bar.
  *
- * Each filter returns an inclusive [start, end] window in local time so the API services
- * can request only the relevant slice of data.
+ * All day windows are Europe/London calendar days — not the device timezone.
+ * DriveIQ is a London product; a tester in UTC+3 (or a US-set simulator)
+ * must still see "Today" as London's today, or West End shows vanish from
+ * the wrong chip.
  */
+
+import {
+  addDaysYmd,
+  londonDayBounds,
+  londonYmd,
+} from '@/utils/ukTime';
 
 /**
  * Filter chips come in two flavours:
@@ -46,62 +54,45 @@ const dayOffset = (k: DayKey): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const startOfDay = (d: Date): Date => {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-};
-
-const endOfDay = (d: Date): Date => {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
-};
-
-const addDays = (d: Date, days: number): Date => {
-  const x = new Date(d);
-  x.setDate(x.getDate() + days);
-  return x;
-};
+const LONDON_TZ = 'Europe/London';
 
 /**
- * Build the date range for a given filter, anchored at `now` (defaults to current time).
+ * Build the date range for a given filter, anchored at London's calendar
+ * for `now` (defaults to current time).
  *
- * - `today`     — start of today → end of today
- * - `tomorrow`  — start of tomorrow → end of tomorrow
- * - `next3`     — start of today → end of (today + 2)  (today + next 2 days = 3 days total)
- * - `all`       — start of today → end of (today + 60). Forward-looking
- *                 only — past events are never surfaced. Wider than the
- *                 other filters so new-season fixture lists get caught
- *                 the moment they're published (Premier League drops
- *                 their next season ~6 weeks before kickoff).
+ * - `today`     — London midnight today → end of today
+ * - `tomorrow`  — London tomorrow
+ * - `next3`     — today → today+2 (London)
+ * - `all`       — today → today+60 (forward-looking only)
  */
 export function rangeFor(filter: FilterKey, now: Date = new Date()): DateRange {
-  const today = startOfDay(now);
-  // Specific future day picked from the scrollable strip.
+  const todayYmd = londonYmd(now);
   if (isDayKey(filter)) {
-    const d = addDays(today, dayOffset(filter));
-    return { start: d, end: endOfDay(d) };
+    const ymd = addDaysYmd(todayYmd, dayOffset(filter));
+    return londonDayBounds(ymd);
   }
   switch (filter) {
     case 'today':
-      return { start: today, end: endOfDay(today) };
-    case 'tomorrow': {
-      const t = addDays(today, 1);
-      return { start: t, end: endOfDay(t) };
+      return londonDayBounds(todayYmd);
+    case 'tomorrow':
+      return londonDayBounds(addDaysYmd(todayYmd, 1));
+    case 'next3': {
+      const start = londonDayBounds(todayYmd).start;
+      const end = londonDayBounds(addDaysYmd(todayYmd, 2)).end;
+      return { start, end };
     }
-    case 'next3':
-      return { start: today, end: endOfDay(addDays(today, 2)) };
-    case 'all':
-      return { start: today, end: endOfDay(addDays(today, 60)) };
+    case 'all': {
+      const start = londonDayBounds(todayYmd).start;
+      const end = londonDayBounds(addDaysYmd(todayYmd, 60)).end;
+      return { start, end };
+    }
   }
 }
 
 /**
- * Build the ordered list of filter chips: the four presets followed by an
- * individual chip for each of the next `futureDays` days (starting the day
- * after tomorrow, since Today/Tomorrow already have their own presets).
- * Day chips are labelled like "Sat 27".
+ * Build the ordered list of filter chips: presets plus a scrollable strip of
+ * individual future days (starting the day after tomorrow). Day chips are
+ * labelled in London time, e.g. "Sat 27".
  */
 export function buildFilterChips(
   now: Date = new Date(),
@@ -111,13 +102,20 @@ export function buildFilterChips(
     { key: 'all', label: FILTER_LABELS.all },
     { key: 'today', label: FILTER_LABELS.today },
     { key: 'tomorrow', label: FILTER_LABELS.tomorrow },
-    // "Next 3 Days" removed — individual day chips below cover that range.
   ];
-  const today = startOfDay(now);
+  const todayYmd = londonYmd(now);
   for (let n = 2; n <= futureDays; n++) {
-    const d = addDays(today, n);
-    const weekday = d.toLocaleDateString(undefined, { weekday: 'short' });
-    const day = d.toLocaleDateString(undefined, { day: 'numeric' });
+    const ymd = addDaysYmd(todayYmd, n);
+    // Format from a fixed London noon instant so the weekday/day match London.
+    const noon = new Date(`${ymd}T12:00:00Z`);
+    const weekday = noon.toLocaleDateString('en-GB', {
+      weekday: 'short',
+      timeZone: LONDON_TZ,
+    });
+    const day = noon.toLocaleDateString('en-GB', {
+      day: 'numeric',
+      timeZone: LONDON_TZ,
+    });
     chips.push({ key: `day:${n}`, label: `${weekday} ${day}` });
   }
   return chips;
@@ -130,9 +128,18 @@ export function isInRange(iso: string, range: DateRange): boolean {
 }
 
 /**
+ * Minimum duration for an event to be treated as genuinely multi-day and
+ * allowed to span onto other day chips (cricket Tests, festivals). Below
+ * this, a late show whose end crosses midnight — or an event with an
+ * inflated provider end time — must NOT bleed onto the wrong day.
+ */
+const MULTI_DAY_MS = 20 * 60 * 60 * 1000;
+
+/**
  * Returns true if an event should appear for a date filter. Single-day
- * events match on `startsAt`; multi-day fixtures (Tests, county championship)
- * also match on any day their [startsAt, endsAt] window overlaps the range.
+ * events match on `startsAt` only; genuinely multi-day fixtures (Tests,
+ * county championship) also match on any day their [startsAt, endsAt]
+ * window overlaps the range.
  */
 export function eventOverlapsRange(
   startsAt: string,
@@ -141,6 +148,10 @@ export function eventOverlapsRange(
 ): boolean {
   if (isInRange(startsAt, range)) return true;
   if (!endsAt) return false;
+  const s = new Date(startsAt).getTime();
+  const e = new Date(endsAt).getTime();
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return false;
+  if (e - s < MULTI_DAY_MS) return false;
   return isSpanningRange(startsAt, endsAt, range);
 }
 
@@ -164,35 +175,40 @@ export function isSpanningRange(
   return s <= range.end.getTime() && e >= range.start.getTime();
 }
 
-/** Format an ISO date for display: "Tue 5 May · 19:30". */
+/** Format an ISO date for display in London time: "Tue 5 May · 19:30". */
 export function formatEventDate(iso: string): string {
   const d = new Date(iso);
-  const day = d.toLocaleDateString(undefined, { weekday: 'short' });
-  const date = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-  const time = d.toLocaleTimeString(undefined, {
+  const day = d.toLocaleDateString('en-GB', {
+    weekday: 'short',
+    timeZone: LONDON_TZ,
+  });
+  const date = d.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: LONDON_TZ,
+  });
+  const time = d.toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
+    timeZone: LONDON_TZ,
   });
   return `${day} ${date} · ${time}`;
 }
 
 /**
- * Format an event's end time, omitting the date when it falls on the same
- * calendar day as the start (e.g. "21:30") and including a date when the
- * event spans days (e.g. "Wed 6 May · 18:30" for a multi-day cricket Test).
+ * Format an event's end time in London time, omitting the date when it falls
+ * on the same London calendar day as the start.
  */
 export function formatEventEndTime(startIso: string, endIso: string): string {
   const start = new Date(startIso);
   const end = new Date(endIso);
-  const sameDay =
-    start.getFullYear() === end.getFullYear() &&
-    start.getMonth() === end.getMonth() &&
-    start.getDate() === end.getDate();
-  const time = end.toLocaleTimeString(undefined, {
+  const sameDay = londonYmd(start) === londonYmd(end);
+  const time = end.toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
+    timeZone: LONDON_TZ,
   });
   if (sameDay) return time;
   return formatEventDate(endIso);

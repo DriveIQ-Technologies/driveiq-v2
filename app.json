@@ -3,31 +3,35 @@
     "name": "DriveIQ",
     "slug": "driveiq-91cbfgcslw1jeepr9yba",
     "scheme": "driveiq",
-    "version": "6.0.0",
+    "version": "6.0.2",
     "orientation": "portrait",
+    "icon": "./assets/driveiq-app-icon-1024.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": false,
     "splash": {
+      "image": "./assets/driveiq-logo@hd.png",
       "backgroundColor": "#060B14",
       "resizeMode": "contain"
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "driveiq.app",
-      "buildNumber": "2",
+      "buildNumber": "4",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location to show nearby events and calculate distance to event venues."
       }
     },
     "android": {
-      "package": "com.driveiq.app",
+      "package": "driveiq.app",
       "adaptiveIcon": {
-        "backgroundColor": "#87CEEB"
+        "foregroundImage": "./assets/driveiq-logo@hd.png",
+        "backgroundColor": "#060B14"
       },
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
-      ]
+      ],
+      "versionCode": 5
     },
     "web": {
       "bundler": "metro"

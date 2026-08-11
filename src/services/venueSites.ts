@@ -2,7 +2,8 @@ import { findLondonPlace } from '@/data/londonVenues';
 import type { AppEvent, EventCategory } from '@/types/event';
 import { eventOverlapsRange, isInRange, type DateRange } from '@/utils/dateFilters';
 import { cleanDescription } from '@/utils/description';
-import { defaultEndsAt } from '@/utils/duration';
+import { defaultEndsAt, hasDefaultDuration } from '@/utils/duration';
+import { ukOffset } from '@/utils/ukTime';
 
 /**
  * Venue-website sources — for venues that self-ticket and are therefore
@@ -172,7 +173,12 @@ const makeEvent = (
   category,
   title,
   startsAt,
-  endsAt: endsAt ?? defaultEndsAt(startsAt, sub),
+  // `sub` can be a free-form feed category (RAH "Late Night Jazz" etc.) —
+  // if it's not a known duration key, fall back to the site's default so we
+  // don't silently get 120 min.
+  endsAt:
+    endsAt ??
+    defaultEndsAt(startsAt, hasDefaultDuration(sub) ? sub : site.defaultSub),
   venue: place.venue,
   latitude: place.latitude,
   longitude: place.longitude,
@@ -299,13 +305,15 @@ const fetchJsonldCrawl = async (
 
 // ── ICS (calendar feeds) ─────────────────────────────────────────────────
 
-/** Parse ICS date-times: `20260801T140000Z`, `20260801T150000`, or ISO. */
+/** Parse ICS date-times: `20260801T140000Z`, `20260801T150000`, or ISO.
+ *  Floating (no-Z) times are London wall-clock — parsed with the UK offset,
+ *  not the device timezone. */
 const parseIcsDateTime = (raw: string): number | null => {
   const compact = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
   if (compact) {
     const [, y, mo, d, h, mi, s, z] = compact;
-    const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}${z ? 'Z' : ''}`;
-    const ms = Date.parse(iso);
+    const suffix = z ? 'Z' : ukOffset(`${y}-${mo}-${d}`);
+    const ms = Date.parse(`${y}-${mo}-${d}T${h}:${mi}:${s}${suffix}`);
     return Number.isFinite(ms) ? ms : null;
   }
   const ms = Date.parse(raw);
@@ -338,17 +346,17 @@ const icsToEvents = (
     let startsAt: string;
     let endsAt: string | null = null;
     if (/^\d{8}$/.test(dtstart)) {
-      // Date-only → day of cricket, UK summer time (+01:00).
+      // Date-only → day of cricket: play 10:30–18:30 London time.
       const d = `${dtstart.slice(0, 4)}-${dtstart.slice(4, 6)}-${dtstart.slice(6, 8)}`;
-      startsAt = new Date(`${d}T10:30:00+01:00`).toISOString();
+      startsAt = new Date(`${d}T10:30:00${ukOffset(d)}`).toISOString();
       const dtend = get('DTEND');
       if (dtend && /^\d{8}$/.test(dtend)) {
-        // DTEND is exclusive → last day is DTEND - 1.
-        const endDay = new Date(
-          `${dtend.slice(0, 4)}-${dtend.slice(4, 6)}-${dtend.slice(6, 8)}T18:30:00+01:00`,
-        );
-        endDay.setDate(endDay.getDate() - 1);
-        if (endDay.getTime() > Date.parse(startsAt)) endsAt = endDay.toISOString();
+        // DTEND is exclusive → last day is DTEND - 1. Subtract a day in UTC
+        // ms rather than device-local calendar arithmetic.
+        const de = `${dtend.slice(0, 4)}-${dtend.slice(4, 6)}-${dtend.slice(6, 8)}`;
+        const endMs =
+          Date.parse(`${de}T18:30:00${ukOffset(de)}`) - 24 * 60 * 60 * 1000;
+        if (endMs > Date.parse(startsAt)) endsAt = new Date(endMs).toISOString();
       }
     } else {
       const ms = parseIcsDateTime(dtstart);

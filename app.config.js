@@ -9,10 +9,11 @@
  * it does NOT end up inlined in the JS bundle. It only flows into the
  * native iOS / Android config used to register the Google Maps SDK.
  *
- * iOS uses the `react-native-maps` config plugin (which emits the modern
- * `react-native-maps/Google` Podfile subspec). Android uses the legacy
- * `android.config.googleMaps.apiKey` route, which `withMaps` in
- * `@expo/config-plugins` still handles correctly.
+ * Both platforms get the key via the `react-native-maps` config plugin.
+ * Passing only `iosGoogleMapsApiKey` causes the plugin to *remove* any
+ * Android `com.google.android.geo.API_KEY` meta-data, which crashes the
+ * map on launch. Keep the legacy `android.config.googleMaps.apiKey` too
+ * for Expo's built-in GoogleMapsApiKey plugin.
  */
 
 module.exports = ({ config }) => {
@@ -22,7 +23,13 @@ module.exports = ({ config }) => {
     ...config,
     plugins: [
       ...(config.plugins ?? []),
-      ['react-native-maps', { iosGoogleMapsApiKey: googleMapsApiKey }],
+      [
+        'react-native-maps',
+        {
+          iosGoogleMapsApiKey: googleMapsApiKey,
+          androidGoogleMapsApiKey: googleMapsApiKey,
+        },
+      ],
     ],
     android: {
       ...(config.android ?? {}),

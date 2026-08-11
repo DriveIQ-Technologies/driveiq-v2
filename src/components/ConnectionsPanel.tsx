@@ -10,6 +10,11 @@ import {
   View,
 } from 'react-native';
 
+import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { StationHubSheet } from '@/components/StationHubSheet';
+import { gateStationAccess, getFreeStationId } from '@/services/stationAccess';
+import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
+import { hasProAccess } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import {
   fetchLineStatuses,
@@ -17,11 +22,12 @@ import {
   SEVERITY_LABEL,
   type LineStatus,
 } from '@/services/tflLines';
-import { LineDetailSheet } from '@/components/LineDetailSheet';
 
 interface Props {
   visible: boolean;
   onClose: () => void;
+  /** Optional: navigate / centre map on a major station hub. */
+  onNavigateToStation?: (station: MajorStation) => void;
 }
 
 const modeIcon = (mode: string): React.ComponentProps<typeof Ionicons>['name'] => {
@@ -61,12 +67,36 @@ const modeLabel = (mode: string): string => {
   }
 };
 
-export function ConnectionsPanel({ visible, onClose }: Props) {
+export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Props) {
   const [lines, setLines] = useState<LineStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Currently-open line detail popup. `null` = closed.
   const [openLine, setOpenLine] = useState<LineStatus | null>(null);
+  const [openStation, setOpenStation] = useState<MajorStation | null>(null);
+  // Free users get one claimed station; the rest show a padlock + Pro gate.
+  const [access, setAccess] = useState<{ pro: boolean; freeId: string | null }>({
+    pro: false,
+    freeId: null,
+  });
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    Promise.all([hasProAccess(), getFreeStationId()]).then(([pro, freeId]) => {
+      if (!cancelled) setAccess({ pro, freeId });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
+
+  const handleStationTap = async (station: MajorStation) => {
+    const result = await gateStationAccess(station);
+    const [pro, freeId] = await Promise.all([hasProAccess(), getFreeStationId()]);
+    setAccess({ pro, freeId });
+    if (result === 'open') setOpenStation(station);
+  };
 
   useEffect(() => {
     if (!visible) return;
@@ -107,7 +137,7 @@ export function ConnectionsPanel({ visible, onClose }: Props) {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Connections</Text>
-            <Text style={styles.subtitle}>Live tube, rail and tram status</Text>
+            <Text style={styles.subtitle}>Major hubs · live tube & rail status</Text>
           </View>
           <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button">
             <Ionicons name="close" size={26} color={colors.textSecondary} />
@@ -115,6 +145,38 @@ export function ConnectionsPanel({ visible, onClose }: Props) {
         </View>
 
         <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+          <Text style={styles.hubSectionLabel}>Major stations</Text>
+          <Text style={styles.hubHint}>
+            Tap a terminus for every line serving it — tube, Elizabeth, Overground
+            and National Rail — with live disruption status.
+            {!access.pro
+              ? ' Free plan includes one station of your choice; Pro unlocks all.'
+              : ''}
+          </Text>
+          {MAJOR_STATIONS.map((s) => {
+            const locked = !access.pro && access.freeId !== s.id;
+            return (
+              <Pressable
+                key={s.id}
+                style={({ pressed }) => [styles.hubRow, pressed && styles.lineRowPressed]}
+                onPress={() => void handleStationTap(s)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${s.name}`}
+              >
+                <Ionicons name="business" size={18} color={colors.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.lineName}>{s.name}</Text>
+                  <Text style={styles.lineMode}>{s.serves}</Text>
+                </View>
+                {locked ? (
+                  <Ionicons name="lock-closed" size={16} color={colors.featured} />
+                ) : null}
+                <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+              </Pressable>
+            );
+          })}
+
+          <Text style={[styles.hubSectionLabel, { marginTop: 18 }]}>All lines</Text>
           {loading && (
             <View style={styles.loading}>
               <ActivityIndicator color={colors.primary} />
@@ -195,6 +257,19 @@ export function ConnectionsPanel({ visible, onClose }: Props) {
         initialSeverity={openLine?.severityBucket}
         onClose={() => setOpenLine(null)}
       />
+      <StationHubSheet
+        station={openStation}
+        onClose={() => setOpenStation(null)}
+        onNavigate={
+          onNavigateToStation
+            ? (s) => {
+                setOpenStation(null);
+                onClose();
+                onNavigateToStation(s);
+              }
+            : undefined
+        }
+      />
     </Modal>
   );
 }
@@ -233,6 +308,28 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
   subtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
   body: { marginTop: 14 },
+  hubSectionLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.textSecondary,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  hubHint: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    marginBottom: 8,
+  },
+  hubRow: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
   loading: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16 },
   loadingText: { color: colors.textSecondary },
   error: { color: colors.accent, padding: 16 },

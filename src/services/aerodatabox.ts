@@ -169,13 +169,16 @@ export interface AirportFlightsResult {
 }
 
 /**
- * Fetch arrivals + departures for one airport over a ~12h window around now.
- * Returns a structured result so the UI can show a precise empty/error state
- * (e.g. "add an API key" vs "rate limited").
+ * Fetch arrivals + departures for one airport.
+ *
+ * Default window: ~1h back → 10h ahead (free / standard board).
+ * `fullDay: true` (Pro): two chunked calls covering local midnight → midnight
+ * (AeroDataBox caps each request at 12h).
  */
 export async function fetchAirportFlights(
   airportId: string,
   now: Date = new Date(),
+  opts: { fullDay?: boolean } = {},
 ): Promise<AirportFlightsResult> {
   if (!API_KEY) {
     console.warn('[aerodatabox] EXPO_PUBLIC_AERODATABOX_API_KEY not set — skipping');
@@ -187,11 +190,60 @@ export async function fetchAirportFlights(
     return { flights: [], error: 'http' };
   }
 
-  // Window: 1h back → 10h ahead. Kept strictly under AeroDataBox's 12h cap
-  // (exactly 12h is sometimes rejected as "out of range").
-  const from = new Date(now.getTime() - 1 * 60 * 60 * 1000);
-  const to = new Date(now.getTime() + 10 * 60 * 60 * 1000);
+  const windows: { from: Date; to: Date }[] = [];
+  if (opts.fullDay) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const mid = new Date(start);
+    mid.setHours(12, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    windows.push({ from: start, to: mid }, { from: mid, to: end });
+  } else {
+    windows.push({
+      from: new Date(now.getTime() - 1 * 60 * 60 * 1000),
+      to: new Date(now.getTime() + 10 * 60 * 60 * 1000),
+    });
+  }
 
+  const byId = new Map<string, AirportFlight>();
+  let lastError: AirportFlightsResult['error'];
+  let lastStatus: number | undefined;
+
+  for (const w of windows) {
+    const chunk = await fetchAirportFlightsWindow(icao, w.from, w.to);
+    if (chunk.error) {
+      lastError = chunk.error;
+      lastStatus = chunk.status;
+      continue;
+    }
+    for (const f of chunk.flights) byId.set(f.id, f);
+  }
+
+  const flights = Array.from(byId.values()).sort(
+    (a, b) => a.scheduledMs - b.scheduledMs,
+  );
+
+  if (flights.length === 0 && lastError) {
+    return { flights: [], error: lastError, status: lastStatus };
+  }
+
+  console.log(
+    `[aerodatabox] ${icao}: ${flights.length} flights ` +
+      `(${flights.filter((f) => f.direction === 'arrival').length} arr, ` +
+      `${flights.filter((f) => f.direction === 'departure').length} dep, ` +
+      `${flights.filter((f) => f.delayed).length} delayed, ` +
+      `${flights.filter((f) => f.cancelled).length} cancelled` +
+      `${opts.fullDay ? ', full-day' : ''})`,
+  );
+  return { flights };
+}
+
+async function fetchAirportFlightsWindow(
+  icao: string,
+  from: Date,
+  to: Date,
+): Promise<AirportFlightsResult> {
   const params = new URLSearchParams({
     direction: 'Both',
     withLeg: 'false',
@@ -223,8 +275,6 @@ export async function fetchAirportFlights(
     return { flights: [], error: 'rate-limited' };
   }
   if (!res.ok) {
-    // Surface the body so the exact AeroDataBox/RapidAPI message is visible in
-    // the logs (e.g. "You are not subscribed to this API").
     let body = '';
     try {
       body = (await res.text()).slice(0, 300);
@@ -236,13 +286,5 @@ export async function fetchAirportFlights(
   }
 
   const json = (await res.json()) as AdbFidsResponse;
-  const flights = normalizeFids(json);
-  console.log(
-    `[aerodatabox] ${icao}: ${flights.length} flights ` +
-      `(${flights.filter((f) => f.direction === 'arrival').length} arr, ` +
-      `${flights.filter((f) => f.direction === 'departure').length} dep, ` +
-      `${flights.filter((f) => f.delayed).length} delayed, ` +
-      `${flights.filter((f) => f.cancelled).length} cancelled)`,
-  );
-  return { flights };
+  return { flights: normalizeFids(json) };
 }

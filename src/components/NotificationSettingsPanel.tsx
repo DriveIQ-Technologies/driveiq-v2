@@ -58,6 +58,13 @@ const ROWS: Row[] = [
     body:
       'A heads-up one hour before each event you’ve saved or followed — so you have time to plan a route.',
   },
+  {
+    key: 'saved-flights',
+    icon: 'airplane',
+    title: 'Watched flights',
+    body:
+      'Pings when a flight you’ve saved is delayed or cancelled — so you can adjust your airport run.',
+  },
 ];
 
 export function NotificationSettingsPanel({ visible, onClose }: Props) {

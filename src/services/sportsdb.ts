@@ -7,6 +7,7 @@ import type { AppEvent } from '@/types/event';
 import { isInRange, type DateRange } from '@/utils/dateFilters';
 import { cleanDescription } from '@/utils/description';
 import { defaultEndsAt } from '@/utils/duration';
+import { ukOffset } from '@/utils/ukTime';
 
 /**
  * Unified TheSportsDB service — venue-first coverage backbone.
@@ -83,8 +84,10 @@ const buildIso = (e: TsdbEvent): string | null => {
     return e.strTimestamp.replace(/\+00:00$/, 'Z');
   }
   if (e.dateEvent) {
+    // strTime is London wall-clock — tagging it `Z` showed kick-offs an
+    // hour late during BST (and could push late games onto the next day).
     const time = e.strTime && e.strTime !== '00:00:00' ? e.strTime : '12:00:00';
-    return `${e.dateEvent}T${time}Z`;
+    return `${e.dateEvent}T${time}${ukOffset(e.dateEvent)}`;
   }
   return null;
 };

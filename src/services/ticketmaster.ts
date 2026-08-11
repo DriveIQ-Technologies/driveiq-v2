@@ -2,7 +2,7 @@ import { findLondonPlace, isInDriveIQArea } from '@/data/londonVenues';
 import type { AppEvent, EventCategory } from '@/types/event';
 import type { DateRange } from '@/utils/dateFilters';
 import { pickEventDescription } from '@/utils/description';
-import { defaultEndsAt } from '@/utils/duration';
+import { defaultEndsAt, hasDefaultDuration } from '@/utils/duration';
 
 /**
  * Ticketmaster Discovery API — non-sports events search.
@@ -224,18 +224,38 @@ function toAppEvent(e: TmEvent): AppEvent | null {
 
   let category: EventCategory;
   let subCategory: string | undefined;
+  let durationKey: string | undefined;
   if (isSports) {
     category = 'sports';
     subCategory = genreName || 'Sports';
+    durationKey = hasDefaultDuration(genreName) ? genreName : 'Sports';
   } else {
     const c = classify(segName);
     category = c.category;
     subCategory = genreName || c.sub;
+    // TM genres ("Rock", "Musical", "Hip-Hop/Rap"…) aren't duration keys —
+    // using them silently fell back to 120 min, giving concerts/theatre a
+    // wrong 2h end time. Prefer the genre only when it IS a known key
+    // (e.g. "Comedy"), otherwise use the segment-level key ("Music",
+    // "Theatre", "Film").
+    durationKey = hasDefaultDuration(genreName) ? genreName : c.sub;
   }
 
-  const endsAt =
-    e.dates?.end?.dateTime ??
-    estimateEndsAt(e.dates?.start, segName, venue?.name, subCategory);
+  // TM's own end time is rare and occasionally spans a whole residency or
+  // festival run on a single listing, which would pin the event on every
+  // day chip in between. Only trust it when it's a plausible same-visit
+  // window; otherwise estimate from the segment.
+  const startMs = Date.parse(startsAt);
+  const rawEnd = e.dates?.end?.dateTime;
+  const rawEndMs = rawEnd ? Date.parse(rawEnd) : NaN;
+  const plausibleEnd =
+    rawEnd != null &&
+    Number.isFinite(rawEndMs) &&
+    rawEndMs > startMs &&
+    rawEndMs - startMs <= 16 * HOUR_MS;
+  const endsAt = plausibleEnd
+    ? rawEnd
+    : estimateEndsAt(e.dates?.start, segName, venue?.name, durationKey);
 
   return {
     id: `ticketmaster-${e.id}`,
@@ -329,21 +349,27 @@ export async function fetchTicketmasterLondon(range: DateRange): Promise<AppEven
   }
 
   // 1) General London pull (marketId 202), paged up to the 1000 ceiling.
+  //    Page 0 first (need totalPages), then remaining pages in parallel.
   const generalRaw: TmEvent[] = [];
   const first = await fetchTicketmasterPage(range, 0);
   generalRaw.push(...first.events);
   const lastPage = Math.min(first.totalPages, MAX_PAGES);
-  for (let page = 1; page < lastPage; page++) {
-    const next = await fetchTicketmasterPage(range, page);
-    if (next.events.length === 0) break;
-    generalRaw.push(...next.events);
+  if (lastPage > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: lastPage - 1 }, (_, i) =>
+        fetchTicketmasterPage(range, i + 1),
+      ),
+    );
+    for (const next of rest) {
+      if (next.events.length > 0) generalRaw.push(...next.events);
+    }
   }
 
   // 2) Priority "never-miss" venues, queried directly by venueId in batches
-  //    (batched to respect Ticketmaster's 5 req/sec rate limit and avoid 429s).
+  //    (batched to stay under Ticketmaster's ~5 req/sec rate limit).
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const priorityResults: { v: PriorityVenue; events: TmEvent[] }[] = [];
-  const BATCH_SIZE = 3;
+  const BATCH_SIZE = 5;
   for (let i = 0; i < PRIORITY_VENUES.length; i += BATCH_SIZE) {
     const batch = PRIORITY_VENUES.slice(i, i + BATCH_SIZE);
     const res = await Promise.all(
@@ -356,7 +382,7 @@ export async function fetchTicketmasterLondon(range: DateRange): Promise<AppEven
     );
     priorityResults.push(...res);
     if (i + BATCH_SIZE < PRIORITY_VENUES.length) {
-      await delay(250);
+      await delay(120);
     }
   }
 
