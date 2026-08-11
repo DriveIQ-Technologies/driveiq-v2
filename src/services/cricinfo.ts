@@ -5,6 +5,7 @@ import {
   type DateRange,
 } from '@/utils/dateFilters';
 import { defaultEndsAt } from '@/utils/duration';
+import { londonDayBounds, londonYmd } from '@/utils/ukTime';
 
 /**
  * London cricket fixtures via ESPN's web cricket API.
@@ -157,17 +158,36 @@ const calendarDaysInRange = (
   for (const iso of calendar) {
     const d = new Date(iso);
     if (!Number.isFinite(d.getTime())) continue;
-    // Match day = local calendar date of the ISO timestamp.
-    const dayStart = new Date(d);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(d);
-    dayEnd.setHours(23, 59, 59, 999);
+    // Day chips are London days; use London midnight bounds (not device TZ).
+    const ymd = londonYmd(d);
+    const { start: dayStart, end: dayEnd } = londonDayBounds(ymd);
     if (dayStart.getTime() <= endMs && dayEnd.getTime() >= startMs) {
       days.add(yyyymmdd(d));
     }
   }
   return [...days];
 };
+
+async function fetchDayBoards(
+  leagueId: string,
+  days: string[],
+): Promise<(EspnScoreboardResponse | null)[]> {
+  // Keep pressure low on ESPN web endpoints to avoid random 403/slowdowns.
+  const BATCH = 4;
+  const out: (EspnScoreboardResponse | null)[] = [];
+  for (let i = 0; i < days.length; i += BATCH) {
+    const chunk = days.slice(i, i + BATCH);
+    const rows = await Promise.all(
+      chunk.map((day) =>
+        fetchJson<EspnScoreboardResponse>(
+          `${WEB_BASE}/${leagueId}/scoreboard?dates=${day}&limit=50`,
+        ),
+      ),
+    );
+    out.push(...rows);
+  }
+  return out;
+}
 
 const normaliseEvent = (
   event: EspnEvent,
@@ -229,13 +249,7 @@ export async function fetchCricinfoLondon(
       const days = calendarDaysInRange(calendar, range);
       if (days.length === 0) return;
 
-      const dayResults = await Promise.all(
-        days.map((day) =>
-          fetchJson<EspnScoreboardResponse>(
-            `${WEB_BASE}/${id}/scoreboard?dates=${day}&limit=50`,
-          ),
-        ),
-      );
+      const dayResults = await fetchDayBoards(id, days);
 
       for (const board of dayResults) {
         for (const event of board?.events ?? []) {

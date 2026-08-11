@@ -481,6 +481,9 @@ const PLACES: Record<string, LondonPlace> = {
   'surrey ccc': VENUES.oval,
   middlesex: VENUES.lords,
   'middlesex ccc': VENUES.lords,
+  'london spirit': VENUES.lords,
+  'oval invincibles': VENUES.oval,
+  england: VENUES.wembley,
 
   // Rugby Union
   saracens: VENUES.saracens,

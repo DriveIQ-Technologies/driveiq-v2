@@ -12,8 +12,17 @@ import { fetchSportsLondon } from './sportsdb';
 import { fetchTicketmasterLondon } from './ticketmaster';
 import { fetchVenueSiteEvents } from './venueSites';
 
-/** Per-provider budget so one hung host can't pad cold start forever. */
-const PROVIDER_TIMEOUT_MS = 12_000;
+/** Per-provider budgets so one slow host can't blank sports coverage. */
+const PROVIDER_TIMEOUT_MS: Record<string, number> = {
+  espn: 20_000,
+  cricinfo: 45_000,
+  'football-data': 20_000,
+  sportsdb: 30_000,
+  fotmob: 15_000,
+  ticketmaster: 15_000,
+  featured: 8_000,
+  'venue-sites': 15_000,
+};
 
 export type FetchAllEventsOptions = {
   /** Called whenever a provider lands and the merged list changes. */
@@ -69,7 +78,12 @@ export async function fetchAllEvents(
     fn: () => Promise<AppEvent[]>,
   ) => {
     try {
-      buckets[key] = await withTimeout(fn(), PROVIDER_TIMEOUT_MS, [], label);
+      buckets[key] = await withTimeout(
+        fn(),
+        PROVIDER_TIMEOUT_MS[label] ?? 15_000,
+        [],
+        label,
+      );
     } catch (e) {
       console.warn(`[events] ${label} failed`, e);
       buckets[key] = [];

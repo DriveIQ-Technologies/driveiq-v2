@@ -36,7 +36,7 @@ import { defaultEndsAt } from '@/utils/duration';
  * map is London-only).
  */
 
-const API_KEY = process.env.EXPO_PUBLIC_FOOTBALLDATA_API_KEY ?? 'a9933869e9964d058feacbc5aa96dbb6';
+const API_KEY = process.env.EXPO_PUBLIC_FOOTBALLDATA_API_KEY ?? '';
 const BASE = 'https://api.football-data.org/v4';
 
 interface FdTeam {
