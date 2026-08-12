@@ -43,7 +43,7 @@ const ROWS: Row[] = [
     icon: 'warning',
     title: 'Road accidents',
     body:
-      'Major accidents and closures on London roads and surrounding motorways — M1, M11, M20, M23, M25, M3, M4, M40 and connecting A-roads.',
+      'Major accidents and closures on London roads and surrounding motorways, including M1, M11, M20, M23, M25, M3, M4, M40 and connecting A-roads.',
   },
   {
     key: 'line-closures',
@@ -57,14 +57,14 @@ const ROWS: Row[] = [
     icon: 'calendar',
     title: 'Saved events',
     body:
-      'A heads-up one hour before each event you’ve saved or followed — so you have time to plan a route.',
+      'A heads-up one hour before each event you have saved or followed, so you have time to plan a route.',
   },
   {
     key: 'saved-flights',
     icon: 'airplane',
     title: 'Watched flights',
     body:
-      'Pings when a flight you’ve saved is delayed or cancelled — so you can adjust your airport run.',
+      'Pings when a flight you have saved is delayed or cancelled, so you can adjust your airport run.',
   },
 ];
 

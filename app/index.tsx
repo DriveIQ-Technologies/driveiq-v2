@@ -75,8 +75,6 @@ import { loadSavedFlights, type SavedFlightMap } from '@/services/savedFlights';
 import { setJSON } from '@/services/storage';
 import { track, trackScreen } from '@/services/analytics';
 import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
-import { gateStationAccess, getFreeStationId } from '@/services/stationAccess';
-import { hasProAccess } from '@/services/subscription';
 import { StationPin } from '@/components/StationPin';
 import { StationHubSheet } from '@/components/StationHubSheet';
 import {
@@ -106,6 +104,7 @@ import { AboutSheet } from '@/components/AboutSheet';
 import { AISupportSheet } from '@/components/AISupportSheet';
 import { AuthSheet } from '@/components/AuthSheet';
 import { AccountSheet, type AccountSection } from '@/components/AccountSheet';
+import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
 import {
@@ -160,6 +159,7 @@ const MAP_PROVIDER =
 const BRAND_LOGO = require('../assets/driveiq-logo.png');
 
 export default function MapScreen() {
+  const { requireAccount, accountPrompt, closeAccountPrompt } = useAuth();
   const mapRef = useRef<MapView>(null);
   // Default to Today so the map opens on ~100 events, not all ~1,100 — far
   // less congested in central London. "All" is still available as a chip.
@@ -206,13 +206,8 @@ export default function MapScreen() {
   const [airportsOpen, setAirportsOpen] = useState(false);
   // Airport whose live flights board is open (tapped an airport map pin).
   const [flightsAirport, setFlightsAirport] = useState<Airport | null>(null);
-  // Station hub sheet opened from a map pin, plus the current user's access
-  // (Pro sees all hubs; free users see their one claimed station unlocked).
+  // Station hub sheet opened from a map pin.
   const [stationHub, setStationHub] = useState<MajorStation | null>(null);
-  const [stationAccess, setStationAccess] = useState<{
-    pro: boolean;
-    freeId: string | null;
-  }>({ pro: false, freeId: null });
   const [notifSettingsOpen, setNotifSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -700,68 +695,70 @@ export default function MapScreen() {
     };
   }, []);
 
-  // Station hub access (Pro flag + claimed free-station slot) for pin badges.
-  const refreshStationAccess = useCallback(async () => {
-    const [pro, freeId] = await Promise.all([hasProAccess(), getFreeStationId()]);
-    setStationAccess({ pro, freeId });
+  // Station pin tap always opens the hub. Saving/notifying is gated inside hub.
+  const handleStationPress = useCallback((station: MajorStation) => {
+    track('station_pin_tapped', { station_id: station.id });
+    setStationHub(station);
   }, []);
-  useEffect(() => {
-    void refreshStationAccess();
-  }, [refreshStationAccess]);
-
-  // Station pin tap → free-slot / Pro gate → hub sheet.
-  const handleStationPress = useCallback(
-    async (station: MajorStation) => {
-      const result = await gateStationAccess(station);
-      track('station_pin_tapped', { station_id: station.id, gate_result: result });
-      await refreshStationAccess();
-      if (result === 'open') setStationHub(station);
-    },
-    [refreshStationAccess],
-  );
 
   // Save / unsave an event. Saving also schedules the 1-hour-before reminder
   // (no-op if notifications aren't granted / available).
-  const handleToggleSave = useCallback((event: AppEvent) => {
-    setSavedEvents((prev) => {
-      const isSaved = event.id in prev;
-      track(isSaved ? 'event_unsaved' : 'event_saved', {
-        event_id: event.id,
-        category: event.category,
+  // Doc task 09: first save requires an account.
+  const handleToggleSave = useCallback(
+    (event: AppEvent) => {
+      requireAccount('save', () => {
+        setSavedEvents((prev) => {
+          const isSaved = event.id in prev;
+          track(isSaved ? 'event_unsaved' : 'event_saved', {
+            event_id: event.id,
+            category: event.category,
+          });
+          if (isSaved) {
+            const next = { ...prev };
+            delete next[event.id];
+            unsaveEvent(event.id).catch(() => undefined);
+            return next;
+          }
+          saveEvent(event).catch(() => undefined);
+          const prefs = prefsRef.current;
+          if (prefs) scheduleEventReminder(event, prefs).catch(() => undefined);
+          return { ...prev, [event.id]: event };
+        });
       });
-      if (isSaved) {
-        const next = { ...prev };
-        delete next[event.id];
-        unsaveEvent(event.id).catch(() => undefined);
-        return next;
-      }
-      saveEvent(event).catch(() => undefined);
-      const prefs = prefsRef.current;
-      if (prefs) scheduleEventReminder(event, prefs).catch(() => undefined);
-      return { ...prev, [event.id]: event };
-    });
-  }, []);
+    },
+    [requireAccount],
+  );
 
   // Export an event to the device calendar (start + end + 1h alarm).
-  const handleAddToCalendar = useCallback(async (event: AppEvent) => {
-    const res = await addEventToCalendar(event);
-    track('event_calendar_attempted', { event_id: event.id, result: res.ok ? 'ok' : res.reason });
-    if (res.ok) {
-      Alert.alert('Added to calendar', `“${event.title}” is in your calendar.`);
-    } else if (res.reason === 'denied') {
-      Alert.alert(
-        'Calendar access needed',
-        'Allow calendar access in Settings to add events.',
-      );
-    } else if (res.reason === 'unavailable') {
-      Alert.alert(
-        'Not available yet',
-        'Calendar export turns on in the next build. Your event is still saved with a reminder.',
-      );
-    } else {
-      Alert.alert('Could not add', 'Something went wrong adding to your calendar.');
-    }
-  }, []);
+  const handleAddToCalendar = useCallback(
+    async (event: AppEvent) => {
+      requireAccount('add_to_calendar', () => {
+        void (async () => {
+          const res = await addEventToCalendar(event);
+          track('event_calendar_attempted', {
+            event_id: event.id,
+            result: res.ok ? 'ok' : res.reason,
+          });
+          if (res.ok) {
+            Alert.alert('Added to calendar', `“${event.title}” is in your calendar.`);
+          } else if (res.reason === 'denied') {
+            Alert.alert(
+              'Calendar access needed',
+              'Allow calendar access in Settings to add events.',
+            );
+          } else if (res.reason === 'unavailable') {
+            Alert.alert(
+              'Not available yet',
+              'Calendar export turns on in the next build. Your event is still saved with a reminder.',
+            );
+          } else {
+            Alert.alert('Could not add', 'Something went wrong adding to your calendar.');
+          }
+        })();
+      });
+    },
+    [requireAccount],
+  );
 
   // Hydrate community reports once on mount.
   useEffect(() => {
@@ -1232,7 +1229,6 @@ export default function MapScreen() {
             <StationPin
               key={`station-${s.id}`}
               station={s}
-              locked={!stationAccess.pro && stationAccess.freeId !== s.id}
               onPress={handleStationPress}
               rasterEpoch={rasterEpoch}
             />
@@ -1612,9 +1608,13 @@ export default function MapScreen() {
       />
 
       <AuthSheet
-        visible={authSheet.open}
-        initialMode={authSheet.mode}
-        onClose={() => setAuthSheet((s) => ({ ...s, open: false }))}
+        visible={authSheet.open || accountPrompt.open}
+        initialMode={accountPrompt.open ? accountPrompt.mode : authSheet.mode}
+        reason={accountPrompt.open ? accountPrompt.reason : null}
+        onClose={() => {
+          if (accountPrompt.open) closeAccountPrompt();
+          setAuthSheet((s) => ({ ...s, open: false }));
+        }}
       />
 
       <AccountSheet

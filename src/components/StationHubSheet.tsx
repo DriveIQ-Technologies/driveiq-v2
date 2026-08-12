@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -11,12 +12,21 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import {
+  loadSavedStations,
+  setStationNotify,
+  toggleSaveStation,
+  type SavedStationMap,
+} from '@/services/savedStations';
+import {
   fetchStationLineStatuses,
+  MAJOR_STATIONS,
   type MajorStation,
   type StationLineStatus,
 } from '@/services/stations';
+import { hasProAccess, showProPaywall } from '@/services/subscription';
 import { SEVERITY_COLOR, SEVERITY_LABEL } from '@/services/tflLines';
 import { colors } from '@/theme/colors';
 
@@ -44,10 +54,13 @@ const modeIcon = (mode: string): React.ComponentProps<typeof Ionicons>['name'] =
 };
 
 export function StationHubSheet({ station, onClose, onNavigate }: Props) {
+  const { requireAccount } = useAuth();
   const [lines, setLines] = useState<StationLineStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openLine, setOpenLine] = useState<StationLineStatus | null>(null);
+  const [savedStations, setSavedStations] = useState<SavedStationMap>({});
+  const [isPremium, setIsPremium] = useState(false);
 
   useEffect(() => {
     if (!station) return;
@@ -56,6 +69,12 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
     setLoading(true);
     setError(null);
     setLines([]);
+    hasProAccess().then((pro) => {
+      if (!cancelled) setIsPremium(pro);
+    });
+    loadSavedStations().then((m) => {
+      if (!cancelled) setSavedStations(m);
+    });
     fetchStationLineStatuses(station)
       .then((l) => {
         if (!cancelled) setLines(l);
@@ -74,6 +93,42 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
   if (!station) return null;
 
   const disrupted = lines.filter((l) => l.severityBucket !== 'good').length;
+  const saved = Boolean(savedStations[station.id]);
+  const notify = Boolean(savedStations[station.id]?.notify);
+  const savedCount = Object.keys(savedStations).length;
+  const stationBoundaryLocked = !isPremium && !saved && savedCount >= 1;
+  const hiddenCount = Math.max(0, MAJOR_STATIONS.length - savedCount);
+
+  const runSave = async () => {
+    const res = await toggleSaveStation(station);
+    setSavedStations(res.map);
+  };
+
+  const runNotify = async (next: boolean) => {
+    const res = await setStationNotify(station, next);
+    setSavedStations(res.map);
+    if (res.result === 'permission-denied') {
+      Alert.alert(
+        'Notifications off',
+        'Turn on notifications for DriveIQ in your phone settings to get station alerts.',
+      );
+    }
+  };
+
+  const onToggleSave = () => {
+    if (stationBoundaryLocked) return;
+    requireAccount('save', () => {
+      void runSave();
+    });
+  };
+
+  const onToggleNotify = () => {
+    const next = !notify;
+    if (stationBoundaryLocked && next) return;
+    requireAccount('notify', () => {
+      void runNotify(next);
+    });
+  };
 
   return (
     <Modal transparent animationType="slide" visible onRequestClose={onClose}>
@@ -94,6 +149,65 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
         </View>
 
         <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+          {stationBoundaryLocked ? (
+            <Pressable
+              style={styles.inlineUpgradeBar}
+              onPress={() => showProPaywall('Save more than one station')}
+              accessibilityRole="button"
+            >
+              <Ionicons name="lock-closed" size={15} color={colors.primaryDark} />
+              <Text style={styles.inlineUpgradeText}>
+                Another {hiddenCount} stations are locked. Save all stations and get alerts with DriveIQ Premium.
+              </Text>
+            </Pressable>
+          ) : null}
+          <View style={styles.controlsRow}>
+            <Pressable
+              onPress={onToggleSave}
+              style={[
+                styles.secondaryBtn,
+                saved && styles.secondaryBtnActive,
+                stationBoundaryLocked && styles.secondaryBtnDisabled,
+              ]}
+              disabled={stationBoundaryLocked}
+              accessibilityRole="button"
+            >
+              <Ionicons
+                name={saved ? 'bookmark' : 'bookmark-outline'}
+                size={16}
+                color={saved ? colors.textOnPrimary : colors.primary}
+              />
+              <Text
+                style={[styles.secondaryBtnText, saved && styles.secondaryBtnTextActive]}
+              >
+                {saved ? 'Saved station' : 'Save station'}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={onToggleNotify}
+              style={[
+                styles.secondaryBtn,
+                notify && styles.secondaryBtnActive,
+                stationBoundaryLocked && !notify && styles.secondaryBtnDisabled,
+              ]}
+              disabled={stationBoundaryLocked && !notify}
+              accessibilityRole="button"
+            >
+              <Ionicons
+                name={notify ? 'notifications' : 'notifications-outline'}
+                size={16}
+                color={notify ? colors.textOnPrimary : colors.primary}
+              />
+              <Text
+                style={[styles.secondaryBtnText, notify && styles.secondaryBtnTextActive]}
+              >
+                {notify ? 'Alerts on' : 'Notify me'}
+              </Text>
+            </Pressable>
+          </View>
+          <Text style={styles.controlsHint}>
+            Free includes one saved station. Premium includes unlimited saved stations.
+          </Text>
           {onNavigate ? (
             <Pressable
               onPress={() => {
@@ -116,8 +230,8 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
               : ''}
           </Text>
           <Text style={styles.hint}>
-            Live status for every tube, Elizabeth, Overground and National Rail
-            service that calls here — not a copy of the national operator list.
+            Live status for every Tube, Elizabeth line, Overground and National Rail
+            service that calls here.
           </Text>
 
           {loading && (
@@ -226,6 +340,58 @@ const styles = StyleSheet.create({
   title: { fontSize: 17, fontWeight: '800', color: colors.textPrimary },
   subtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
   body: { marginTop: 12 },
+  controlsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 6,
+  },
+  secondaryBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+  },
+  secondaryBtnActive: {
+    backgroundColor: colors.primary,
+  },
+  secondaryBtnText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  secondaryBtnTextActive: {
+    color: colors.textOnPrimary,
+  },
+  controlsHint: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  inlineUpgradeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.featured,
+  },
+  inlineUpgradeText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primaryDark,
+    lineHeight: 17,
+  },
+  secondaryBtnDisabled: { opacity: 0.55 },
   directionsBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -13,9 +13,7 @@ import {
 import { LineDetailSheet } from '@/components/LineDetailSheet';
 import { StationHubSheet } from '@/components/StationHubSheet';
 import { track, trackScreen } from '@/services/analytics';
-import { gateStationAccess, getFreeStationId } from '@/services/stationAccess';
 import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
-import { hasProAccess } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import {
   fetchLineStatuses,
@@ -75,30 +73,14 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
   // Currently-open line detail popup. `null` = closed.
   const [openLine, setOpenLine] = useState<LineStatus | null>(null);
   const [openStation, setOpenStation] = useState<MajorStation | null>(null);
-  // Free users get one claimed station; the rest show a padlock + Pro gate.
-  const [access, setAccess] = useState<{ pro: boolean; freeId: string | null }>({
-    pro: false,
-    freeId: null,
-  });
 
   useEffect(() => {
-    if (!visible) return;
-    trackScreen('connections_panel');
-    let cancelled = false;
-    Promise.all([hasProAccess(), getFreeStationId()]).then(([pro, freeId]) => {
-      if (!cancelled) setAccess({ pro, freeId });
-    });
-    return () => {
-      cancelled = true;
-    };
+    if (visible) trackScreen('connections_panel');
   }, [visible]);
 
-  const handleStationTap = async (station: MajorStation) => {
-    const result = await gateStationAccess(station);
-    track('connections_station_tapped', { station_id: station.id, gate_result: result });
-    const [pro, freeId] = await Promise.all([hasProAccess(), getFreeStationId()]);
-    setAccess({ pro, freeId });
-    if (result === 'open') setOpenStation(station);
+  const handleStationTap = (station: MajorStation) => {
+    track('connections_station_tapped', { station_id: station.id });
+    setOpenStation(station);
   };
 
   useEffect(() => {
@@ -150,19 +132,15 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
         <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           <Text style={styles.hubSectionLabel}>Major stations</Text>
           <Text style={styles.hubHint}>
-            Tap a terminus for every line serving it — tube, Elizabeth, Overground
-            and National Rail — with live disruption status.
-            {!access.pro
-              ? ' Free plan includes one station of your choice; Pro unlocks all.'
-              : ''}
+            Tap a terminus for every line serving it. Tube, Elizabeth line,
+            Overground and National Rail statuses are live.
           </Text>
           {MAJOR_STATIONS.map((s) => {
-            const locked = !access.pro && access.freeId !== s.id;
             return (
               <Pressable
                 key={s.id}
                 style={({ pressed }) => [styles.hubRow, pressed && styles.lineRowPressed]}
-                onPress={() => void handleStationTap(s)}
+                onPress={() => handleStationTap(s)}
                 accessibilityRole="button"
                 accessibilityLabel={`Open ${s.name}`}
               >
@@ -171,9 +149,6 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
                   <Text style={styles.lineName}>{s.name}</Text>
                   <Text style={styles.lineMode}>{s.serves}</Text>
                 </View>
-                {locked ? (
-                  <Ionicons name="lock-closed" size={16} color={colors.featured} />
-                ) : null}
                 <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
               </Pressable>
             );

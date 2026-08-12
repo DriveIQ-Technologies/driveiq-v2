@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { useAuth } from '@/providers/AuthProvider';
 import type { Airport, ConnectionStatus } from '@/services/airports';
 import { fetchAirportConnectionStatuses } from '@/services/airports';
 import {
@@ -36,11 +37,10 @@ interface Props {
   onNavigate?: (airport: Airport) => void;
 }
 
-// Tier limits (client 8 Aug 2026): free = 3h board + 1 watched flight,
-// Pro = full local day + 5 watched flights.
+// Tier limits (work order Part A): free = 3h board + 1 watched flight.
+// Premium = full day board + unlimited watched flights.
 const FREE_WINDOW_HOURS = 3;
 const FREE_WATCH_LIMIT = 1;
-const PRO_WATCH_LIMIT = 5;
 
 const SEVERITY_COLOR: Record<ConnectionStatus['severityBucket'], string> = {
   good: '#26C281',
@@ -91,6 +91,7 @@ function flightStatusLabel(f: AirportFlight): string {
 }
 
 export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
+  const { requireAccount } = useAuth();
   const [conns, setConns] = useState<ConnectionStatus[]>([]);
   const [connsLoading, setConnsLoading] = useState(false);
   const [openConn, setOpenConn] = useState<ConnectionStatus | null>(null);
@@ -99,7 +100,6 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
   const [flightsLoading, setFlightsLoading] = useState(false);
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [direction, setDirection] = useState<FlightDirection>('departure');
-  const [fullDay, setFullDay] = useState(false);
   const [isPro, setIsPro] = useState(false);
   const [saved, setSaved] = useState<SavedFlightMap>({});
   const [selectedFlight, setSelectedFlight] = useState<AirportFlight | null>(null);
@@ -135,14 +135,14 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     };
   }, [airport]);
 
-  // Live flights for this airport (standard ~11h, or full local day on Pro).
+  // Live flights for this airport. Premium always gets the full local day.
   useEffect(() => {
     if (!airport) return;
     let cancelled = false;
     setFlightsLoading(true);
     setFlightsError(null);
     setFlights([]);
-    fetchAirportFlights(airport.id, new Date(), { fullDay: fullDay && isPro })
+    fetchAirportFlights(airport.id, new Date(), { fullDay: isPro })
       .then((res) => {
         if (cancelled) return;
         setFlights(res.flights);
@@ -175,92 +175,76 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [airport, fullDay, isPro]);
+  }, [airport, isPro]);
 
   // Only relevant flights: drop anything more than 30 min in the past so we
   // never show flights that left/landed hours ago. Sorted soonest-first.
-  // Tiering (client 8 Aug 2026): free board = next 3 hours only; Pro gets
-  // the standard ~11h window, or the full local day with the toggle on.
-  const shownFlights = useMemo(() => {
+  const [shownFlights, lockedFlights] = useMemo(() => {
     const cutoff = Date.now() - 30 * 60 * 1000;
-    let list = flights
+    const list = flights
       .filter((f) => f.direction === direction)
       .filter((f) => f.scheduledMs === 0 || f.scheduledMs >= cutoff);
-    if (!isPro) {
-      const horizon = Date.now() + FREE_WINDOW_HOURS * 60 * 60 * 1000;
-      list = list.filter((f) => f.scheduledMs === 0 || f.scheduledMs <= horizon);
-    }
-    return fullDay && isPro ? list : list.slice(0, 40);
-  }, [flights, direction, fullDay, isPro]);
+    if (isPro) return [list, []] as const;
+    const horizon = Date.now() + FREE_WINDOW_HOURS * 60 * 60 * 1000;
+    const visible = list.filter((f) => f.scheduledMs === 0 || f.scheduledMs <= horizon);
+    const locked = list.filter((f) => f.scheduledMs > horizon);
+    return [visible, locked] as const;
+  }, [flights, direction, isPro]);
 
   if (!airport) return null;
 
-  const upgrade = () => showProPaywall('Live flight tracking & full-day boards');
-
-  const toggleFullDay = async () => {
-    if (!isPro) {
-      track('flights_full_day_blocked_free', { airport_id: airport.id });
-      upgrade();
-      return;
-    }
-    track('flights_full_day_toggled', { airport_id: airport.id, enabled: !fullDay });
-    setFullDay((v) => !v);
-  };
+  const upgrade = () => showProPaywall('Full-day arrivals and unlimited watched flights');
 
   const toggleSave = async (f: AirportFlight) => {
-    if (saved[f.id]) {
-      const next = await unsaveFlight(f.id);
-      setSaved(next);
-      track('flight_unsaved', {
-        airport_id: airport.id,
-        flight_id: f.id,
-        direction: f.direction,
-      });
-      return;
-    }
+    requireAccount('watched_flight', () => {
+      void (async () => {
+        if (saved[f.id]) {
+          const next = await unsaveFlight(f.id);
+          setSaved(next);
+          track('flight_unsaved', {
+            airport_id: airport.id,
+            flight_id: f.id,
+            direction: f.direction,
+          });
+          return;
+        }
 
-    // Enforce the watch quota before saving.
-    const watchedCount = Object.keys(saved).length;
-    if (!isPro && watchedCount >= FREE_WATCH_LIMIT) {
-      track('flight_save_blocked_limit', { tier: 'free', watched_count: watchedCount });
-      Alert.alert(
-        'Flight watch limit',
-        `Free plan tracks ${FREE_WATCH_LIMIT} flight at a time — you're already watching one. Upgrade to DriveIQ Pro to track up to ${PRO_WATCH_LIMIT}, or stop watching your current flight first.`,
-        [
-          { text: 'Not now', style: 'cancel' },
-          { text: 'See Pro', onPress: upgrade },
-        ],
-      );
-      return;
-    }
-    if (isPro && watchedCount >= PRO_WATCH_LIMIT) {
-      track('flight_save_blocked_limit', { tier: 'pro', watched_count: watchedCount });
-      Alert.alert(
-        'Flight watch limit',
-        `Pro tracks up to ${PRO_WATCH_LIMIT} flights at a time. Stop watching one to add another.`,
-      );
-      return;
-    }
+        // Enforce the watch quota before saving.
+        const watchedCount = Object.keys(saved).length;
+        if (!isPro && watchedCount >= FREE_WATCH_LIMIT) {
+          track('flight_save_blocked_limit', { tier: 'free', watched_count: watchedCount });
+          Alert.alert(
+            'Flight watch limit',
+            `Free tracks ${FREE_WATCH_LIMIT} flight at a time. Upgrade to DriveIQ Premium to watch unlimited flights, or stop watching your current one first.`,
+            [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'See Premium', onPress: upgrade },
+            ],
+          );
+          return;
+        }
 
-    await ensurePermission();
-    const prefs = await loadPrefs();
-    if (!prefs['saved-flights']) {
-      Alert.alert(
-        'Flight alerts off',
-        'Turn on “Watched flights” in Notification settings to get delay and cancel pings.',
-      );
-    }
-    const next = await saveFlight(airport.id, f);
-    setSaved(next);
-    track('flight_saved', {
-      airport_id: airport.id,
-      flight_id: f.id,
-      direction: f.direction,
+        await ensurePermission();
+        const prefs = await loadPrefs();
+        if (!prefs['saved-flights']) {
+          Alert.alert(
+            'Flight alerts off',
+            'Turn on “Watched flights” in Notification settings to get delay and cancel pings.',
+          );
+        }
+        const next = await saveFlight(airport.id, f);
+        setSaved(next);
+        track('flight_saved', {
+          airport_id: airport.id,
+          flight_id: f.id,
+          direction: f.direction,
+        });
+        Alert.alert(
+          'Watching flight',
+          `${f.flightNumber}. We will ping you if it is delayed or cancelled.`,
+        );
+      })();
     });
-    Alert.alert(
-      'Watching flight',
-      `${f.flightNumber} — we’ll ping you if it’s delayed or cancelled.`,
-    );
   };
 
   return (
@@ -338,17 +322,17 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
             <Ionicons name="star" size={16} color={colors.primaryDark} />
             <View style={{ flex: 1 }}>
               <Text style={styles.proTitle}>
-                {isPro ? 'DriveIQ Pro' : 'DriveIQ Pro — Full-day flights'}
+                {isPro ? 'DriveIQ Premium' : 'DriveIQ Premium'}
               </Text>
               <Text style={styles.proBody}>
                 {isPro
-                  ? `Full-day board + ${PRO_WATCH_LIMIT} watched flights unlocked. Tap a flight to watch it.`
-                  : `Free: next ${FREE_WINDOW_HOURS}h · ${FREE_WATCH_LIMIT} watched flight — Pro: full day · ${PRO_WATCH_LIMIT} watched`}
+                  ? 'Full-day arrivals and departures with unlimited watched flights.'
+                  : `Free: next ${FREE_WINDOW_HOURS}h with ${FREE_WATCH_LIMIT} watched flight. Premium: full day with unlimited watched flights.`}
               </Text>
             </View>
             {!isPro ? (
               <View style={styles.proCta}>
-                <Text style={styles.proCtaText}>Subscribe</Text>
+                <Text style={styles.proCtaText}>Upgrade</Text>
               </View>
             ) : null}
           </Pressable>
@@ -378,21 +362,6 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
             })}
           </View>
 
-          <Pressable
-            onPress={toggleFullDay}
-            style={styles.fullDayToggle}
-            accessibilityRole="button"
-          >
-            <Ionicons
-              name={fullDay && isPro ? 'checkbox' : 'square-outline'}
-              size={18}
-              color={colors.primary}
-            />
-            <Text style={styles.fullDayText}>
-              Full day of flights {isPro ? '' : '(Pro)'}
-            </Text>
-          </Pressable>
-
           {flightsLoading && (
             <View style={styles.loading}>
               <ActivityIndicator color={colors.primary} />
@@ -407,7 +376,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
               No {direction === 'departure' ? 'departures' : 'arrivals'}{' '}
               {isPro
                 ? 'in this window.'
-                : `in the next ${FREE_WINDOW_HOURS} hours — Pro shows the full day.`}
+                : `in the next ${FREE_WINDOW_HOURS} hours. Premium shows the full day.`}
             </Text>
           )}
 
@@ -480,6 +449,41 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
                 </Pressable>
               );
             })}
+
+          {!isPro && lockedFlights.length > 0 ? (
+            <>
+              <Pressable
+                style={styles.inlineUpgradeBar}
+                onPress={upgrade}
+                accessibilityRole="button"
+              >
+                <Ionicons name="lock-closed" size={15} color={colors.primaryDark} />
+                <Text style={styles.inlineUpgradeText}>
+                  Another {lockedFlights.length}{' '}
+                  {direction === 'arrival' ? 'arrivals' : 'departures'} today.
+                  See the full day and watch as many flights as you like.
+                </Text>
+              </Pressable>
+              {lockedFlights.map((f) => (
+                <View key={`locked-${f.id}`} style={[styles.flightRow, styles.flightRowLocked]}>
+                  <View style={[styles.flightBar, { backgroundColor: colors.border }]} />
+                  <View style={styles.timeCol}>
+                    <Text style={styles.timeLocked}>--:--</Text>
+                    <Text style={styles.subSched}>Premium</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.routeLocked}>Locked on free plan</Text>
+                    <Text style={styles.flightMeta} numberOfLines={1}>
+                      Upgrade to view this row
+                    </Text>
+                  </View>
+                  <View style={styles.flightTrailing}>
+                    <Ionicons name="lock-closed" size={16} color={colors.textSecondary} />
+                  </View>
+                </View>
+              ))}
+            </>
+          ) : null}
         </ScrollView>
       </View>
 
@@ -665,6 +669,28 @@ const styles = StyleSheet.create({
   route: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
   flightMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   flightTrailing: { alignItems: 'flex-end' },
+  inlineUpgradeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.featured,
+  },
+  inlineUpgradeText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primaryDark,
+    lineHeight: 17,
+  },
+  flightRowLocked: { opacity: 0.52 },
+  timeLocked: { fontSize: 16, fontWeight: '800', color: colors.textSecondary },
+  routeLocked: { fontSize: 14, fontWeight: '700', color: colors.textSecondary },
   flightStatusPill: {
     paddingHorizontal: 9,
     paddingVertical: 5,
@@ -674,14 +700,6 @@ const styles = StyleSheet.create({
   flightStatusText: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
   statusPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, maxWidth: 120 },
   statusText: { fontSize: 11, fontWeight: '800', color: colors.textOnPrimary, textAlign: 'center' },
-  fullDayToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 10,
-    marginBottom: 4,
-  },
-  fullDayText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   detailBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.45)',

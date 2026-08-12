@@ -27,7 +27,7 @@ interface QA {
 const FAQS: QA[] = [
   {
     q: 'What is DriveIQ?',
-    a: "DriveIQ shows what's on across London — sport, music, theatre and more — on one live map, alongside real-time road incidents and train, tube and tram status, so you can plan around the city as it actually is right now.",
+    a: "DriveIQ shows what's on across London, including sport, music, theatre and more, on one live map alongside real-time road incidents and train, tube and tram status. You can plan around the city as it actually is right now.",
   },
   {
     q: 'What do the coloured pins mean?',
@@ -109,7 +109,7 @@ export function HelpSheet({ visible, onClose, onOpenAISupport }: Props) {
               <View style={{ flex: 1 }}>
                 <Text style={styles.aiTitle}>Still stuck?</Text>
                 <Text style={styles.aiBody}>
-                  Ask DriveIQ AI Support — it can walk you through anything in
+                  Ask DriveIQ AI Support. It can walk you through anything in
                   the app.
                 </Text>
               </View>

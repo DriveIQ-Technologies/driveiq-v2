@@ -75,7 +75,7 @@ export function NavigationOverlay({
         {offRoute ? (
           <View style={styles.offRoute}>
             <Ionicons name="warning" size={16} color={colors.textOnPrimary} />
-            <Text style={styles.offRouteText}>You're off route — recalculating…</Text>
+            <Text style={styles.offRouteText}>You are off route. Recalculating…</Text>
           </View>
         ) : null}
       </SafeAreaView>

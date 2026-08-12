@@ -31,7 +31,7 @@ const PERKS: PerkRow[] = [
   {
     icon: 'warning',
     title: 'Major road incidents',
-    body: 'Get a heads-up when there’s an accident or closure on London roads and surrounding motorways — M1, M11, M20, M23, M25, M3, M4, M40.',
+    body: 'Get a heads-up when there is an accident or closure on London roads and surrounding motorways, including M1, M11, M20, M23, M25, M3, M4 and M40.',
   },
   {
     icon: 'train',
@@ -41,7 +41,7 @@ const PERKS: PerkRow[] = [
   {
     icon: 'calendar',
     title: 'Events you’ve saved',
-    body: 'A reminder one hour before any event you save — so there’s always time to plan your route.',
+    body: 'A reminder one hour before any event you save, so there is always time to plan your route.',
   },
 ];
 
@@ -132,7 +132,7 @@ export function NotificationOnboarding({ onDone }: Props) {
           </View>
 
           <Text style={styles.footer}>
-            You stay in control — every category has its own toggle in
+            You stay in control. Every category has its own toggle in
             Settings, and per-line subscriptions let you pick exactly which
             lines to follow.
           </Text>

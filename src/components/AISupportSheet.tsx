@@ -24,6 +24,7 @@ import {
   type AiQuota,
 } from '@/services/aiQuota';
 import { track, trackScreen } from '@/services/analytics';
+import { useAuth } from '@/providers/AuthProvider';
 import { showProPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
@@ -94,7 +95,7 @@ const KB: Knowledge[] = [
   {
     patterns: ['notification', 'alert', 'push', 'ping'],
     answer:
-      'DriveIQ can alert you about major road incidents, train/tube line closures, and saved-event reminders. Turn categories on or off — and pick specific train lines — under Menu → Notifications. You’ll be asked for permission the first time.',
+      'DriveIQ can alert you about major road incidents, train/tube line closures, and saved-event reminders. Turn categories on or off, and pick specific train lines, under Menu > Notifications. You will be asked for permission the first time.',
   },
   {
     patterns: ['report', 'hazard', 'accident', 'add'],
@@ -114,7 +115,7 @@ const KB: Knowledge[] = [
   {
     patterns: ['missing', 'not show', 'ascot', 'epsom', 'why', 'racing'],
     answer:
-      'Most events come from live data feeds. A few big ones (like Royal Ascot) aren’t in those feeds, so we add them by hand — they appear with a gold featured pin. If something major is missing, send feedback and we’ll add it.',
+      'Most events come from live data feeds. A few big ones (like Royal Ascot) are not in those feeds, so we add them by hand. They appear with a gold featured pin. If something major is missing, send feedback and we will add it.',
   },
   {
     patterns: ['transit', 'train', 'tube', 'airport', 'connection'],
@@ -300,6 +301,7 @@ function formatAnswer(
 }
 
 export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToCalendar }: Props) {
+  const { requireAccount } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
@@ -308,7 +310,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
     },
   ]);
   const [input, setInput] = useState('');
-  // Free plan: FREE_DAILY_LIMIT questions/day; Pro unlimited. Reloaded each
+  // Free plan: FREE_DAILY_LIMIT questions/day; Premium unlimited. Reloaded each
   // open so the counter is always current.
   const [quota, setQuota] = useState<AiQuota | null>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -359,54 +361,57 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
   const send = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
 
-    // Daily quota gate — free plan only.
-    if (quota && !quota.pro && quota.remaining <= 0) {
-      track('ai_question_blocked_limit', { tier: 'free' });
-      setMessages((prev) => [
-        ...prev,
-        userMsg,
-        {
-          id: `b-${Date.now()}`,
-          role: 'bot',
-          text: `You've used all ${FREE_DAILY_LIMIT} free questions for today — they reset at midnight. DriveIQ Pro includes unlimited AI questions.`,
-          actions: [
-            {
-              label: 'See DriveIQ Pro',
-              icon: 'star-outline',
-              onPress: () => showProPaywall('Unlimited AI questions'),
-            },
-          ],
-        },
-      ]);
+    requireAccount('ai_question', () => {
+      const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
+
+      // Daily quota gate — free plan only.
+      if (quota && !quota.pro && quota.remaining <= 0) {
+        track('ai_question_blocked_limit', { tier: 'free' });
+        setMessages((prev) => [
+          ...prev,
+          userMsg,
+          {
+            id: `b-${Date.now()}`,
+            role: 'bot',
+            text: `You have used all ${FREE_DAILY_LIMIT} free questions for today. They reset at midnight. DriveIQ Premium includes unlimited AI questions.`,
+            actions: [
+              {
+                label: 'See DriveIQ Premium',
+                icon: 'star-outline',
+                onPress: () => showProPaywall('Unlimited AI questions'),
+              },
+            ],
+          },
+        ]);
+        setInput('');
+        setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+        return;
+      }
+      track('ai_question_asked', {
+        tier: quota?.pro ? 'premium' : 'free',
+        remaining_before: quota?.remaining,
+      });
+      void consumeAiQuestion().then(setQuota);
+
+      const eventResult =
+        events && events.length > 0
+          ? answerNamedTimeQuery(trimmed, events) ?? answerEventQuery(trimmed, events)
+          : null;
+
+      const botMsg: ChatMessage = eventResult
+        ? {
+            id: `b-${Date.now()}`,
+            role: 'bot',
+            text: eventResult.text,
+            actions: eventResult.offer.length ? buildActions(eventResult.offer) : undefined,
+          }
+        : { id: `b-${Date.now()}`, role: 'bot', text: localAnswer(trimmed) };
+
+      setMessages((prev) => [...prev, userMsg, botMsg]);
       setInput('');
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
-      return;
-    }
-    track('ai_question_asked', {
-      tier: quota?.pro ? 'pro' : 'free',
-      remaining_before: quota?.remaining,
     });
-    void consumeAiQuestion().then(setQuota);
-
-    const eventResult =
-      events && events.length > 0
-        ? answerNamedTimeQuery(trimmed, events) ?? answerEventQuery(trimmed, events)
-        : null;
-
-    const botMsg: ChatMessage = eventResult
-      ? {
-          id: `b-${Date.now()}`,
-          role: 'bot',
-          text: eventResult.text,
-          actions: eventResult.offer.length ? buildActions(eventResult.offer) : undefined,
-        }
-      : { id: `b-${Date.now()}`, role: 'bot', text: localAnswer(trimmed) };
-
-    setMessages((prev) => [...prev, userMsg, botMsg]);
-    setInput('');
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
   };
 
   return (
@@ -425,7 +430,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
                 {quota == null
                   ? 'Here to help you get around'
                   : quota.pro
-                    ? 'Pro · unlimited questions'
+                    ? 'Premium · unlimited questions'
                     : `${quota.remaining} of ${FREE_DAILY_LIMIT} free questions left today`}
               </Text>
             </View>

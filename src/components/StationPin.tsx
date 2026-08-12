@@ -7,8 +7,6 @@ import { colors } from '@/theme/colors';
 
 interface StationPinProps {
   station: MajorStation;
-  /** True when this hub is behind the Pro gate for the current user. */
-  locked: boolean;
   onPress: (station: MajorStation) => void;
   /** Bumped after each map gesture — re-rasterises a pin whose frozen bitmap
    *  came out blank or clipped (same self-heal as AirportPin / EventPin). */
@@ -20,13 +18,12 @@ const STATION_GREEN = '#0F7A5C';
 /**
  * Map pin for a major rail terminus (Paddington / Euston / King's Cross…).
  * Deep green with a train glyph so hubs read differently from the navy
- * airport pins at a glance. Locked hubs carry a small gold padlock — tapping
- * one routes through the free-slot / Pro gate.
+ * airport pins at a glance.
  *
  * Emoji (not icon-font glyphs) so the marker paints on first rasterise; we
  * track view changes briefly on mount then freeze to a static bitmap.
  */
-function StationPinBase({ station, locked, onPress, rasterEpoch = 0 }: StationPinProps) {
+function StationPinBase({ station, onPress, rasterEpoch = 0 }: StationPinProps) {
   const [tracks, setTracks] = useState(true);
   useEffect(() => {
     const id = setTimeout(() => setTracks(false), 700);
@@ -44,18 +41,6 @@ function StationPinBase({ station, locked, onPress, rasterEpoch = 0 }: StationPi
     return () => clearTimeout(id);
   }, [rasterEpoch]);
 
-  // Re-rasterise when the lock state flips (user claims their free slot).
-  const firstLock = useRef(true);
-  useEffect(() => {
-    if (firstLock.current) {
-      firstLock.current = false;
-      return;
-    }
-    setTracks(true);
-    const id = setTimeout(() => setTracks(false), 350);
-    return () => clearTimeout(id);
-  }, [locked]);
-
   return (
     <Marker
       coordinate={{ latitude: station.latitude, longitude: station.longitude }}
@@ -69,11 +54,6 @@ function StationPinBase({ station, locked, onPress, rasterEpoch = 0 }: StationPi
       <View style={styles.container}>
         <View style={styles.bubble}>
           <Text style={styles.train}>🚆</Text>
-          {locked ? (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>🔒</Text>
-            </View>
-          ) : null}
         </View>
         <View style={styles.tail} />
       </View>
@@ -85,7 +65,6 @@ export const StationPin = React.memo(
   StationPinBase,
   (prev, next) =>
     prev.station.id === next.station.id &&
-    prev.locked === next.locked &&
     prev.onPress === next.onPress &&
     prev.rasterEpoch === next.rasterEpoch,
 );
@@ -108,20 +87,6 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   train: { fontSize: 17, textAlign: 'center' },
-  badge: {
-    position: 'absolute',
-    top: -5,
-    right: -5,
-    width: 17,
-    height: 17,
-    borderRadius: 9,
-    backgroundColor: colors.featured,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: colors.surface,
-  },
-  badgeText: { fontSize: 9, lineHeight: 12 },
   tail: {
     width: 0,
     height: 0,

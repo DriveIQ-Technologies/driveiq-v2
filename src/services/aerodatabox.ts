@@ -172,7 +172,7 @@ export interface AirportFlightsResult {
  * Fetch arrivals + departures for one airport.
  *
  * Default window: ~1h back → 10h ahead (free / standard board).
- * `fullDay: true` (Pro): two chunked calls covering local midnight → midnight
+ * `fullDay: true` (Premium): two chunked calls covering local midnight → midnight
  * (AeroDataBox caps each request at 12h).
  */
 export async function fetchAirportFlights(

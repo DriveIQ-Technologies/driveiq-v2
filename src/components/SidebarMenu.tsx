@@ -68,8 +68,8 @@ export function SidebarMenu({
   onOpenAbout,
   onOpenAISupport,
 }: Props) {
-  const { user, logout } = useAuth();
-  const signedIn = user != null;
+  const { user, logout, hasAccount } = useAuth();
+  const signedIn = hasAccount;
 
   React.useEffect(() => {
     if (visible) trackScreen('sidebar_menu', { signed_in: signedIn });
@@ -80,7 +80,7 @@ export function SidebarMenu({
   const placeholder = (label: string) =>
     Alert.alert(
       label,
-      'This will be wired up once we connect the payments backend. The UI shell is in place — coming soon.',
+      'This will be wired once we connect the payments backend. The UI shell is already in place.',
     );
 
   // Defer a navigation/sheet action until the sidebar has slid out, so the
@@ -165,7 +165,7 @@ export function SidebarMenu({
     {
       key: 'upgrade',
       icon: 'rocket',
-      label: 'Upgrade to Pro',
+      label: 'Upgrade to Premium',
       body: 'Push alerts, route history, no rate limits',
       badge: 'Free plan',
       handler: null,
@@ -314,7 +314,7 @@ export function SidebarMenu({
             <Section title="Plan & billing" rows={billingRows} render={renderRow} />
             <Section title="Support" rows={supportRows} render={renderRow} />
 
-            <Text style={styles.versionText}>{`DriveIQ v${Constants.expoConfig?.version ?? '—'}`}</Text>
+            <Text style={styles.versionText}>{`DriveIQ v${Constants.expoConfig?.version ?? 'n/a'}`}</Text>
           </ScrollView>
         </SafeAreaView>
     </View>

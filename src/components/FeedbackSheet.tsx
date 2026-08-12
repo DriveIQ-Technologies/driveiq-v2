@@ -60,7 +60,7 @@ export function FeedbackSheet({ visible, onClose }: Props) {
     }
     const subjectLabel = KINDS.find((k) => k.key === kind)?.label ?? 'Feedback';
     const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
-      `DriveIQ feedback — ${subjectLabel}`,
+      `DriveIQ feedback: ${subjectLabel}`,
     )}&body=${encodeURIComponent(body)}`;
     try {
       const can = await Linking.canOpenURL(url);

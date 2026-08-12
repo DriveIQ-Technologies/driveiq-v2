@@ -303,7 +303,7 @@ export async function diffAndNotifyIncidents(
     const detail = cleanIncidentText(inc.comments);
     let title: string;
     if (inc.hasClosures || isKeyRoadClosure) {
-      title = keyRoad ? `${keyRoad} closure — plan around it` : `Road closed: ${where}`;
+      title = keyRoad ? `${keyRoad} closure, plan around it` : `Road closed: ${where}`;
     } else if (isAccident) {
       title = keyRoad ? `Accident on the ${keyRoad}` : `Accident: ${where}`;
     } else {
@@ -368,7 +368,7 @@ export async function diffAndNotifyLines(
     const reason = l.reason?.replace(/https?:\/\/\S+/gi, '').trim();
     await fire(
       after === 'closed'
-        ? `${l.name} is down — take a look`
+        ? `${l.name} is down. Take a look`
         : `${l.name}: ${l.statusDescription}`,
       (reason ? `${reason} ` : '') +
         'Check Connections in DriveIQ before you set off.',
@@ -426,7 +426,7 @@ export async function scheduleEventReminder(
           content: {
             title: `${event.title} is about to end`,
             body:
-              `Wrapping up in about 25 minutes — expect traffic around ` +
+              `Wrapping up in about 25 minutes. Expect traffic around ` +
               `${event.venue ?? 'the venue'} as crowds leave. Heading off? ` +
               'Tap for the quickest way out.',
             data: { kind: 'saved-event-end', eventId: event.id },
@@ -474,7 +474,7 @@ export async function diffAndNotifyFlights(
       await fire(
         `${next.flightNumber} has been cancelled`,
         `Your watched flight ${routeText} was cancelled` +
-          (next.airline ? ` — check with ${next.airline} for rebooking.` : '.') +
+          (next.airline ? `. Check with ${next.airline} for rebooking.` : '.') +
           ' Tap for the live board.',
         { kind: 'saved-flight', flightId: next.id },
       );

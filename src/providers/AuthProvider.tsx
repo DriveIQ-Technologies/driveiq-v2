@@ -1,24 +1,23 @@
 /**
  * Auth context for DriveIQ.
  *
- * Thin, typed wrapper over Firebase Auth (email/password) exposing the
- * operations the UI needs: sign in, sign up (with display name), sign out,
- * password reset, change password (with re-auth), and profile/email edits.
- *
- * Auth is OPTIONAL in DriveIQ — the map is fully usable signed-out. The
- * sidebar surfaces sign-in and, once authenticated, account management.
+ * Per work order task 09:
+ * - Browse is free (anonymous Firebase uid from first open).
+ * - Acting (save, notify, watch flight, AI question, calendar) needs a real
+ *   account. The create-account prompt fires at that moment, then the pending
+ *   action completes after signup / sign-in.
  */
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// Type-only import — erased at build time, so it does NOT pull the firebase
-// runtime in here. All actual calls go through the lazily-loaded `authApi`.
 import type { User } from 'firebase/auth';
 
 import {
@@ -29,19 +28,43 @@ import {
 } from '@/services/analytics';
 import { auth, authApi } from '@/services/firebase';
 
+export type AccountAction =
+  | 'save'
+  | 'notify'
+  | 'watched_flight'
+  | 'ai_question'
+  | 'add_to_calendar';
+
+export interface AccountPromptState {
+  open: boolean;
+  /** Defaults to signup — first-action moment is create account. */
+  mode: 'signin' | 'signup';
+  action: AccountAction | null;
+  reason: string;
+}
+
 export interface AuthContextValue {
-  /** The current Firebase user, or null when signed out. */
+  /** Firebase user (may be anonymous). */
   user: User | null;
-  /** True until the first auth-state callback resolves (avoids UI flash). */
+  /** True until the first auth-state callback resolves. */
   initializing: boolean;
+  /** True when the user has a real (non-anonymous) account. */
+  hasAccount: boolean;
+  /** Prompt opened when a gated action is attempted while signed out. */
+  accountPrompt: AccountPromptState;
+  closeAccountPrompt: () => void;
+  /**
+   * If the user has an account, runs `onReady` now and returns true.
+   * Otherwise opens Create your account with the doc reason and queues
+   * `onReady` to run after a successful signup / sign-in.
+   */
+  requireAccount: (action: AccountAction, onReady: () => void) => boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   sendReset: (email: string) => Promise<void>;
-  /** Re-authenticates with the current password, then sets a new one. */
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateDisplayName: (name: string) => Promise<void>;
-  /** Re-authenticates with the current password, then updates the email. */
   updateUserEmail: (currentPassword: string, newEmail: string) => Promise<void>;
 }
 
@@ -49,27 +72,76 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const LAST_EMAIL_KEY = 'diq:lastEmail';
 
+const ACTION_REASON =
+  'Your saves and alerts need an account to live in.';
+
+const emptyPrompt = (): AccountPromptState => ({
+  open: false,
+  mode: 'signup',
+  action: null,
+  reason: ACTION_REASON,
+});
+
+async function ensureAnonymousUser(): Promise<void> {
+  if (!auth || !authApi) return;
+  if (auth.currentUser) return;
+  try {
+    await authApi.signInAnonymously(auth);
+    track('auth_anonymous_started');
+  } catch (e) {
+    console.warn('[auth] anonymous sign-in failed', e);
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(true);
+  const [accountPrompt, setAccountPrompt] = useState<AccountPromptState>(emptyPrompt);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+  const hadAccountRef = useRef(false);
 
   useEffect(() => {
-    // If Firebase failed to initialise, don't subscribe — just finish the
-    // initial loading state so the UI renders (signed-out, auth disabled).
     if (!auth || !authApi) {
       setInitializing(false);
       return;
     }
-    const unsub = authApi.onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      if (u) {
-        await identifyFirebaseUser(u);
-        track('auth_state_changed', { signed_in: true });
-      } else {
-        resetAnalyticsUser();
-        track('auth_state_changed', { signed_in: false });
+    const authInstance = auth;
+    const api = authApi;
+    const unsub = api.onAuthStateChanged(authInstance, async (u) => {
+      if (!u) {
+        // Browse freely with a stable anonymous uid (doc task 09).
+        await ensureAnonymousUser();
+        // Listener will re-fire with the anonymous user.
+        if (!authInstance.currentUser) {
+          setUser(null);
+          resetAnalyticsUser();
+          setInitializing(false);
+        }
+        return;
       }
-      if (u?.email) {
+
+      setUser(u);
+      const hasAccount = !u.isAnonymous;
+      if (hasAccount) {
+        await identifyFirebaseUser(u);
+        track('auth_state_changed', { signed_in: true, anonymous: false });
+      } else {
+        // Keep PostHog on the anonymous uid so skipped sessions are visible.
+        await identifyFirebaseUser(
+          {
+            uid: u.uid,
+            email: null,
+            displayName: null,
+            emailVerified: false,
+            metadata: u.metadata,
+            providerData: u.providerData,
+          },
+          { signed_in: false, auth_provider: 'anonymous', tier: 'anonymous' },
+        );
+        track('auth_state_changed', { signed_in: false, anonymous: true });
+      }
+
+      if (u.email) {
         try {
           await AsyncStorage.setItem(LAST_EMAIL_KEY, u.email);
         } catch {
@@ -81,8 +153,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsub;
   }, []);
 
-  /** Guard used by every auth action so a null Firebase surfaces a friendly
-   *  error instead of throwing a TypeError. Returns the live auth + api. */
+  // After signup / sign-in, complete the action that opened the prompt.
+  useEffect(() => {
+    const hasAccount = Boolean(user && !user.isAnonymous);
+    if (hasAccount && !hadAccountRef.current && pendingActionRef.current) {
+      const run = pendingActionRef.current;
+      pendingActionRef.current = null;
+      setAccountPrompt(emptyPrompt());
+      // Defer so sheets can settle after AuthSheet closes.
+      setTimeout(() => {
+        try {
+          run();
+        } catch (e) {
+          console.warn('[auth] pending action failed', e);
+        }
+      }, 300);
+    }
+    hadAccountRef.current = hasAccount;
+  }, [user]);
+
   const requireAuth = () => {
     if (!auth || !authApi) throw new Error('auth/unavailable');
     return { a: auth, api: authApi };
@@ -96,28 +185,100 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await api.reauthenticateWithCredential(current, cred);
   };
 
+  const closeAccountPrompt = useCallback(() => {
+    pendingActionRef.current = null;
+    setAccountPrompt(emptyPrompt());
+    track('auth_required_dismissed');
+  }, []);
+
+  const requireAccount = useCallback(
+    (action: AccountAction, onReady: () => void): boolean => {
+      if (user && !user.isAnonymous) {
+        onReady();
+        return true;
+      }
+      pendingActionRef.current = onReady;
+      setAccountPrompt({
+        open: true,
+        mode: 'signup',
+        action,
+        reason: ACTION_REASON,
+      });
+      track('auth_required_for_action', { action });
+      return false;
+    },
+    [user],
+  );
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
       initializing,
+      hasAccount: Boolean(user && !user.isAnonymous),
+      accountPrompt,
+      closeAccountPrompt,
+      requireAccount,
       login: async (email, password) => {
         const { a, api } = requireAuth();
+        // Leaving anonymous browse for an existing account.
+        if (a.currentUser?.isAnonymous) {
+          await api.signOut(a);
+        }
         const cred = await api.signInWithEmailAndPassword(a, email, password);
         await identifyFirebaseUser(cred.user);
         track('auth_sign_in_succeeded');
       },
       signup: async (name, email, password) => {
         const { a, api } = requireAuth();
-        const cred = await api.createUserWithEmailAndPassword(a, email, password);
+        const trimmedEmail = email.trim();
         const trimmed = name.trim();
-        if (trimmed) {
-          await api.updateProfile(cred.user, { displayName: trimmed });
-          setUser({ ...cred.user });
+        const credential = api.EmailAuthProvider.credential(trimmedEmail, password);
+
+        let nextUser: User;
+        if (a.currentUser?.isAnonymous) {
+          // Upgrade in place so the anonymous uid / history survives.
+          try {
+            const linked = await api.linkWithCredential(a.currentUser, credential);
+            nextUser = linked.user;
+            track('auth_anonymous_upgraded');
+          } catch (e) {
+            const code =
+              typeof e === 'object' && e !== null && 'code' in e
+                ? String((e as { code: unknown }).code)
+                : '';
+            // Email already belongs to another account — fall through to create
+            // is wrong; surface the Firebase error. If link fails for other
+            // reasons, try a normal create after signing out anonymous.
+            if (code === 'auth/email-already-in-use' || code === 'auth/credential-already-in-use') {
+              throw e;
+            }
+            await api.signOut(a);
+            const created = await api.createUserWithEmailAndPassword(
+              a,
+              trimmedEmail,
+              password,
+            );
+            nextUser = created.user;
+          }
+        } else {
+          const created = await api.createUserWithEmailAndPassword(
+            a,
+            trimmedEmail,
+            password,
+          );
+          nextUser = created.user;
         }
-        // Identify immediately with the name we just set (auth listener also runs).
+
+        if (trimmed) {
+          await api.updateProfile(nextUser, { displayName: trimmed });
+          setUser({ ...nextUser, displayName: trimmed } as User);
+        } else {
+          setUser(nextUser);
+        }
+
         await identifyFirebaseUser({
-          ...cred.user,
-          displayName: trimmed || cred.user.displayName,
+          ...nextUser,
+          displayName: trimmed || nextUser.displayName,
         });
         track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
       },
@@ -125,6 +286,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { a, api } = requireAuth();
         await api.signOut(a);
         track('auth_sign_out');
+        // Return to anonymous browse mode.
+        await ensureAnonymousUser();
       },
       sendReset: async (email) => {
         const { a, api } = requireAuth();
@@ -159,7 +322,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         track('account_email_updated');
       },
     }),
-    [user, initializing],
+    [user, initializing, accountPrompt, closeAccountPrompt, requireAccount],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -173,15 +336,12 @@ export function useAuth(): AuthContextValue {
 
 /**
  * Map raw Firebase Auth error codes to friendly, user-facing copy.
- * Used by the auth sheets so users see "Wrong password" not
- * "auth/invalid-credential".
  */
 export function friendlyAuthError(e: unknown): string {
   const code =
     typeof e === 'object' && e !== null && 'code' in e
       ? String((e as { code: unknown }).code)
       : '';
-  // Our own sentinel for "Firebase didn't initialise".
   const message =
     typeof e === 'object' && e !== null && 'message' in e
       ? String((e as { message: unknown }).message)
@@ -199,6 +359,7 @@ export function friendlyAuthError(e: unknown): string {
     case 'auth/wrong-password':
       return 'Email or password is incorrect.';
     case 'auth/email-already-in-use':
+    case 'auth/credential-already-in-use':
       return 'An account with this email already exists.';
     case 'auth/weak-password':
       return 'Password should be at least 6 characters.';

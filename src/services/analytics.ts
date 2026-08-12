@@ -141,7 +141,7 @@ export async function identifyFirebaseUser(
 
   const previousDistinctId = ph.getDistinctId();
   const pro = await resolveProTier();
-  const tier = pro ? 'pro' : 'free';
+  const tier = pro ? 'premium' : 'free';
   const provider =
     user.providerData?.find((p) => p.providerId && p.providerId !== 'firebase')
       ?.providerId ?? 'password';
@@ -161,6 +161,10 @@ export async function identifyFirebaseUser(
     ...extras,
   };
 
+  const signedIn = person.signed_in !== false;
+  const authProvider =
+    typeof person.auth_provider === 'string' ? person.auth_provider : provider;
+
   // Merge anonymous pre-login activity into this account once per uid change.
   if (
     previousDistinctId &&
@@ -177,16 +181,16 @@ export async function identifyFirebaseUser(
   ph.identify(user.uid, sanitizePersonProps(person));
   ph.setPersonPropertiesForFlags({
     tier,
-    signed_in: true,
+    signed_in: signedIn,
     email_verified: Boolean(user.emailVerified),
   });
 
   await ph.register({
     user_id: user.uid,
     tier,
-    signed_in: true,
+    signed_in: signedIn,
     email_verified: Boolean(user.emailVerified),
-    auth_provider: provider,
+    auth_provider: authProvider,
   });
 
   identifiedUid = user.uid;
@@ -200,7 +204,7 @@ export async function refreshUserTraits(
   if (!ph || !identifiedUid) return;
 
   const pro = await resolveProTier();
-  const tier = pro ? 'pro' : 'free';
+  const tier = pro ? 'premium' : 'free';
   const person = sanitizePersonProps({
     tier,
     signed_in: true,

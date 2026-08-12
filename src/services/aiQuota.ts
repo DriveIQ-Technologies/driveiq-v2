@@ -2,7 +2,7 @@
  * Daily AI-question quota.
  *
  * Free plan gets FREE_DAILY_LIMIT questions per calendar day (local time);
- * Pro is unlimited. Usage resets automatically when the stored day changes.
+ * Premium is unlimited. Usage resets automatically when the stored day changes.
  * Client tiering 8 Aug 2026.
  */
 
@@ -22,9 +22,9 @@ interface StoredQuota {
 export interface AiQuota {
   pro: boolean;
   used: number;
-  /** Infinity for Pro. */
+  /** Infinity for Premium. */
   limit: number;
-  /** Infinity for Pro. */
+  /** Infinity for Premium. */
   remaining: number;
 }
 
@@ -56,7 +56,7 @@ export async function getAiQuota(): Promise<AiQuota> {
 /**
  * Record one question. Returns the quota state AFTER consumption. Callers
  * should check `remaining` on getAiQuota() BEFORE answering; this just
- * persists the tick (Pro usage is tracked but never blocks).
+ * persists the tick (Premium usage is tracked but never blocks).
  */
 export async function consumeAiQuestion(): Promise<AiQuota> {
   const used = (await loadUsedToday()) + 1;

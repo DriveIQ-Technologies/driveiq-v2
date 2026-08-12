@@ -24,6 +24,11 @@ interface Props {
   onClose: () => void;
   /** Which form to show first. */
   initialMode?: Mode;
+  /**
+   * Shown when auth was opened from a gated action (save / notify / …).
+   * Doc task 09: explain that saves and alerts need an account to live in.
+   */
+  reason?: string | null;
 }
 
 /**
@@ -32,7 +37,12 @@ interface Props {
  * password control, and a "forgot password" reset flow. Styled to match the
  * DriveIQ surface theme (no external gradient dependency).
  */
-export function AuthSheet({ visible, onClose, initialMode = 'signin' }: Props) {
+export function AuthSheet({
+  visible,
+  onClose,
+  initialMode = 'signin',
+  reason = null,
+}: Props) {
   const { login, signup, sendReset } = useAuth();
   const [mode, setMode] = useState<Mode>(initialMode);
   const [name, setName] = useState('');
@@ -133,9 +143,11 @@ export function AuthSheet({ visible, onClose, initialMode = 'signin' }: Props) {
               {isSignup ? 'Create your account' : 'Welcome back'}
             </Text>
             <Text style={styles.subtitle}>
-              {isSignup
-                ? 'Save events, sync preferences, and get personalised alerts.'
-                : 'Sign in to sync your saved events and alert preferences.'}
+              {reason
+                ? reason
+                : isSignup
+                  ? 'Save events, sync preferences, and get personalised alerts.'
+                  : 'Sign in to sync your saved events and alert preferences.'}
             </Text>
 
             {/* Segmented toggle */}

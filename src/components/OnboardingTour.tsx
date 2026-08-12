@@ -23,12 +23,12 @@ const STEPS: Step[] = [
   {
     icon: 'map',
     title: 'Welcome to DriveIQ',
-    body: "Everything on across London on one live map — sport, music, theatre and more — next to real-time roads and transport. Here's a 30-second tour.",
+    body: "Everything on across London on one live map. Sport, music, theatre and more, next to real-time roads and transport. Here's a 30-second tour.",
   },
   {
     icon: 'location',
     title: 'Pins are events',
-    body: 'Each ringed pin is an event. The ring colour is the category — blue sports, purple music, pink theatre, and so on. Sports show their symbol (⚽ 🏏 🏇), and a gold ring with a ⭐ is a featured event like Royal Ascot. Tap any pin for details.',
+    body: 'Each ringed pin is an event. The ring colour is the category. Blue means sports, purple music, pink theatre, and so on. Sports show their symbol (⚽ 🏏 🏇), and a gold ring with a ⭐ is a featured event like Royal Ascot. Tap any pin for details.',
   },
   {
     icon: 'options',
@@ -43,12 +43,12 @@ const STEPS: Step[] = [
   {
     icon: 'train',
     title: 'Roads & transport, live',
-    body: 'The buttons on the right show live tube, rail and tram status, London airports, and major road incidents — so you can plan around delays before you set off.',
+    body: 'The buttons on the right show live tube, rail and tram status, London airports, and major road incidents, so you can plan around delays before you set off.',
   },
   {
     icon: 'add-circle',
     title: 'Report what you see',
-    body: "Spotted a hazard, accident or closure? Tap ➕, line up the map and let everyone nearby know. You're all set — enjoy DriveIQ!",
+    body: "Spotted a hazard, accident or closure? Tap ➕, line up the map and let everyone nearby know. You're all set. Enjoy DriveIQ!",
   },
 ];
 

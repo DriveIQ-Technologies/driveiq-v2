@@ -28,7 +28,7 @@ export function AboutSheet({
   onClose,
   // Read the real app version so About can never drift out of date again
   // (it was hardcoded and stuck on 5.0.2).
-  version = Constants.expoConfig?.version ?? '—',
+  version = Constants.expoConfig?.version ?? 'n/a',
 }: Props) {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -60,8 +60,8 @@ export function AboutSheet({
           </View>
 
           <Text style={styles.lead}>
-            DriveIQ puts the whole city on one live map. See what's on — sport,
-            music, theatre, comedy, film and family events — next to real-time
+            DriveIQ puts the whole city on one live map. See what's on, including
+            sport, music, theatre, comedy, film and family events, next to real-time
             road incidents and London transport status, so you always know
             what's happening and how to get there.
           </Text>
@@ -83,7 +83,7 @@ export function AboutSheet({
 
           <Text style={styles.legal}>
             Event data is aggregated from third-party providers and Transport
-            for London. Times and details can change — always check with the
+            for London. Times and details can change, so always check with the
             venue or operator before you travel.
           </Text>
           <Text style={styles.copyright}>
