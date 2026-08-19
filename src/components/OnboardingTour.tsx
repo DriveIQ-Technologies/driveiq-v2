@@ -9,8 +9,8 @@ import { hasSeenTour, markTourSeen } from '@/services/onboarding';
 interface Props {
   /** Fired once the tour is finished or skipped (and for returning users who
    *  have already seen it) so the parent can move on to the next first-launch
-   *  step (e.g. the notifications ask). */
-  onDone: () => void;
+   *  step (e.g. Create account, then the notifications ask). */
+  onDone: (reason: 'completed' | 'already_seen') => void;
 }
 
 interface Step {
@@ -67,7 +67,7 @@ export function OnboardingTour({ onDone }: Props) {
       const seen = await hasSeenTour();
       if (cancelled) return;
       if (seen) {
-        onDone();
+        onDone('already_seen');
       } else {
         // Let the map paint first.
         setTimeout(() => {
@@ -87,7 +87,7 @@ export function OnboardingTour({ onDone }: Props) {
     track('onboarding_tour_completed', { steps_seen: step + 1 });
     await markTourSeen();
     setVisible(false);
-    onDone();
+    onDone('completed');
   };
 
   const next = () => {

@@ -41,6 +41,7 @@ import { MapActionStack } from '@/components/MapActionStack';
 import { NavigationAppPicker, type NavDestination } from '@/components/NavigationAppPicker';
 import { NavigationOverlay } from '@/components/NavigationOverlay';
 import { RouteInfoPanel } from '@/components/RouteInfoPanel';
+import { RoadsPanel } from '@/components/RoadsPanel';
 import { SplashLoading } from '@/components/SplashLoading';
 import { TrafficIncidentSheet } from '@/components/TrafficIncidentSheet';
 import { TrafficMarker } from '@/components/TrafficMarker';
@@ -68,6 +69,7 @@ import {
   ensurePermission,
   loadPrefs,
   scheduleEventReminder,
+  startNotificationOpenTracking,
   type NotificationPrefs,
 } from '@/services/notifications';
 import { fetchAirportFlights } from '@/services/aerodatabox';
@@ -105,6 +107,10 @@ import { AISupportSheet } from '@/components/AISupportSheet';
 import { AuthSheet } from '@/components/AuthSheet';
 import { AccountSheet, type AccountSection } from '@/components/AccountSheet';
 import { useAuth } from '@/providers/AuthProvider';
+import {
+  hasSeenSignupInvite,
+  markSignupInviteSeen,
+} from '@/services/onboarding';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
 import {
@@ -159,7 +165,8 @@ const MAP_PROVIDER =
 const BRAND_LOGO = require('../assets/driveiq-logo.png');
 
 export default function MapScreen() {
-  const { requireAccount, accountPrompt, closeAccountPrompt } = useAuth();
+  const { requireAccount, accountPrompt, closeAccountPrompt, hasAccount, initializing } =
+    useAuth();
   const mapRef = useRef<MapView>(null);
   // Default to Today so the map opens on ~100 events, not all ~1,100 — far
   // less congested in central London. "All" is still available as a chip.
@@ -198,12 +205,14 @@ export default function MapScreen() {
 
   // Traffic incidents (TfL).
   const [incidents, setIncidents] = useState<TrafficIncident[]>([]);
+  const [lineStatuses, setLineStatuses] = useState<LineStatus[]>([]);
   const [selectedIncident, setSelectedIncident] = useState<TrafficIncident | null>(null);
 
   // Map-overlay panels.
   const [layersOpen, setLayersOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [airportsOpen, setAirportsOpen] = useState(false);
+  const [roadsOpen, setRoadsOpen] = useState(false);
   // Airport whose live flights board is open (tapped an airport map pin).
   const [flightsAirport, setFlightsAirport] = useState<Airport | null>(null);
   // Station hub sheet opened from a map pin.
@@ -217,6 +226,8 @@ export default function MapScreen() {
   // First-launch product tour gates the notifications ask so they don't
   // stack on top of each other.
   const [tourDone, setTourDone] = useState(false);
+  const [signupInvite, setSignupInvite] = useState(false);
+  const [signupInviteEligible, setSignupInviteEligible] = useState(false);
 
   // Support sheets reachable from the sidebar.
   const [helpOpen, setHelpOpen] = useState(false);
@@ -279,6 +290,22 @@ export default function MapScreen() {
   useEffect(() => {
     trackScreen('map_home');
   }, []);
+
+  // After the walkthrough: Create account, with a quiet skip. Wait until
+  // auth has settled so we don't flash this at people who already signed in.
+  useEffect(() => {
+    if (!tourDone || !signupInviteEligible || initializing || hasAccount || signupInvite) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const seen = await hasSeenSignupInvite();
+      if (!cancelled && !seen) setSignupInvite(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tourDone, signupInviteEligible, initializing, hasAccount, signupInvite]);
 
   // Ask for location permission once on mount.
   useEffect(() => {
@@ -405,8 +432,7 @@ export default function MapScreen() {
   // Pull live road incidents on mount, then refresh every 5 minutes.
   // We merge TfL (London proper) with National Highways (surrounding motorways
   // and major A-roads) so users see the full picture from their location into
-  // and out of the city. Each poll also diffs against the previous snapshot
-  // and fires local notifications if the user has opted in.
+  // and out of the city.
   // Last successful payload per source. Both fetchers swallow errors and
   // return [] — without this, one failed/rate-limited poll wiped every
   // incident pin off the map for 5 minutes and they'd "come and go"
@@ -435,6 +461,9 @@ export default function MapScreen() {
       for (const i of [...tflList, ...nhList]) merged.set(i.id, i);
       const incidentList = Array.from(merged.values());
       setIncidents(incidentList);
+      if (Array.isArray(lines) && lines.length > 0) {
+        setLineStatuses(lines as LineStatus[]);
+      }
 
       // Fire notifications once user prefs are loaded. We snapshot prefs
       // through prefsRef so the loop sees changes from the settings panel.
@@ -471,6 +500,7 @@ export default function MapScreen() {
     // Bootstrap prefs + permission once, then start the poll loop.
     (async () => {
       prefsRef.current = await loadPrefs();
+      startNotificationOpenTracking();
       await ensurePermission();
       load();
     })();
@@ -1335,11 +1365,14 @@ export default function MapScreen() {
                 track('sidebar_opened');
                 setSidebarOpen(true);
               }}
-              style={styles.brandPill}
+              style={styles.menuBtn}
               accessibilityRole="button"
               accessibilityLabel="Open menu"
+              hitSlop={8}
             >
-              <Ionicons name="menu" size={16} color={colors.textOnPrimary} />
+              <Ionicons name="menu" size={22} color={colors.textOnPrimary} />
+            </Pressable>
+            <View style={styles.brandPill}>
               <View style={styles.brandLogoBadge}>
                 <Image
                   source={BRAND_LOGO}
@@ -1349,7 +1382,7 @@ export default function MapScreen() {
                 />
               </View>
               <Text style={styles.brandText}>DriveIQ</Text>
-            </Pressable>
+            </View>
           </View>
           <FilterBar
             active={filter}
@@ -1431,6 +1464,17 @@ export default function MapScreen() {
             active: airportsOpen,
           },
           {
+            key: 'roads',
+            label: 'Road corridors',
+            icon: 'car-sport',
+            onPress: () => {
+              track('roads_panel_opened');
+              setRoadsOpen(true);
+            },
+            active: roadsOpen,
+            badge: majorIncidents.length,
+          },
+          {
             key: 'traffic',
             label: layers.traffic ? 'Live traffic on' : 'Live traffic',
             icon: layers.traffic ? 'car' : 'car-outline',
@@ -1510,6 +1554,20 @@ export default function MapScreen() {
         }}
       />
 
+      <RoadsPanel
+        visible={roadsOpen}
+        incidents={majorIncidents}
+        onClose={() => setRoadsOpen(false)}
+        onNavigate={(inc) => {
+          setRoadsOpen(false);
+          setPickerDestination({
+            label: inc.location ?? `${inc.severity} incident`,
+            latitude: inc.latitude,
+            longitude: inc.longitude,
+          });
+        }}
+      />
+
       <LayerControlPanel
         visible={layersOpen}
         onClose={() => setLayersOpen(false)}
@@ -1544,9 +1602,15 @@ export default function MapScreen() {
       {/* First-launch onboarding popup. Renders nothing once the user has
           made their initial choice; can still be opened anytime via the
           Notifications panel in the action stack. */}
-      <OnboardingTour onDone={() => setTourDone(true)} />
+      <OnboardingTour
+        onDone={(reason) => {
+          setTourDone(true);
+          if (reason === 'completed') setSignupInviteEligible(true);
+          else void markSignupInviteSeen();
+        }}
+      />
 
-      {tourDone ? (
+      {tourDone && !signupInvite ? (
         <NotificationOnboarding
           onDone={async () => {
             prefsRef.current = await loadPrefs();
@@ -1601,6 +1665,8 @@ export default function MapScreen() {
         visible={aiSupportOpen}
         onClose={() => setAiSupportOpen(false)}
         events={events}
+        incidents={majorIncidents}
+        lines={lineStatuses}
         onSaveEvent={(event) => {
           if (!(event.id in savedEvents)) handleToggleSave(event);
         }}
@@ -1608,12 +1674,27 @@ export default function MapScreen() {
       />
 
       <AuthSheet
-        visible={authSheet.open || accountPrompt.open}
-        initialMode={accountPrompt.open ? accountPrompt.mode : authSheet.mode}
+        visible={authSheet.open || accountPrompt.open || signupInvite}
+        initialMode={
+          accountPrompt.open
+            ? accountPrompt.mode
+            : signupInvite
+              ? 'signup'
+              : authSheet.mode
+        }
         reason={accountPrompt.open ? accountPrompt.reason : null}
+        quietSkip={signupInvite && !accountPrompt.open && !authSheet.open}
+        onSkip={() => {
+          void markSignupInviteSeen();
+          setSignupInvite(false);
+        }}
         onClose={() => {
           if (accountPrompt.open) closeAccountPrompt();
           setAuthSheet((s) => ({ ...s, open: false }));
+          if (signupInvite) {
+            void markSignupInviteSeen();
+            setSignupInvite(false);
+          }
         }}
       />
 
@@ -1754,9 +1835,24 @@ const styles = StyleSheet.create({
   },
   brandRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'flex-start',
     paddingHorizontal: 16,
     marginBottom: 4,
+    gap: 8,
+  },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
   },
   brandPill: {
     flexDirection: 'row',

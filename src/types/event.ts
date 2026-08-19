@@ -37,4 +37,16 @@ export interface AppEvent {
   subCategory?: string;
   /** External URL (used internally — not rendered as a Get Tickets button per requirements). */
   url?: string;
+  /** Doors time (ISO). Task 08: when people start arriving, not on-sale. */
+  doorsAt?: string;
+  /** Real start (ISO). Kick-off or headline, not doors. */
+  realStartAt?: string;
+  /** Estimated finish (ISO). When the crowd walks out. */
+  estimatedFinishAt?: string;
+  /** Expected turnout low end. Always a range, never a precise headcount. */
+  turnoutMin?: number;
+  /** Expected turnout high end. */
+  turnoutMax?: number;
+  /** One-line driver description from the nightly job or the local fallback. */
+  copyLine?: string;
 }

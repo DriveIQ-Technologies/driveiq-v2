@@ -29,9 +29,9 @@ interface PerkRow {
 
 const PERKS: PerkRow[] = [
   {
-    icon: 'warning',
-    title: 'Major road incidents',
-    body: 'Get a heads-up when there is an accident or closure on London roads and surrounding motorways, including M1, M11, M20, M23, M25, M3, M4 and M40.',
+    icon: 'car-sport',
+    title: 'Road closures and heavy traffic',
+    body: 'A heads-up when key routes such as the M25, A40 or Blackwall Tunnel close or turn into major delays.',
   },
   {
     icon: 'train',

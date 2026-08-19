@@ -40,10 +40,10 @@ interface Row {
 const ROWS: Row[] = [
   {
     key: 'road-accidents',
-    icon: 'warning',
-    title: 'Road accidents',
+    icon: 'car-sport',
+    title: 'Road closures and heavy traffic',
     body:
-      'Major accidents and closures on London roads and surrounding motorways, including M1, M11, M20, M23, M25, M3, M4, M40 and connecting A-roads.',
+      'Pings when a major road closes, has a serious incident, or has heavy disruption on key corridors.',
   },
   {
     key: 'line-closures',

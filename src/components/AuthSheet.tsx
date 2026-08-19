@@ -29,6 +29,13 @@ interface Props {
    * Doc task 09: explain that saves and alerts need an account to live in.
    */
   reason?: string | null;
+  /**
+   * Quiet skip under the primary button. Task 09: "Have a look around first"
+   * as small text, not a competing button. Used after the walkthrough, not
+   * on the first-action prompt.
+   */
+  quietSkip?: boolean;
+  onSkip?: () => void;
 }
 
 /**
@@ -42,6 +49,8 @@ export function AuthSheet({
   onClose,
   initialMode = 'signin',
   reason = null,
+  quietSkip = false,
+  onSkip,
 }: Props) {
   const { login, signup, sendReset } = useAuth();
   const [mode, setMode] = useState<Mode>(initialMode);
@@ -67,6 +76,11 @@ export function AuthSheet({
   if (!visible) return null;
 
   const isSignup = mode === 'signup';
+
+  const handleSkip = () => {
+    track('signup_skipped', { source: 'quiet_skip' });
+    (onSkip ?? onClose)();
+  };
 
   const submit = async () => {
     setError(null);
@@ -123,12 +137,20 @@ export function AuthSheet({
   };
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
+    <Modal
+      transparent
+      animationType="slide"
+      visible
+      onRequestClose={quietSkip ? handleSkip : onClose}
+    >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
       >
-        <Pressable style={styles.backdrop} onPress={onClose} />
+        <Pressable
+          style={styles.backdrop}
+          onPress={quietSkip ? handleSkip : onClose}
+        />
         <View style={styles.sheet}>
           <View style={styles.handle} />
           <ScrollView
@@ -242,6 +264,18 @@ export function AuthSheet({
             {!isSignup ? (
               <Pressable onPress={onForgot} disabled={busy} style={styles.forgotBtn}>
                 <Text style={styles.forgotText}>Forgot password?</Text>
+              </Pressable>
+            ) : null}
+
+            {quietSkip ? (
+              <Pressable
+                onPress={handleSkip}
+                hitSlop={8}
+                style={styles.quietSkip}
+                accessibilityRole="button"
+                accessibilityLabel="Have a look around first"
+              >
+                <Text style={styles.quietSkipText}>Have a look around first</Text>
               </Pressable>
             ) : null}
           </ScrollView>
@@ -389,5 +423,14 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: 14,
     fontWeight: '700',
+  },
+  quietSkip: {
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  quietSkipText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
   },
 });

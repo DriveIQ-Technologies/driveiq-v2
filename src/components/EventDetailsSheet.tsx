@@ -12,7 +12,7 @@ import {
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import type { AppEvent } from '@/types/event';
-import { formatEventDate, formatEventEndTime } from '@/utils/dateFilters';
+import { formatEventDate, formatEventEndTime, formatLondonHhmm } from '@/utils/dateFilters';
 import { cleanDescription } from '@/utils/description';
 import { distanceKm, formatDistance, type LatLng } from '@/utils/distance';
 import { pinDescriptorFor } from '@/utils/eventIcons';
@@ -158,7 +158,17 @@ function SheetBody({
   const tagIcon = descriptor.kind === 'glyph' ? descriptor.icon : 'DQ';
   const categoryLabel =
     event.subCategory ?? (event.category === 'sports' ? 'Sports' : 'Event');
-  const about = cleanDescription(event.description);
+  const about = event.copyLine?.trim() || cleanDescription(event.description);
+  const startIso = event.realStartAt ?? event.startsAt;
+  const doorsIso = event.doorsAt;
+  const finishIso = event.estimatedFinishAt ?? event.endsAt;
+  const showDoors =
+    doorsIso &&
+    Math.abs(Date.parse(doorsIso) - Date.parse(startIso)) >= 10 * 60 * 1000;
+  const turnout =
+    event.turnoutMin && event.turnoutMax
+      ? `${event.turnoutMin.toLocaleString('en-GB')} to ${event.turnoutMax.toLocaleString('en-GB')}`
+      : null;
 
   return (
     <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
@@ -174,13 +184,25 @@ function SheetBody({
       </View>
 
       <Text style={styles.title}>{event.title}</Text>
-      <Text style={styles.date}>{formatEventDate(event.startsAt)}</Text>
-      <Text style={styles.endTime}>Ends {formatEventEndTime(event.startsAt, event.endsAt)}</Text>
+      <Text style={styles.date}>{formatEventDate(startIso)}</Text>
+      {showDoors && doorsIso ? (
+        <Text style={styles.endTime}>Doors {formatLondonHhmm(doorsIso)}</Text>
+      ) : null}
+      <Text style={styles.endTime}>
+        Crowds leaving around {formatEventEndTime(startIso, finishIso)}
+      </Text>
 
       <View style={styles.metaRow}>
         <Text style={styles.metaLabel}>Venue</Text>
         <Text style={styles.metaValue}>{event.venue}</Text>
       </View>
+
+      {turnout ? (
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>Turnout</Text>
+          <Text style={styles.metaValue}>{turnout}</Text>
+        </View>
+      ) : null}
 
       {about ? (
         <View style={styles.metaRow}>

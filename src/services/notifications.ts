@@ -28,6 +28,7 @@ import type { AppEvent } from '@/types/event';
 import type { AirportFlight } from './aerodatabox';
 import type { SavedFlight } from './savedFlights';
 import { track } from './analytics';
+import { templateRailLine, templateRoadLine } from './copyTemplates';
 
 export type NotificationChannel =
   | 'road-accidents'
@@ -59,6 +60,7 @@ const STORAGE_KEY_ONBOARDING_SEEN = 'driveiq.notif.onboardingSeen.v1';
 // once the user runs `bun add expo-notifications @react-native-async-storage/async-storage`.
 let _Notifications: any = null;
 let _Storage: any = null;
+let _responseSub: { remove: () => void } | null = null;
 
 /**
  * True when the expo-notifications NATIVE module is compiled into this app
@@ -225,18 +227,60 @@ const fire = async (
     return;
   }
   try {
+    const payload = { ...data, sentAtMs: Date.now() };
     await N.scheduleNotificationAsync({
-      content: { title, body, data, sound: 'default' },
+      content: { title, body, data: payload, sound: 'default' },
       trigger: null, // fire immediately
     });
+    const kind = typeof data.kind === 'string' ? data.kind : 'unknown';
     track('notification_dispatched', {
-      kind: typeof data.kind === 'string' ? data.kind : 'unknown',
+      kind,
+    });
+    track('alert_received', {
+      type: alertTypeFromKind(kind),
     });
   } catch (e) {
     console.warn('[notif] schedule failed', e);
     track('notification_dispatch_failed');
   }
 };
+
+const alertTypeFromKind = (kind: string): string => {
+  if (kind === 'road-accident') return 'road';
+  if (kind === 'line-closure') return 'rail';
+  if (kind === 'saved-flight') return 'airport';
+  if (kind === 'saved-event' || kind === 'saved-event-end') return 'event';
+  return kind || 'unknown';
+};
+
+/**
+ * Track alert-open events from OS notification taps.
+ * Safe to call repeatedly; listener is attached once.
+ */
+export function startNotificationOpenTracking(): void {
+  const N = getNotifications();
+  if (!N || _responseSub) return;
+  try {
+    _responseSub = N.addNotificationResponseReceivedListener((response: any) => {
+      const data = (response?.notification?.request?.content?.data ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const kind = typeof data.kind === 'string' ? data.kind : 'unknown';
+      const sentAt = Number(data.sentAtMs);
+      const minutesSinceSent =
+        Number.isFinite(sentAt) && sentAt > 0
+          ? Math.max(0, Math.round((Date.now() - sentAt) / 60000))
+          : undefined;
+      track('alert_opened', {
+        type: alertTypeFromKind(kind),
+        minutes_since_sent: minutesSinceSent,
+      });
+    });
+  } catch (e) {
+    console.warn('[notif] response listener setup failed', e);
+  }
+}
 
 // ─── Key London corridors ────────────────────────────────────────────────
 // The big motorways / A-roads that connect London and are usually busy or
@@ -251,13 +295,6 @@ const matchKeyRoad = (inc: TrafficIncident): string | null => {
   const m = hay.match(KEY_ROAD_RE);
   return m ? m[1].toUpperCase() : null;
 };
-
-/** Trim incident copy to one clean notification line. */
-const cleanIncidentText = (s: string | undefined): string =>
-  (s ?? '')
-    .replace(/https?:\/\/\S+/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim();
 
 /**
  * Compare a fresh traffic snapshot against the last one we saw and ping
@@ -300,20 +337,18 @@ export async function diffAndNotifyIncidents(
     if (isFirstRun) continue;
 
     const where = inc.location ?? keyRoad ?? 'a major route';
-    const detail = cleanIncidentText(inc.comments);
-    let title: string;
-    if (inc.hasClosures || isKeyRoadClosure) {
-      title = keyRoad ? `${keyRoad} closure, plan around it` : `Road closed: ${where}`;
-    } else if (isAccident) {
-      title = keyRoad ? `Accident on the ${keyRoad}` : `Accident: ${where}`;
-    } else {
-      title = keyRoad
-        ? `${inc.severity} delays on the ${keyRoad}`
-        : `${inc.severity} incident: ${where}`;
-    }
-    const body =
-      (detail ? `${detail} ` : `${inc.category} at ${where}. `) +
-      'Tap to see it on the DriveIQ map and route around it.';
+    const title = inc.hasClosures || isKeyRoadClosure
+      ? keyRoad
+        ? `${keyRoad} closure, plan around it`
+        : `Road closed: ${where}`
+      : isAccident
+        ? keyRoad
+          ? `Accident on the ${keyRoad}`
+          : `Accident: ${where}`
+        : keyRoad
+          ? `${inc.severity} delays on the ${keyRoad}`
+          : `${inc.severity} incident: ${where}`;
+    const body = `${templateRoadLine(inc, keyRoad ?? 'Road')} Tap the map to route around it.`;
     await fire(title, body, { kind: 'road-accident', incidentId: inc.id });
   }
 
@@ -365,13 +400,11 @@ export async function diffAndNotifyLines(
     if (isFirstRun) continue;
     if (!isLineSubscribed(l.id, lineSubs)) continue;
 
-    const reason = l.reason?.replace(/https?:\/\/\S+/gi, '').trim();
     await fire(
       after === 'closed'
         ? `${l.name} is down. Take a look`
         : `${l.name}: ${l.statusDescription}`,
-      (reason ? `${reason} ` : '') +
-        'Check Connections in DriveIQ before you set off.',
+      templateRailLine(l),
       { kind: 'line-closure', lineId: l.id },
     );
   }
@@ -394,7 +427,7 @@ export async function scheduleEventReminder(
   const N = getNotifications();
   if (!N) return;
 
-  const startMs = Date.parse(event.startsAt);
+  const startMs = Date.parse(event.realStartAt ?? event.startsAt);
   if (Number.isFinite(startMs)) {
     const fireAt = startMs - 60 * 60 * 1000;
     if (fireAt >= Date.now() + 30_000) {
@@ -417,7 +450,7 @@ export async function scheduleEventReminder(
     }
   }
 
-  const endMs = Date.parse(event.endsAt ?? '');
+  const endMs = Date.parse(event.estimatedFinishAt ?? event.endsAt ?? '');
   if (Number.isFinite(endMs)) {
     const fireAt = endMs - 25 * 60 * 1000;
     if (fireAt >= Date.now() + 30_000) {

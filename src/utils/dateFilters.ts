@@ -196,6 +196,16 @@ export function formatEventDate(iso: string): string {
   return `${day} ${date} · ${time}`;
 }
 
+/** London wall-clock time only: "19:30". */
+export function formatLondonHhmm(iso: string): string {
+  return new Date(iso).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: LONDON_TZ,
+  });
+}
+
 /**
  * Format an event's end time in London time, omitting the date when it falls
  * on the same London calendar day as the start.

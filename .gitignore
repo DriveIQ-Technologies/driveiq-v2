@@ -16,6 +16,8 @@ yarn-debug.*
 yarn-error.*
 .DS_Store
 *.log
+functions/node_modules/
+functions/lib/
 
 # Local Claude settings
 .claude/

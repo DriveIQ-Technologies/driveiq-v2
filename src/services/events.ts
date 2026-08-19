@@ -12,6 +12,7 @@ import { fetchSampleEvents } from './sampleEvents';
 import { fetchSportsLondon } from './sportsdb';
 import { fetchTicketmasterLondon } from './ticketmaster';
 import { fetchVenueSiteEvents } from './venueSites';
+import { mergeRemoteEventRecords, normaliseEventLocal } from './eventNormalise';
 
 /** Per-provider budgets so one slow host can't blank sports coverage. */
 const PROVIDER_TIMEOUT_MS: Record<string, number> = {
@@ -70,7 +71,9 @@ export async function fetchAllEvents(
   };
 
   const emit = () => {
-    opts.onPartial?.(finalize(buckets, /* allowSample */ false));
+    opts.onPartial?.(
+      finalize(buckets, /* allowSample */ false).map(normaliseEventLocal),
+    );
   };
 
   const run = async (
@@ -120,9 +123,14 @@ export async function fetchAllEvents(
       `featured=${buckets.featured.length}`,
   );
 
-  const merged = await finalizeAsync(buckets, range);
+  const merged = (await finalizeAsync(buckets, range)).map(normaliseEventLocal);
   warnOnEmptyCoverageVenues(merged);
-  return merged;
+  try {
+    return await mergeRemoteEventRecords(merged);
+  } catch (e) {
+    console.warn('[events] remote records skipped', e);
+    return merged;
+  }
 }
 
 function withTimeout<T>(

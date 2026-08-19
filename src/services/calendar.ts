@@ -76,8 +76,8 @@ export async function addEventToCalendar(
     const calendarId = await pickWritableCalendar(C);
     if (!calendarId) return { ok: false, reason: 'error' };
 
-    const start = new Date(event.startsAt);
-    const end = new Date(event.endsAt || event.startsAt);
+    const start = new Date(event.realStartAt || event.startsAt);
+    const end = new Date(event.estimatedFinishAt || event.endsAt || event.startsAt);
 
     await C.createEventAsync(calendarId, {
       title: event.title,

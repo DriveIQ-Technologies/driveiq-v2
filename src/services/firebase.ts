@@ -19,6 +19,10 @@
  */
 import type { Auth } from 'firebase/auth';
 import type * as FirebaseAuthModule from 'firebase/auth';
+import type { Firestore } from 'firebase/firestore';
+import type * as FirebaseFirestoreModule from 'firebase/firestore';
+import type { Functions } from 'firebase/functions';
+import type * as FirebaseFunctionsModule from 'firebase/functions';
 
 const firebaseConfig = {
   apiKey:
@@ -43,8 +47,17 @@ const firebaseConfig = {
 /** The whole `firebase/auth` module surface, or null if Firebase failed. */
 export type FirebaseAuthApi = typeof FirebaseAuthModule;
 
+/** The whole `firebase/firestore` module surface, or null if Firestore failed. */
+export type FirebaseFirestoreApi = typeof FirebaseFirestoreModule;
+/** The whole `firebase/functions` module surface, or null if Functions failed. */
+export type FirebaseFunctionsApi = typeof FirebaseFunctionsModule;
+
 let _auth: Auth | null = null;
 let _authApi: FirebaseAuthApi | null = null;
+let _db: Firestore | null = null;
+let _fsApi: FirebaseFirestoreApi | null = null;
+let _functions: Functions | null = null;
+let _functionsApi: FirebaseFunctionsApi | null = null;
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -76,14 +89,50 @@ try {
     _auth = authMod.getAuth(app);
   }
   _authApi = authMod;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fsMod = require('firebase/firestore') as FirebaseFirestoreApi;
+    _db = fsMod.getFirestore(app);
+    _fsApi = fsMod;
+  } catch (fsErr) {
+    console.warn('[firebase] Firestore unavailable', fsErr);
+    _db = null;
+    _fsApi = null;
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fnMod = require('firebase/functions') as FirebaseFunctionsApi;
+    _functions = fnMod.getFunctions(app, 'europe-west2');
+    _functionsApi = fnMod;
+  } catch (fnErr) {
+    console.warn('[firebase] Functions unavailable', fnErr);
+    _functions = null;
+    _functionsApi = null;
+  }
 } catch (e) {
   console.warn('[firebase] initialisation failed — auth disabled', e);
   _auth = null;
   _authApi = null;
+  _db = null;
+  _fsApi = null;
+  _functions = null;
+  _functionsApi = null;
 }
 
 /** Firebase Auth instance, or null when Firebase is unavailable. */
 export const auth = _auth;
 
-/** The `firebase/auth` function surface, or null when unavailable. */
+/** The `firebase/auth` function surface, or null when Firebase is unavailable. */
 export const authApi = _authApi;
+
+/** Firestore instance, or null when Firebase is unavailable. */
+export const db = _db;
+
+/** The `firebase/firestore` function surface, or null when unavailable. */
+export const fsApi = _fsApi;
+/** Firebase Functions instance, or null when unavailable. */
+export const functions = _functions;
+/** The `firebase/functions` function surface, or null when unavailable. */
+export const functionsApi = _functionsApi;

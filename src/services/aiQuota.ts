@@ -1,17 +1,23 @@
 /**
  * Daily AI-question quota.
  *
- * Free plan gets FREE_DAILY_LIMIT questions per calendar day (local time);
+ * Free plan gets a Remote Config cap per calendar day (local time);
  * Premium is unlimited. Usage resets automatically when the stored day changes.
- * Client tiering 8 Aug 2026.
+ * Work order task 07: default is 10, not 5, and the number lives in
+ * Firestore `config/runtime` so it can come down without an app release.
  */
 
 import { getJSON, setJSON } from './storage';
 import { hasProAccess } from './subscription';
+import {
+  DEFAULT_AI_FREE_DAILY_LIMIT,
+  getAiFreeDailyLimit,
+} from './remoteConfig';
 
 const QUOTA_KEY = 'driveiq.aiQuota.v1';
 
-export const FREE_DAILY_LIMIT = 5;
+/** Fallback when Remote Config has not loaded yet. Prefer getAiQuota().limit. */
+export const FREE_DAILY_LIMIT = DEFAULT_AI_FREE_DAILY_LIMIT;
 
 interface StoredQuota {
   /** Local calendar day the counter belongs to, YYYY-MM-DD. */
@@ -42,14 +48,17 @@ async function loadUsedToday(): Promise<number> {
 }
 
 export async function getAiQuota(): Promise<AiQuota> {
-  const pro = await hasProAccess();
-  const used = await loadUsedToday();
+  const [pro, used, limit] = await Promise.all([
+    hasProAccess(),
+    loadUsedToday(),
+    getAiFreeDailyLimit(),
+  ]);
   if (pro) return { pro, used, limit: Infinity, remaining: Infinity };
   return {
     pro,
     used,
-    limit: FREE_DAILY_LIMIT,
-    remaining: Math.max(0, FREE_DAILY_LIMIT - used),
+    limit,
+    remaining: Math.max(0, limit - used),
   };
 }
 

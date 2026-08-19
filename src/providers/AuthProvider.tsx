@@ -27,6 +27,8 @@ import {
   track,
 } from '@/services/analytics';
 import { auth, authApi } from '@/services/firebase';
+import { applyWaitlistPremium } from '@/services/waitlist';
+import { syncPremiumEntitlement } from '@/services/subscription';
 
 export type AccountAction =
   | 'save'
@@ -125,6 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (hasAccount) {
         await identifyFirebaseUser(u);
         track('auth_state_changed', { signed_in: true, anonymous: false });
+        void syncPremiumEntitlement();
       } else {
         // Keep PostHog on the anonymous uid so skipped sessions are visible.
         await identifyFirebaseUser(
@@ -193,7 +196,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const requireAccount = useCallback(
     (action: AccountAction, onReady: () => void): boolean => {
-      if (user && !user.isAnonymous) {
+      const current = auth?.currentUser ?? user;
+      if (current && !current.isAnonymous) {
         onReady();
         return true;
       }
@@ -227,6 +231,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const cred = await api.signInWithEmailAndPassword(a, email, password);
         await identifyFirebaseUser(cred.user);
         track('auth_sign_in_succeeded');
+        if (cred.user.email) {
+          await applyWaitlistPremium(cred.user.email);
+        }
+        await syncPremiumEntitlement();
       },
       signup: async (name, email, password) => {
         const { a, api } = requireAuth();
@@ -281,6 +289,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           displayName: trimmed || nextUser.displayName,
         });
         track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
+        track('signup_completed', { has_name: Boolean(trimmed) });
+        if (nextUser.email) {
+          await applyWaitlistPremium(nextUser.email);
+        }
+        await syncPremiumEntitlement();
       },
       logout: async () => {
         const { a, api } = requireAuth();

@@ -18,28 +18,34 @@ import {
 } from 'react-native-safe-area-context';
 
 import {
-  consumeAiQuestion,
-  FREE_DAILY_LIMIT,
   getAiQuota,
   type AiQuota,
 } from '@/services/aiQuota';
 import { track, trackScreen } from '@/services/analytics';
 import { useAuth } from '@/providers/AuthProvider';
-import { showProPaywall } from '@/services/subscription';
+import { askDriveiqAgent } from '@/services/agent';
+import { hasProAccess, showProPaywall, syncPremiumEntitlement } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
+import type { TrafficIncident } from '@/services/tflTraffic';
+import type { LineStatus } from '@/services/tflLines';
+import { incidentRoadLine } from '@/services/roadsCorridors';
 import {
   formatEventDate,
   formatEventEndTime,
   isInRange,
+  rangeFor,
   type DateRange,
 } from '@/utils/dateFilters';
+import { turnoutRange, venueProfileFor } from '@/data/venueProfiles';
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   /** Cached events so the assistant can answer "what's on tomorrow" etc. */
   events?: AppEvent[];
+  incidents?: TrafficIncident[];
+  lines?: LineStatus[];
   /** Save + reminder for an event (no-op if not provided). */
   onSaveEvent?: (event: AppEvent) => void;
   /** Add an event to the device calendar (no-op if not provided). */
@@ -58,15 +64,14 @@ interface ChatMessage {
   text: string;
   /** Optional tappable actions rendered under a bot bubble. */
   actions?: ChatAction[];
+  model?: 'haiku' | 'sonnet' | null;
 }
 
 /**
  * DriveIQ AI Support.
  *
- * Conversational helper that guides users around the app. This is the on-device
- * scaffold: it answers the common "how do I…" questions from a local knowledge
- * base so the feature is useful today, with the chat UI ready to swap onto a
- * live model backend later (replace `localAnswer` with a network call).
+ * Live answers come from the `askDriveiqAgent` Cloud Function. Local event
+ * matching is only used to attach reminder/calendar chips under a live reply.
  */
 
 const SUGGESTIONS = [
@@ -75,65 +80,6 @@ const SUGGESTIONS = [
   'What do the coloured pins mean?',
   'How do notifications work?',
 ];
-
-interface Knowledge {
-  patterns: string[];
-  answer: string;
-}
-
-const KB: Knowledge[] = [
-  {
-    patterns: ['colour', 'color', 'pin', 'dot', 'outline', 'ring', 'mean'],
-    answer:
-      'Each event pin is a ringed bubble. The ring colour is the category: blue = sports, purple = music, pink = theatre, amber = comedy, red = film, green = family. Sports pins show the sport symbol (⚽ 🏏 🏉 🏇…); everything else shows the DriveIQ mark. A gold ring with a ⭐ is a featured event (e.g. Royal Ascot).',
-  },
-  {
-    patterns: ['save', 'bookmark', 'follow', 'remind', 'reminder'],
-    answer:
-      'Open any event and tap Save. We’ll remind you one hour before it starts so there’s time to plan your route. Tap Calendar on the same screen to add it to your phone’s calendar with the start and end time.',
-  },
-  {
-    patterns: ['notification', 'alert', 'push', 'ping'],
-    answer:
-      'DriveIQ can alert you about major road incidents, train/tube line closures, and saved-event reminders. Turn categories on or off, and pick specific train lines, under Menu > Notifications. You will be asked for permission the first time.',
-  },
-  {
-    patterns: ['report', 'hazard', 'accident', 'add'],
-    answer:
-      'Tap the ➕ button on the right of the map, line the map up over the spot, choose what’s happening (hazard, accident, roadworks, closure…), add an optional note, and submit. Your report shows as a coloured pin and clears itself after a while.',
-  },
-  {
-    patterns: ['direction', 'route', 'navigate', 'drive', 'waze', 'maps'],
-    answer:
-      'Open an event and tap Get directions. You can navigate inside DriveIQ or hand off to Google Maps, Waze or Apple Maps.',
-  },
-  {
-    patterns: ['filter', 'today', 'tomorrow', 'category', 'date'],
-    answer:
-      'Use the row of date chips (All / Today / Tomorrow / Next 3 Days) and the category chips below it to narrow what’s on the map. The map re-frames to fit what’s showing.',
-  },
-  {
-    patterns: ['missing', 'not show', 'ascot', 'epsom', 'why', 'racing'],
-    answer:
-      'Most events come from live data feeds. A few big ones (like Royal Ascot) are not in those feeds, so we add them by hand. They appear with a gold featured pin. If something major is missing, send feedback and we will add it.',
-  },
-  {
-    patterns: ['transit', 'train', 'tube', 'airport', 'connection'],
-    answer:
-      'The train icon on the right opens live tube/rail/tram status; the plane icon opens London airport rail-link status. Both update through the day.',
-  },
-];
-
-function localAnswer(input: string): string {
-  const q = input.toLowerCase();
-  let best: { score: number; answer: string } | null = null;
-  for (const k of KB) {
-    const score = k.patterns.reduce((n, p) => (q.includes(p) ? n + 1 : n), 0);
-    if (score > 0 && (!best || score > best.score)) best = { score, answer: k.answer };
-  }
-  if (best) return best.answer;
-  return "I’m still learning! I can help with pins, saving events, notifications, reporting, directions, filters and live transit. Try one of the suggestions, or send feedback from the menu and the team will follow up.";
-}
 
 // ── Event question handling ────────────────────────────────────────────────
 // The assistant can answer natural date questions ("what's on tomorrow",
@@ -159,32 +105,36 @@ const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frida
 
 /** Map a free-text question to a date window + label, or null if none found. */
 function resolveWindow(q: string, now: Date = new Date()): { label: string; range: DateRange } | null {
-  const today = startOfDay(now);
   if (q.includes('tomorrow')) {
-    const t = addDays(today, 1);
-    return { label: 'tomorrow', range: { start: t, end: endOfDay(t) } };
+    return { label: 'tomorrow', range: rangeFor('tomorrow', now) };
   }
   if (q.includes('tonight') || q.includes('today')) {
-    return { label: q.includes('tonight') ? 'tonight' : 'today', range: { start: today, end: endOfDay(today) } };
+    return { label: q.includes('tonight') ? 'tonight' : 'today', range: rangeFor('today', now) };
   }
   if (q.includes('weekend')) {
     // Upcoming Saturday + Sunday (or the current one if it's already the weekend).
+    const today = startOfDay(now);
     const dow = today.getDay();
     const satOffset = dow === 0 ? -1 : 6 - dow; // Sunday counts as part of this weekend
     const sat = addDays(today, Math.max(satOffset, dow === 6 ? 0 : satOffset));
     const start = dow === 0 ? addDays(today, -1) : sat;
     return { label: 'this weekend', range: { start: startOfDay(start), end: endOfDay(addDays(start, 1)) } };
   }
-  if (q.includes('this week') || q.includes('week')) {
-    const dow = today.getDay();
-    const daysToSun = (7 - dow) % 7;
-    return { label: 'this week', range: { start: today, end: endOfDay(addDays(today, daysToSun)) } };
+  if (q.includes('this week') || (/\bweek\b/.test(q) && !q.includes('weekend'))) {
+    return {
+      label: 'this week',
+      range: {
+        start: rangeFor('today', now).start,
+        end: rangeFor('day:6', now).end,
+      },
+    };
   }
   if (q.includes('next 3') || q.includes('next three')) {
-    return { label: 'the next 3 days', range: { start: today, end: endOfDay(addDays(today, 2)) } };
+    return { label: 'the next 3 days', range: rangeFor('next3', now) };
   }
   for (let i = 0; i < WEEKDAYS.length; i++) {
     if (q.includes(WEEKDAYS[i])) {
+      const today = startOfDay(now);
       let delta = (i - today.getDay() + 7) % 7;
       if (delta === 0) delta = 7; // "on Monday" means the next one, not today
       const d = addDays(today, delta);
@@ -198,10 +148,73 @@ const EVENT_WORDS = ['event', 'events', 'happening', 'going on', 'on tonight', '
   'on tomorrow', 'whats on', "what's on", 'what is on', 'show', 'shows', 'gig', 'gigs',
   'concert', 'concerts', 'match', 'matches', 'fixture', 'fixtures', 'anything on', 'look out for'];
 
+const BIG_WORDS = [
+  'big',
+  'biggest',
+  'major',
+  'huge',
+  'busy',
+  'busiest',
+  'packed',
+  'largest',
+  'demand',
+  'marquee',
+  'key event',
+  'stadium',
+];
+
+function looksLikeBigQuery(q: string): boolean {
+  return BIG_WORDS.some((w) => q.includes(w));
+}
+
+function turnoutLabel(e: AppEvent): string | undefined {
+  if (e.turnoutMin && e.turnoutMax) return `${e.turnoutMin}-${e.turnoutMax}`;
+  const cap = venueProfileFor(e.venue)?.capacity;
+  if (!cap) return undefined;
+  const range = turnoutRange(cap, { low: 0.75, high: 1 });
+  return `${range.min}-${range.max}`;
+}
+
+/** Featured pins and stadium-scale venues first. Small clubs last. */
+function demandScore(e: AppEvent): number {
+  const crowd = Math.max(
+    e.turnoutMax ?? 0,
+    e.turnoutMin ?? 0,
+    venueProfileFor(e.venue)?.capacity ?? 0,
+  );
+  return (e.source === 'featured' ? 1_000_000 : 0) + crowd;
+}
+
 const typeOf = (e: AppEvent): string =>
   e.subCategory ?? (e.category === 'sports' ? 'Sports' : 'Event');
 
 const shortTitle = (t: string): string => (t.length > 24 ? `${t.slice(0, 22)}…` : t);
+
+/** Minimal rich-text renderer: supports **bold** spans from the agent. */
+function renderRichText(text: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  const regex = /\*\*([^*]+)\*\*/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    parts.push(
+      <Text key={`b-${lastIndex}-${match.index}`} style={styles.boldInline}>
+        {match[1]}
+      </Text>,
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts;
+}
 
 // "What time does X start / finish", "when is X", "how long is X" — match a
 // named event in the list and report its exact start + end times.
@@ -261,14 +274,17 @@ function answerEventQuery(
 ): { text: string; offer: AppEvent[] } | null {
   const q = input.toLowerCase();
   const win = resolveWindow(q);
-  const looksLikeEventQ = EVENT_WORDS.some((w) => q.includes(w));
+  const big = looksLikeBigQuery(q);
+  const looksLikeEventQ = EVENT_WORDS.some((w) => q.includes(w)) || big;
   if (!win && !looksLikeEventQ) return null;
   if (!win && looksLikeEventQ) {
-    // Event-ish question with no date → default to the next 3 days.
-    const today = startOfDay(new Date());
-    return formatAnswer('over the next few days', { start: today, end: endOfDay(addDays(today, 2)) }, events);
+    const range = big ? {
+      start: rangeFor('today').start,
+      end: rangeFor('day:6').end,
+    } : rangeFor('next3');
+    return formatAnswer(big ? 'the biggest this week' : 'over the next few days', range, events, true);
   }
-  if (win) return formatAnswer(win.label, win.range, events);
+  if (win) return formatAnswer(win.label, win.range, events, true);
   return null;
 }
 
@@ -276,31 +292,182 @@ function formatAnswer(
   label: string,
   range: DateRange,
   events: AppEvent[],
+  biggestFirst = false,
 ): { text: string; offer: AppEvent[] } {
-  const matches = events
-    .filter((e) => isInRange(e.startsAt, range))
-    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+  const matches = events.filter(
+    (e) =>
+      isInRange(e.startsAt, range) ||
+      (e.realStartAt ? isInRange(e.realStartAt, range) : false),
+  );
+  const sorted = [...matches].sort((a, b) => {
+    if (label === 'today' || label === 'tonight') return byFreshThenDemand(a, b);
+    if (biggestFirst) {
+      const d = demandScore(b) - demandScore(a);
+      if (d !== 0) return d;
+    }
+    return Date.parse(a.startsAt) - Date.parse(b.startsAt);
+  });
 
-  if (matches.length === 0) {
+  if (sorted.length === 0) {
     return {
       text: `I can’t see anything ${label} in the current list yet. Try the All filter, or check again as the live feeds refresh through the day.`,
       offer: [],
     };
   }
 
-  const shown = matches.slice(0, 6);
-  const lines = shown.map(
-    (e) => `• ${e.title} · ${typeOf(e)} · ${formatEventDate(e.startsAt)} · ${e.venue}`,
-  );
-  const more = matches.length > shown.length ? `\n…and ${matches.length - shown.length} more.` : '';
-  const head = `Here ${matches.length === 1 ? 'is' : 'are'} ${matches.length} event${
-    matches.length === 1 ? '' : 's'
-  } ${label}:`;
+  const shown = sorted.slice(0, biggestFirst ? 8 : 6);
+  const lines = shown.map((e) => {
+    const crowd = turnoutLabel(e);
+    return `• ${e.title} · ${typeOf(e)} · ${formatEventDate(e.startsAt)} · ${e.venue}${
+      crowd ? ` · ~${crowd}` : ''
+    }`;
+  });
+  const more = sorted.length > shown.length ? `\n…and ${sorted.length - shown.length} more.` : '';
+  const head = biggestFirst
+    ? `Biggest on the map ${label}:`
+    : `Here ${sorted.length === 1 ? 'is' : 'are'} ${sorted.length} event${
+        sorted.length === 1 ? '' : 's'
+      } ${label}:`;
   const tail = '\n\nWant a reminder or a calendar entry for any of these? Tap a button below.';
-  return { text: `${head}\n${lines.join('\n')}${more}${tail}`, offer: shown.slice(0, 3) };
+  const offerPool = sorted.filter((e) => eventStatus(e) !== 'finished');
+  return {
+    text: `${head}\n${lines.join('\n')}${more}${tail}`,
+    offer: (offerPool.length ? offerPool : shown).slice(0, 3),
+  };
 }
 
-export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToCalendar }: Props) {
+function londonStamp(iso?: string): string {
+  if (!iso) return 'n/a';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toLocaleString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Europe/London',
+  });
+}
+
+function eventStartMs(e: AppEvent): number {
+  const t = Date.parse(e.realStartAt || e.startsAt);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function eventEndMs(e: AppEvent): number {
+  const t = Date.parse(e.estimatedFinishAt || e.endsAt || e.realStartAt || e.startsAt);
+  return Number.isFinite(t) ? t : eventStartMs(e);
+}
+
+function eventStatus(e: AppEvent, now = Date.now()): 'live' | 'upcoming' | 'finished' {
+  const start = eventStartMs(e);
+  const end = eventEndMs(e);
+  if (end < now - 15 * 60 * 1000) return 'finished';
+  if (start <= now) return 'live';
+  return 'upcoming';
+}
+
+function londonHour(now: Date = new Date()): number {
+  return Number.parseInt(
+    now.toLocaleString('en-GB', {
+      hour: '2-digit',
+      hour12: false,
+      timeZone: 'Europe/London',
+    }),
+    10,
+  );
+}
+
+function byDemandThenTime(a: AppEvent, b: AppEvent): number {
+  const d = demandScore(b) - demandScore(a);
+  if (d !== 0) return d;
+  return Date.parse(a.startsAt) - Date.parse(b.startsAt);
+}
+
+function byFreshThenDemand(a: AppEvent, b: AppEvent): number {
+  const rank = { live: 0, upcoming: 1, finished: 2 };
+  const d = rank[eventStatus(a)] - rank[eventStatus(b)];
+  if (d !== 0) return d;
+  return byDemandThenTime(a, b);
+}
+
+/** Prefer stadium / featured events in the asked window so the model sees the big nights. */
+function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
+  const q = question.toLowerCase();
+  const tonightAsk = /\b(today|tonight|now|going on)\b/.test(q);
+  const win = resolveWindow(q);
+  const range =
+    win?.range ??
+    (looksLikeBigQuery(q)
+      ? { start: rangeFor('today').start, end: rangeFor('day:6').end }
+      : rangeFor('next3'));
+  const inWindow = all.filter(
+    (e) =>
+      isInRange(e.startsAt, range) ||
+      (e.realStartAt ? isInRange(e.realStartAt, range) : false),
+  );
+  const useful = tonightAsk
+    ? inWindow.filter(
+        (e) =>
+          eventStatus(e) !== 'finished' ||
+          e.source === 'featured' ||
+          demandScore(e) >= 15000,
+      )
+    : inWindow;
+  const windowIds = new Set(useful.map((e) => e.id));
+  const rankedWindow = [...useful].sort(tonightAsk ? byFreshThenDemand : byDemandThenTime);
+  let nextUp: AppEvent[] = [];
+  if (tonightAsk && londonHour() >= 21) {
+    const tomorrow = rangeFor('tomorrow');
+    nextUp = all
+      .filter(
+        (e) =>
+          !windowIds.has(e.id) &&
+          (isInRange(e.startsAt, tomorrow) ||
+            (e.realStartAt ? isInRange(e.realStartAt, tomorrow) : false)),
+      )
+      .sort(byDemandThenTime)
+      .slice(0, 8);
+  }
+  const rest = all.filter((e) => !windowIds.has(e.id)).sort(byDemandThenTime);
+  const seen = new Set<string>();
+  const out: AppEvent[] = [];
+  for (const e of [...rankedWindow, ...nextUp, ...rest]) {
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    out.push(e);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+function looksLikeEmptyAgentReply(text: string): boolean {
+  return /don.?t have|not in front of me|premium feature|premium view|as a free user|tonight.?s what i can|none in context/i.test(
+    text,
+  );
+}
+
+function mentionsEvent(text: string, e: AppEvent): boolean {
+  const t = text.toLowerCase();
+  const title = e.title.toLowerCase();
+  const venue = e.venue.toLowerCase();
+  if (title.length >= 6 && t.includes(title.slice(0, 16))) return true;
+  const words = title.split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
+  const venueHit = venue.length >= 5 && t.includes(venue.slice(0, 14));
+  return venueHit && words.some((w) => t.includes(w));
+}
+
+export function AISupportSheet({
+  visible,
+  onClose,
+  events,
+  incidents,
+  lines,
+  onSaveEvent,
+  onAddToCalendar,
+}: Props) {
   const { requireAccount } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -310,6 +477,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
     },
   ]);
   const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
   // Free plan: FREE_DAILY_LIMIT questions/day; Premium unlimited. Reloaded each
   // open so the counter is always current.
   const [quota, setQuota] = useState<AiQuota | null>(null);
@@ -319,6 +487,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
     if (!visible) return;
     trackScreen('ai_support_sheet');
     getAiQuota().then(setQuota);
+    void syncPremiumEntitlement();
   }, [visible]);
   // SafeAreaView's top edge doesn't apply reliably inside a Modal, which left
   // the header (and the close button) jammed under the status bar. Read the
@@ -360,57 +529,209 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
 
   const send = (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || sending) return;
 
     requireAccount('ai_question', () => {
       const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
-
-      // Daily quota gate — free plan only.
-      if (quota && !quota.pro && quota.remaining <= 0) {
-        track('ai_question_blocked_limit', { tier: 'free' });
-        setMessages((prev) => [
-          ...prev,
-          userMsg,
-          {
-            id: `b-${Date.now()}`,
-            role: 'bot',
-            text: `You have used all ${FREE_DAILY_LIMIT} free questions for today. They reset at midnight. DriveIQ Premium includes unlimited AI questions.`,
-            actions: [
-              {
-                label: 'See DriveIQ Premium',
-                icon: 'star-outline',
-                onPress: () => showProPaywall('Unlimited AI questions'),
-              },
-            ],
-          },
-        ]);
-        setInput('');
-        setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
-        return;
-      }
+      const thinkingId = `b-${Date.now()}-think`;
       track('ai_question_asked', {
         tier: quota?.pro ? 'premium' : 'free',
         remaining_before: quota?.remaining,
       });
-      void consumeAiQuestion().then(setQuota);
 
       const eventResult =
         events && events.length > 0
           ? answerNamedTimeQuery(trimmed, events) ?? answerEventQuery(trimmed, events)
           : null;
 
-      const botMsg: ChatMessage = eventResult
-        ? {
-            id: `b-${Date.now()}`,
-            role: 'bot',
-            text: eventResult.text,
-            actions: eventResult.offer.length ? buildActions(eventResult.offer) : undefined,
-          }
-        : { id: `b-${Date.now()}`, role: 'bot', text: localAnswer(trimmed) };
-
-      setMessages((prev) => [...prev, userMsg, botMsg]);
+      setSending(true);
+      setMessages((prev) => [
+        ...prev,
+        userMsg,
+        { id: thinkingId, role: 'bot', text: 'Checking live London data…' },
+      ]);
       setInput('');
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+
+      void (async () => {
+        const replaceThinking = (msg: ChatMessage) => {
+          setMessages((prev) => prev.filter((m) => m.id !== thinkingId).concat(msg));
+        };
+        try {
+          const history = messages
+            .filter((m) => m.id !== 'welcome' && !m.id.endsWith('-think'))
+            .slice(-8)
+            .map((m) => ({
+              role: m.role === 'bot' ? ('assistant' as const) : ('user' as const),
+              text: m.text,
+            }))
+            .filter((m) => {
+              const t = m.text.trim();
+              if (!t) return false;
+              // Earlier empty-context replies poison the next turn.
+              if (m.role === 'assistant' && looksLikeEmptyAgentReply(t)) {
+                return false;
+              }
+              return true;
+            });
+
+          const picked = eventsForAgent(trimmed, events ?? []);
+          const source =
+            picked.length > 0 ? picked : [...(events ?? [])].sort(byDemandThenTime).slice(0, 50);
+          const clientEvents = source.map((e) => ({
+            title: e.title,
+            venue: e.venue,
+            kind: typeOf(e),
+            startsAt: londonStamp(e.realStartAt || e.startsAt),
+            endsAt: londonStamp(e.estimatedFinishAt || e.endsAt),
+            turnout: turnoutLabel(e),
+            featured: e.source === 'featured',
+            copy: e.copyLine?.slice(0, 140),
+            status: eventStatus(e),
+          }));
+          const clientRoads = (incidents ?? []).length
+            ? (incidents ?? []).slice(0, 20).map((inc) =>
+                incidentRoadLine(inc, inc.location || inc.category || 'London'),
+              )
+            : ['No major road incidents in the current London snapshot.'];
+          const disrupted = (lines ?? []).filter((l) => l.severityBucket !== 'good');
+          const clientRails = disrupted.length
+            ? disrupted
+                .slice(0, 20)
+                .map((l) =>
+                  [l.name, l.statusDescription, l.reason].filter(Boolean).join(' · '),
+                )
+            : (lines ?? []).length
+              ? [
+                  'No current tube/rail disruptions in the snapshot.',
+                  ...(lines ?? [])
+                    .slice(0, 8)
+                    .map((l) => `${l.name} · ${l.statusDescription}`),
+                ]
+              : [];
+
+          const pro = await hasProAccess();
+          console.log('[agent] live context', {
+            question: trimmed,
+            mapEventCount: events?.length ?? 0,
+            pickedCount: picked.length,
+            sendingCount: clientEvents.length,
+            titles: clientEvents.slice(0, 8).map((e) => e.title),
+            featuredCount: source.filter((e) => e.source === 'featured').length,
+            premium: pro,
+          });
+
+          const res = await askDriveiqAgent(trimmed, history, {
+            events: clientEvents,
+            roads: clientRoads,
+            rails: clientRails,
+            premium: pro,
+            clockLondon: londonStamp(new Date().toISOString()),
+          });
+          const serverLimit = res.limit;
+          const serverRemaining = res.remaining;
+          if (serverLimit != null) {
+            setQuota((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    limit: serverLimit,
+                    remaining: serverRemaining ?? prev.remaining,
+                    used: serverLimit - (serverRemaining ?? prev.remaining),
+                  }
+                : prev,
+            );
+          }
+
+          if (res.capped) {
+            track('ai_question_blocked_limit', { tier: 'free' });
+            replaceThinking({
+              id: `b-${Date.now()}-cap`,
+              role: 'bot',
+              text: res.answer,
+              model: res.model,
+              actions: [
+                {
+                  label: 'See DriveIQ Premium',
+                  icon: 'star-outline',
+                  onPress: () => showProPaywall('Unlimited AI questions'),
+                },
+              ],
+            });
+          } else {
+            let answer = res.answer;
+            const leaders = source.filter(
+              (e) => e.source === 'featured' || demandScore(e) >= 15000,
+            ).slice(0, 3);
+            if (
+              eventResult &&
+              eventResult.offer.length > 0 &&
+              looksLikeEmptyAgentReply(answer)
+            ) {
+              console.warn('[agent] overriding refusal with local events', {
+                titles: eventResult.offer.map((e) => e.title),
+                answerPreview: answer.slice(0, 160),
+              });
+              answer = eventResult.text;
+            } else if (
+              leaders.length > 0 &&
+              !leaders.some((e) => mentionsEvent(answer, e))
+            ) {
+              const extra = leaders
+                .map((e) => {
+                  const crowd = turnoutLabel(e);
+                  return `${e.title} at ${e.venue}, ${formatEventDate(e.realStartAt || e.startsAt)}${
+                    crowd ? `, around ${crowd}` : ''
+                  }`;
+                })
+                .join('. ');
+              console.warn('[agent] prepending missed big events', {
+                titles: leaders.map((e) => e.title),
+              });
+              answer = `Biggest on the map: ${extra}.\n\n${answer}`;
+            }
+            replaceThinking({
+              id: `b-${Date.now()}-live`,
+              role: 'bot',
+              text: answer,
+              model: res.model,
+              actions: (() => {
+                const named = source.filter(
+                  (e) => mentionsEvent(answer, e) && eventStatus(e) !== 'finished',
+                );
+                const fallback = (eventResult?.offer ?? []).filter(
+                  (e) => eventStatus(e) !== 'finished',
+                );
+                const offer = (named.length ? named : fallback).slice(0, 3);
+                return offer.length ? buildActions(offer) : undefined;
+              })(),
+            });
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn('[agent] askDriveiqAgent failed', message, err);
+          if (eventResult && eventResult.offer.length > 0) {
+            replaceThinking({
+              id: `b-${Date.now()}-local`,
+              role: 'bot',
+              text: eventResult.text,
+              actions: buildActions(eventResult.offer),
+            });
+          } else {
+            replaceThinking({
+              id: `b-${Date.now()}-fallback`,
+              role: 'bot',
+              text:
+                message.toLowerCase().includes('unauth') || message.includes('Sign in required')
+                  ? 'Your session expired for AI requests. Please sign out and sign back in, then ask again.'
+                  : 'I could not reach the live DriveIQ assistant just now. Make sure you are signed in and online, then try again.',
+            });
+          }
+        } finally {
+          setSending(false);
+          setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+        }
+      })();
     });
   };
 
@@ -431,7 +752,7 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
                   ? 'Here to help you get around'
                   : quota.pro
                     ? 'Premium · unlimited questions'
-                    : `${quota.remaining} of ${FREE_DAILY_LIMIT} free questions left today`}
+                    : `${quota.remaining} of ${quota.limit} free questions left today`}
               </Text>
             </View>
           </View>
@@ -462,9 +783,8 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
                     style={[
                       styles.bubbleText,
                       m.role === 'user' && styles.userBubbleText,
-                    ]}
-                  >
-                    {m.text}
+                    ]}>
+                    {renderRichText(m.text)}
                   </Text>
                 </View>
                 {m.actions && m.actions.length > 0 ? (
@@ -514,8 +834,8 @@ export function AISupportSheet({ visible, onClose, events, onSaveEvent, onAddToC
             />
             <Pressable
               onPress={() => send(input)}
-              style={[styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
-              disabled={!input.trim()}
+              style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
+              disabled={!input.trim() || sending}
               accessibilityLabel="Send message"
             >
               <Ionicons name="arrow-up" size={20} color={colors.textOnPrimary} />
@@ -617,6 +937,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: colors.textPrimary,
+  },
+  boldInline: {
+    fontWeight: '700',
   },
   userBubbleText: {
     color: colors.textOnPrimary,
