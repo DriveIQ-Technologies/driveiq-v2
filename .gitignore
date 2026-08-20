@@ -14,6 +14,8 @@ web-build/
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+bun.lock
+bun.lockb
 .DS_Store
 *.log
 functions/node_modules/

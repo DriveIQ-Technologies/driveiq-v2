@@ -38,5 +38,6 @@
     "firebase-tools": "^15.27.0",
     "typescript": "~5.9.2"
   },
-  "private": true
+  "private": true,
+  "packageManager": "npm@10.9.2"
 }
