@@ -158,8 +158,19 @@ export function AuthSheet({
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 24 }}
           >
-            <View style={styles.brandBadge}>
-              <Ionicons name="navigate" size={24} color={colors.textOnPrimary} />
+            <View style={styles.topRow}>
+              <View style={styles.brandBadge}>
+                <Ionicons name="navigate" size={24} color={colors.textOnPrimary} />
+              </View>
+              <Pressable
+                onPress={quietSkip ? handleSkip : onClose}
+                hitSlop={12}
+                style={styles.closeBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Ionicons name="close" size={22} color={colors.textSecondary} />
+              </Pressable>
             </View>
             <Text style={styles.title}>
               {isSignup ? 'Create your account' : 'Welcome back'}
@@ -171,6 +182,17 @@ export function AuthSheet({
                   ? 'Save events, sync preferences, and get personalised alerts.'
                   : 'Sign in to sync your saved events and alert preferences.'}
             </Text>
+
+            {reason ? (
+              <View style={styles.gateNote}>
+                <Ionicons name="checkmark-circle" size={15} color={colors.primary} />
+                <Text style={styles.gateNoteText}>
+                  A free account covers saves, alerts and the AI event guide.
+                  Premium adds unlimited AI, full-day flight boards and every
+                  saved station.
+                </Text>
+              </View>
+            ) : null}
 
             {/* Segmented toggle */}
             <View style={styles.segment}>
@@ -256,7 +278,7 @@ export function AuthSheet({
                 <ActivityIndicator color={colors.textOnPrimary} />
               ) : (
                 <Text style={styles.primaryText}>
-                  {isSignup ? 'Create account' : 'Sign in'}
+                  {isSignup ? 'Create free account' : 'Sign in'}
                 </Text>
               )}
             </Pressable>
@@ -323,6 +345,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     marginBottom: 14,
   },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  closeBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
+  },
   brandBadge: {
     width: 52,
     height: 52,
@@ -343,6 +378,22 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     lineHeight: 20,
     marginBottom: 18,
+  },
+  gateNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+    marginBottom: 16,
+  },
+  gateNoteText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    fontWeight: '500',
   },
   segment: {
     flexDirection: 'row',

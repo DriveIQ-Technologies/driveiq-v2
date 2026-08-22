@@ -11,9 +11,12 @@ import {
   View,
 } from 'react-native';
 
+import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import {
+  DEFAULT_PREFS,
+  effectivePrefs,
   ensurePermission,
   loadLineSubscriptions,
   loadPrefs,
@@ -69,6 +72,7 @@ const ROWS: Row[] = [
 ];
 
 export function NotificationSettingsPanel({ visible, onClose }: Props) {
+  const { hasAccount, requireAccount } = useAuth();
   const [prefs, setPrefs] = useState<NotificationPrefs | null>(null);
   const [lines, setLines] = useState<LineStatus[]>([]);
   const [lineSubs, setLineSubs] = useState<LineSubscriptions>({});
@@ -76,10 +80,13 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
 
   useEffect(() => {
     if (!visible) return;
-    trackScreen('notification_settings');
+    trackScreen('notification_settings', { has_account: hasAccount });
     loadPrefs().then(setPrefs);
     loadLineSubscriptions().then(setLineSubs);
-    ensurePermission();
+    // Don't ask for the OS permission until there's an account to attach the
+    // alerts to — otherwise we burn the one-shot iOS prompt on a session that
+    // can't receive anything yet.
+    if (hasAccount) ensurePermission();
 
     // Fetch the live line list so the per-line toggle column always reflects
     // every currently-active TfL line (new operators show up automatically).
@@ -87,11 +94,47 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
     fetchLineStatuses()
       .then(setLines)
       .finally(() => setLinesLoading(false));
-  }, [visible]);
+  }, [visible, hasAccount]);
 
   if (!visible) return null;
 
+  // Signed out / anonymous: every switch reads off no matter what storage says.
+  const shownPrefs = effectivePrefs(prefs, hasAccount);
+
+  /** Runs after signup: switch the channel on for real and ask for permission. */
+  const enableChannelAfterSignup = async (key: NotificationChannel) => {
+    const current = await loadPrefs();
+    const next = { ...current, [key]: true };
+    await savePrefs(next);
+    setPrefs(next);
+    await ensurePermission();
+    track('notification_channel_toggled', {
+      channel: key,
+      enabled: true,
+      after_signup: true,
+    });
+  };
+
+  /** Runs after signup from the banner: turn the standard set on. */
+  const enableDefaultsAfterSignup = async () => {
+    const next = { ...DEFAULT_PREFS };
+    await savePrefs(next);
+    setPrefs(next);
+    await ensurePermission();
+    track('notification_defaults_enabled', { after_signup: true });
+  };
+
+  const promptForAccount = (key?: NotificationChannel) => {
+    requireAccount('notify', () => {
+      void (key ? enableChannelAfterSignup(key) : enableDefaultsAfterSignup());
+    });
+  };
+
   const toggle = (key: NotificationChannel) => {
+    if (!hasAccount) {
+      promptForAccount(key);
+      return;
+    }
     if (!prefs) return;
     const next = { ...prefs, [key]: !prefs[key] };
     setPrefs(next);
@@ -100,6 +143,10 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
   };
 
   const toggleLine = (lineId: string) => {
+    if (!hasAccount) {
+      promptForAccount('line-closures');
+      return;
+    }
     const next: LineSubscriptions = { ...lineSubs };
     next[lineId] = !next[lineId];
     // Drop the key entirely when toggled off so the "empty = all lines"
@@ -126,7 +173,9 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Notifications</Text>
             <Text style={styles.subtitle}>
-              Choose what DriveIQ should ping you about
+              {hasAccount
+                ? 'Choose what DriveIQ should ping you about'
+                : 'Create a free account to switch these on'}
             </Text>
           </View>
           <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button">
@@ -135,6 +184,29 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
         </View>
 
         <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+          {!hasAccount ? (
+            <View style={styles.gateCard}>
+              <View style={styles.gateIcon}>
+                <Ionicons name="lock-closed" size={18} color={colors.primaryDark} />
+              </View>
+              <Text style={styles.gateTitle}>Notifications need an account</Text>
+              <Text style={styles.gateBody}>
+                Alerts are turned off because there is nowhere to send them yet.
+                Create a free account and DriveIQ can ping you about road
+                closures, tube and rail disruption, events you save, and flights
+                you watch. Tap any switch below to get started.
+              </Text>
+              <Pressable
+                onPress={() => promptForAccount()}
+                style={styles.gateBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Create a free account to turn on notifications"
+              >
+                <Text style={styles.gateBtnText}>Create free account</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           {ROWS.map((row) => (
             <View key={row.key} style={styles.row}>
               <View style={styles.rowIcon}>
@@ -145,17 +217,22 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
                 <Text style={styles.rowBody}>{row.body}</Text>
               </View>
               <Switch
-                value={!!prefs?.[row.key]}
+                value={shownPrefs[row.key]}
                 onValueChange={() => toggle(row.key)}
                 trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor={colors.surface}
+                accessibilityLabel={
+                  hasAccount
+                    ? row.title
+                    : `${row.title}. Create a free account to turn this on.`
+                }
               />
             </View>
           ))}
 
           {/* Per-line subscription list. Only revealed when "Train & tube
               disruptions" is on — otherwise the toggles would do nothing. */}
-          {prefs?.['line-closures'] ? (
+          {shownPrefs['line-closures'] ? (
             <View style={styles.linesBlock}>
               <Text style={styles.linesHeader}>Subscribed lines</Text>
               <Text style={styles.linesSubheader}>
@@ -232,6 +309,47 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
   subtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
   body: { marginTop: 14 },
+  gateCard: {
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.featured,
+    marginBottom: 14,
+  },
+  gateIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  gateTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  gateBody: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  gateBtn: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: colors.primary,
+  },
+  gateBtnText: {
+    color: colors.textOnPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

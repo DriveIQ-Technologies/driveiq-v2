@@ -66,5 +66,21 @@ target 'DriveIQ' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # With ios.useFrameworks=static, CocoaPods embeds hermesvm + ReactNativeDependencies
+    # but skips the dynamic React.framework from React-Core-prebuilt, which then crashes
+    # at launch (dyld: Library not loaded @rpath/React.framework/React).
+    frameworks_script = File.join(__dir__, 'Pods/Target Support Files/Pods-DriveIQ/Pods-DriveIQ-frameworks.sh')
+    if File.exist?(frameworks_script)
+      contents = File.read(frameworks_script)
+      react_line = '  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/React-Core-prebuilt/React.framework"'
+      unless contents.include?(react_line)
+        patched = contents.gsub(
+          /(if \[\[ "\$CONFIGURATION" == "(?:Debug|Release)" \]\]; then\n)/,
+          "\\1#{react_line}\n"
+        )
+        File.write(frameworks_script, patched) if patched != contents
+      end
+    end
   end
 end

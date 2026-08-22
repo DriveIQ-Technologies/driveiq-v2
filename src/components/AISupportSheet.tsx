@@ -8,7 +8,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import {
@@ -38,6 +37,16 @@ import {
   type DateRange,
 } from '@/utils/dateFilters';
 import { turnoutRange, venueProfileFor } from '@/data/venueProfiles';
+import { ChatComposer } from '@/components/ai/ChatComposer';
+import { EmptyHero, type PromptCard } from '@/components/ai/EmptyHero';
+import { EventSectionBlock } from '@/components/ai/EventSectionBlock';
+import {
+  buildEventSummary,
+  groupEventsByDay,
+  type EventDaySection,
+} from '@/components/ai/eventPresentation';
+import { SearchStatus } from '@/components/ai/SearchStatus';
+import { SuggestionChips } from '@/components/ai/SuggestionChips';
 
 interface Props {
   visible: boolean;
@@ -65,6 +74,8 @@ interface ChatMessage {
   /** Optional tappable actions rendered under a bot bubble. */
   actions?: ChatAction[];
   model?: 'haiku' | 'sonnet' | null;
+  eventSections?: EventDaySection[];
+  isLoading?: boolean;
 }
 
 /**
@@ -75,10 +86,43 @@ interface ChatMessage {
  */
 
 const SUGGESTIONS = [
+  "What's on tonight?",
+  'Biggest events this weekend',
   'What events are on tomorrow?',
-  'Anything on this weekend?',
-  'What do the coloured pins mean?',
+  'Sports this week',
+  'Any road delays near me?',
   'How do notifications work?',
+];
+
+const PROMPT_CARDS: PromptCard[] = [
+  {
+    id: 'tonight',
+    label: "What's on tonight?",
+    prompt: "What's on tonight?",
+    icon: 'moon-outline',
+    tint: colors.primary,
+  },
+  {
+    id: 'weekend',
+    label: 'Biggest this weekend',
+    prompt: 'Biggest events this weekend',
+    icon: 'flame-outline',
+    tint: colors.accent,
+  },
+  {
+    id: 'sports',
+    label: 'Sports this week',
+    prompt: 'Sports this week',
+    icon: 'football-outline',
+    tint: colors.sports,
+  },
+  {
+    id: 'roads',
+    label: 'Road & rail delays',
+    prompt: 'Any road or tube delays affecting London right now?',
+    icon: 'car-outline',
+    tint: '#0D9488',
+  },
 ];
 
 // ── Event question handling ────────────────────────────────────────────────
@@ -449,6 +493,22 @@ function looksLikeEmptyAgentReply(text: string): boolean {
   );
 }
 
+function looksLikeEventQuestion(q: string): boolean {
+  const lower = q.toLowerCase();
+  return (
+    EVENT_WORDS.some((w) => lower.includes(w)) ||
+    looksLikeBigQuery(lower) ||
+    resolveWindow(lower) !== null
+  );
+}
+
+function summaryForCards(answer: string, sections: EventDaySection[]): string {
+  if (!sections.length) return answer;
+  const first = answer.split(/\n\n/)[0]?.trim() ?? '';
+  if (first && first.length <= 220 && !first.startsWith('•')) return first;
+  return buildEventSummary(sections);
+}
+
 function mentionsEvent(text: string, e: AppEvent): boolean {
   const t = text.toLowerCase();
   const title = e.title.toLowerCase();
@@ -469,15 +529,10 @@ export function AISupportSheet({
   onAddToCalendar,
 }: Props) {
   const { requireAccount } = useAuth();
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'welcome',
-      role: 'bot',
-      text: 'Hi! I’m DriveIQ AI Support. Ask me what events are on (try “what’s on tomorrow?”) and I can set reminders or add them to your calendar. I can also help with how anything in the app works.',
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const isEmpty = messages.length === 0;
   // Free plan: FREE_DAILY_LIMIT questions/day; Premium unlimited. Reloaded each
   // open so the counter is always current.
   const [quota, setQuota] = useState<AiQuota | null>(null);
@@ -548,7 +603,7 @@ export function AISupportSheet({
       setMessages((prev) => [
         ...prev,
         userMsg,
-        { id: thinkingId, role: 'bot', text: 'Checking live London data…' },
+        { id: thinkingId, role: 'bot', text: '', isLoading: true },
       ]);
       setInput('');
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
@@ -559,7 +614,7 @@ export function AISupportSheet({
         };
         try {
           const history = messages
-            .filter((m) => m.id !== 'welcome' && !m.id.endsWith('-think'))
+            .filter((m) => !m.id.endsWith('-think') && !m.isLoading)
             .slice(-8)
             .map((m) => ({
               role: m.role === 'bot' ? ('assistant' as const) : ('user' as const),
@@ -578,6 +633,11 @@ export function AISupportSheet({
           const picked = eventsForAgent(trimmed, events ?? []);
           const source =
             picked.length > 0 ? picked : [...(events ?? [])].sort(byDemandThenTime).slice(0, 50);
+          const cardEvents = source.filter((e) => eventStatus(e) !== 'finished').slice(0, 24);
+          const eventSections =
+            looksLikeEventQuestion(trimmed) && cardEvents.length > 0
+              ? groupEventsByDay(cardEvents)
+              : undefined;
           const clientEvents = source.map((e) => ({
             title: e.title,
             venue: e.venue,
@@ -693,9 +753,10 @@ export function AISupportSheet({
             replaceThinking({
               id: `b-${Date.now()}-live`,
               role: 'bot',
-              text: answer,
+              text: summaryForCards(answer, eventSections ?? []),
               model: res.model,
-              actions: (() => {
+              eventSections,
+              actions: eventSections?.length ? undefined : (() => {
                 const named = source.filter(
                   (e) => mentionsEvent(answer, e) && eventStatus(e) !== 'finished',
                 );
@@ -711,11 +772,15 @@ export function AISupportSheet({
           const message = err instanceof Error ? err.message : String(err);
           console.warn('[agent] askDriveiqAgent failed', message, err);
           if (eventResult && eventResult.offer.length > 0) {
+            const localSections = groupEventsByDay(
+              eventResult.offer.filter((e) => eventStatus(e) !== 'finished'),
+            );
             replaceThinking({
               id: `b-${Date.now()}-local`,
               role: 'bot',
-              text: eventResult.text,
-              actions: buildActions(eventResult.offer),
+              text: summaryForCards(eventResult.text, localSections),
+              eventSections: localSections.length ? localSections : undefined,
+              actions: localSections.length ? undefined : buildActions(eventResult.offer),
             });
           } else {
             replaceThinking({
@@ -735,29 +800,51 @@ export function AISupportSheet({
     });
   };
 
+  const handleRemind = (event: AppEvent) => {
+    if (!onSaveEvent) return;
+    onSaveEvent(event);
+    track('ai_event_action_tapped', { action: 'remind', source: 'card' });
+    pushBot(`Reminder set for “${event.title}”. I’ll nudge you an hour before it starts.`);
+  };
+
+  const handleCalendar = (event: AppEvent) => {
+    if (!onAddToCalendar) return;
+    onAddToCalendar(event);
+    track('ai_event_action_tapped', { action: 'calendar', source: 'card' });
+    pushBot(`Added “${event.title}” to your calendar.`);
+  };
+
+  const quotaLabel =
+    quota == null
+      ? 'London events · roads · travel'
+      : quota.pro
+        ? 'Premium · unlimited questions'
+        : `${quota.remaining} free question${quota.remaining === 1 ? '' : 's'} left today`;
+
+  const pickPrompt = (prompt: string) => {
+    track('ai_suggestion_tapped', { suggestion: prompt });
+    send(prompt);
+  };
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       {/* Own provider: root insets don't reach a native Modal window. */}
       <SafeAreaProvider>
       <SafeAreaView style={styles.root} edges={['bottom']}>
-        <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 6 }]}>
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 4 }]}>
           <View style={styles.headerLeft}>
-            <View style={styles.botBadge}>
+            <View style={styles.logoMark}>
               <Ionicons name="sparkles" size={16} color={colors.textOnPrimary} />
             </View>
-            <View>
-              <Text style={styles.headerTitle}>DriveIQ AI Support</Text>
-              <Text style={styles.headerSub}>
-                {quota == null
-                  ? 'Here to help you get around'
-                  : quota.pro
-                    ? 'Premium · unlimited questions'
-                    : `${quota.remaining} of ${quota.limit} free questions left today`}
+            <View style={styles.headerCopy}>
+              <Text style={styles.appTitle}>AI Event Guide</Text>
+              <Text style={styles.appSubtitle} numberOfLines={1}>
+                {quotaLabel}
               </Text>
             </View>
           </View>
-          <Pressable onPress={onClose} hitSlop={12}>
-            <Ionicons name="close" size={24} color={colors.textSecondary} />
+          <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
+            <Ionicons name="close" size={22} color={colors.textSecondary} />
           </Pressable>
         </View>
 
@@ -769,78 +856,98 @@ export function AISupportSheet({
           <ScrollView
             ref={scrollRef}
             style={styles.thread}
-            contentContainerStyle={styles.threadContent}
+            contentContainerStyle={[
+              styles.threadContent,
+              isEmpty && styles.threadContentEmpty,
+            ]}
+            keyboardShouldPersistTaps="handled"
           >
-            {messages.map((m) => (
-              <View key={m.id} style={styles.msgGroup}>
+            {isEmpty ? (
+              <EmptyHero cards={PROMPT_CARDS} onSelect={pickPrompt} />
+            ) : (
+              messages.map((m) => (
                 <View
+                  key={m.id}
                   style={[
-                    styles.bubble,
-                    m.role === 'user' ? styles.userBubble : styles.botBubble,
+                    styles.msgGroup,
+                    m.role === 'user' ? styles.msgGroupUser : styles.msgGroupBot,
                   ]}
                 >
-                  <Text
+                  {m.role === 'bot' ? (
+                    <View style={styles.avatar}>
+                      <Ionicons name="sparkles" size={12} color={colors.textOnPrimary} />
+                    </View>
+                  ) : null}
+                  <View
                     style={[
-                      styles.bubbleText,
-                      m.role === 'user' && styles.userBubbleText,
-                    ]}>
-                    {renderRichText(m.text)}
-                  </Text>
-                </View>
-                {m.actions && m.actions.length > 0 ? (
-                  <View style={styles.actionsRow}>
-                    {m.actions.map((a, i) => (
-                      <Pressable
-                        key={`${m.id}-a-${i}`}
-                        style={styles.actionChip}
-                        onPress={a.onPress}
-                        accessibilityRole="button"
-                        accessibilityLabel={a.label}
-                      >
-                        <Ionicons name={a.icon} size={14} color={colors.primary} />
-                        <Text style={styles.actionChipText}>{a.label}</Text>
-                      </Pressable>
-                    ))}
+                      styles.msgBody,
+                      m.role === 'user' ? styles.msgBodyUser : styles.msgBodyBot,
+                    ]}
+                  >
+                    {m.isLoading ? (
+                      <SearchStatus />
+                    ) : (
+                      <>
+                        {m.text ? (
+                          <View
+                            style={[
+                              styles.bubble,
+                              m.role === 'user' ? styles.userBubble : styles.botBubble,
+                              m.eventSections?.length ? styles.summaryBubble : null,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.bubbleText,
+                                m.role === 'user' && styles.userBubbleText,
+                                m.eventSections?.length ? styles.summaryText : null,
+                              ]}
+                            >
+                              {renderRichText(m.text)}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {m.eventSections?.map((section) => (
+                          <EventSectionBlock
+                            key={`${m.id}-${section.key}`}
+                            section={section}
+                            onRemind={onSaveEvent ? handleRemind : undefined}
+                            onCalendar={onAddToCalendar ? handleCalendar : undefined}
+                          />
+                        ))}
+                        {m.actions && m.actions.length > 0 ? (
+                          <View style={styles.actionsRow}>
+                            {m.actions.map((a, i) => (
+                              <Pressable
+                                key={`${m.id}-a-${i}`}
+                                style={styles.actionChip}
+                                onPress={a.onPress}
+                                accessibilityRole="button"
+                                accessibilityLabel={a.label}
+                              >
+                                <Ionicons name={a.icon} size={14} color={colors.textPrimary} />
+                                <Text style={styles.actionChipText}>{a.label}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        ) : null}
+                      </>
+                    )}
                   </View>
-                ) : null}
-              </View>
-            ))}
-
-            <View style={styles.suggestionWrap}>
-              {SUGGESTIONS.map((s) => (
-                <Pressable
-                  key={s}
-                  style={styles.suggestion}
-                  onPress={() => {
-                    track('ai_suggestion_tapped', { suggestion: s });
-                    send(s);
-                  }}
-                >
-                  <Text style={styles.suggestionText}>{s}</Text>
-                </Pressable>
-              ))}
-            </View>
+                </View>
+              ))
+            )}
           </ScrollView>
 
-          <View style={styles.inputBar}>
-            <TextInput
-              style={styles.input}
-              placeholder="Ask DriveIQ…"
-              placeholderTextColor={colors.textSecondary}
-              value={input}
-              onChangeText={setInput}
-              onSubmitEditing={() => send(input)}
-              returnKeyType="send"
-            />
-            <Pressable
-              onPress={() => send(input)}
-              style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
-              disabled={!input.trim() || sending}
-              accessibilityLabel="Send message"
-            >
-              <Ionicons name="arrow-up" size={20} color={colors.textOnPrimary} />
-            </Pressable>
-          </View>
+          {!isEmpty ? (
+            <SuggestionChips items={SUGGESTIONS.slice(0, 4)} onSelect={pickPrompt} />
+          ) : null}
+          <ChatComposer
+            value={input}
+            onChange={setInput}
+            onSend={() => send(input)}
+            disabled={sending}
+          />
         </KeyboardAvoidingView>
       </SafeAreaView>
       </SafeAreaProvider>
@@ -851,14 +958,15 @@ export function AISupportSheet({
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingBottom: 12,
+    backgroundColor: colors.surface,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
@@ -866,8 +974,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    flex: 1,
+    paddingRight: 8,
   },
-  botBadge: {
+  headerCopy: {
+    flex: 1,
+  },
+  logoMark: {
     width: 34,
     height: 34,
     borderRadius: 17,
@@ -875,36 +988,79 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
+  appTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.2,
     color: colors.textPrimary,
   },
-  headerSub: {
+  appSubtitle: {
     fontSize: 12,
     color: colors.textSecondary,
+    marginTop: 1,
+  },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
   },
   thread: {
     flex: 1,
+    backgroundColor: colors.background,
   },
   threadContent: {
-    padding: 16,
-    gap: 10,
+    paddingHorizontal: 12,
+    paddingTop: 16,
+    paddingBottom: 12,
+    gap: 18,
+  },
+  threadContentEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingBottom: 24,
   },
   msgGroup: {
+    flexDirection: 'row',
     width: '100%',
+    gap: 8,
+  },
+  msgGroupUser: {
+    justifyContent: 'flex-end',
+  },
+  msgGroupBot: {
+    justifyContent: 'flex-start',
+  },
+  avatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  msgBody: {
+    gap: 8,
+  },
+  msgBodyBot: {
+    flex: 1,
+    maxWidth: '88%',
+  },
+  msgBodyUser: {
+    maxWidth: '82%',
   },
   bubble: {
-    maxWidth: '85%',
     paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 16,
+    paddingVertical: 11,
+    borderRadius: 18,
   },
   actionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginTop: 8,
     alignSelf: 'flex-start',
   },
   actionChip: {
@@ -914,28 +1070,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    backgroundColor: colors.primarySoft,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
   actionChipText: {
     fontSize: 13,
-    color: colors.primary,
-    fontWeight: '700',
+    color: colors.textPrimary,
+    fontWeight: '600',
   },
   botBubble: {
     alignSelf: 'flex-start',
     backgroundColor: colors.surfaceMuted,
-    borderBottomLeftRadius: 4,
+    borderTopLeftRadius: 6,
+  },
+  summaryBubble: {
+    backgroundColor: 'transparent',
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    maxWidth: '100%',
+  },
+  summaryText: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
   },
   userBubble: {
     alignSelf: 'flex-end',
     backgroundColor: colors.primary,
-    borderBottomRightRadius: 4,
+    borderTopRightRadius: 6,
   },
   bubbleText: {
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 15,
+    lineHeight: 22,
     color: colors.textPrimary,
   },
   boldInline: {
@@ -943,53 +1110,5 @@ const styles = StyleSheet.create({
   },
   userBubbleText: {
     color: colors.textOnPrimary,
-  },
-  suggestionWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 6,
-  },
-  suggestion: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  suggestionText: {
-    fontSize: 13,
-    color: colors.primary,
-    fontWeight: '600',
-  },
-  inputBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  input: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 22,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: 16,
-    fontSize: 14,
-    color: colors.textPrimary,
-  },
-  sendBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sendBtnDisabled: {
-    opacity: 0.4,
   },
 });

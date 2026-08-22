@@ -1,11 +1,20 @@
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Location from 'expo-location';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   Alert,
   AppState,
   Image,
+  InteractionManager,
   Platform,
   Pressable,
   StyleSheet,
@@ -165,8 +174,16 @@ const MAP_PROVIDER =
 const BRAND_LOGO = require('../assets/driveiq-logo.png');
 
 export default function MapScreen() {
-  const { requireAccount, accountPrompt, closeAccountPrompt, hasAccount, initializing } =
-    useAuth();
+  const {
+    requireAccount,
+    accountPrompt,
+    closeAccountPrompt,
+    hasAccount,
+    initializing,
+    registerSheetDismisser,
+    completedAction,
+    clearCompletedAction,
+  } = useAuth();
   const mapRef = useRef<MapView>(null);
   // Default to Today so the map opens on ~100 events, not all ~1,100 — far
   // less congested in central London. "All" is still available as a chip.
@@ -191,9 +208,11 @@ export default function MapScreen() {
   const [reportSheetOpen, setReportSheetOpen] = useState(false);
   const lastRegionRef = useRef<Region>(LONDON_REGION);
 
-  // Bumped once per completed gesture; passed to pins so any marker whose
-  // frozen bitmap rendered blank/clipped re-rasterises and heals itself.
+  // Bumped when the zoom level changes materially; passed to pins so any
+  // marker whose frozen bitmap rendered blank/clipped re-rasterises and heals
+  // itself. `rasterZoomRef` holds the zoom the last heal ran at.
   const [rasterEpoch, setRasterEpoch] = useState(0);
+  const rasterZoomRef = useRef(LONDON_REGION.latitudeDelta);
 
   // Committed viewport (updates when a pan/zoom gesture ENDS, not per frame).
   // Drives re-clustering of the venue pins.
@@ -247,8 +266,10 @@ export default function MapScreen() {
   });
 
   // Notification preferences — read once on mount, kept in state so the
-  // poll loop sees the latest opt-ins/outs.
+  // poll loop sees the latest opt-ins/outs. `hasAccountRef` mirrors the auth
+  // state so the loop can gate delivery without restarting the interval.
   const prefsRef = useRef<NotificationPrefs | null>(null);
+  const hasAccountRef = useRef(false);
   const [layers, setLayers] = useState<LayerVisibility>({
     events: true,
     traffic: false,
@@ -290,6 +311,62 @@ export default function MapScreen() {
   useEffect(() => {
     trackScreen('map_home');
   }, []);
+
+  // Close every presented sheet *except* the sidebar. The menu must stay
+  // reachable from first paint; gated actions only need other RN Modals
+  // dismissed so AuthSheet isn't stacked on top of another modal window.
+  const closeAllSheets = useCallback(() => {
+    setSelected(null);
+    setVenueEvents(null);
+    setSelectedIncident(null);
+    setFlightsAirport(null);
+    setStationHub(null);
+    setPickerDestination(null);
+    setReportSheetOpen(false);
+    setLayersOpen(false);
+    setConnectionsOpen(false);
+    setAirportsOpen(false);
+    setRoadsOpen(false);
+    setNotifSettingsOpen(false);
+    setHelpOpen(false);
+    setFeedbackOpen(false);
+    setAboutOpen(false);
+    setAiSupportOpen(false);
+    setAccountSheet((s) => ({ ...s, open: false }));
+  }, []);
+
+  useEffect(() => {
+    registerSheetDismisser(closeAllSheets);
+    return () => registerSheetDismisser(null);
+  }, [registerSheetDismisser, closeAllSheets]);
+
+  // Notifications are account-gated, so only ask the OS for permission once
+  // there's an account to attach them to, and re-read prefs across sign in /
+  // sign out so the poll loop stops or resumes with the right opt-ins.
+  useEffect(() => {
+    hasAccountRef.current = hasAccount;
+    let cancelled = false;
+    (async () => {
+      const prefs = await loadPrefs();
+      if (cancelled) return;
+      prefsRef.current = prefs;
+      if (hasAccount) await ensurePermission();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasAccount]);
+
+  // The AI sheet is the one surface we dismissed that the user can't get back
+  // to on their own, so reopen it once the account exists.
+  useEffect(() => {
+    if (!completedAction) return;
+    const action = completedAction;
+    clearCompletedAction();
+    if (action !== 'ai_question') return;
+    const id = setTimeout(() => setAiSupportOpen(true), 300);
+    return () => clearTimeout(id);
+  }, [completedAction, clearCompletedAction]);
 
   // After the walkthrough: Create account, with a quiet skip. Wait until
   // auth has settled so we don't flash this at people who already signed in.
@@ -359,9 +436,12 @@ export default function MapScreen() {
     return () => sub.remove();
   }, []);
 
-  // Load events: paint disk cache immediately (SWR), then refresh providers
-  // progressively so pins appear in seconds instead of waiting ~30s for TM.
+  // Load events AFTER splash/auth. Starting the provider fan-out during splash
+  // starved the JS thread and made the menu feel dead until pins finished.
+  // Splash covers the map while auth warms; events start once chrome is free.
   useEffect(() => {
+    if (showSplash) return;
+
     let cancelled = false;
     setLoading(true);
     setErrorMsg(null);
@@ -390,29 +470,44 @@ export default function MapScreen() {
       const cached = await loadCachedEvents();
       if (cancelled) return;
       if (cached?.length) {
-        setEvents(cached);
-        setLoading(false);
+        // Low-priority: don't block the menu / chrome while pins paint.
+        startTransition(() => {
+          setEvents(cached);
+          setLoading(false);
+        });
         console.log(`[events] painted ${cached.length} from disk cache`);
         track('events_cache_loaded', { count: cached.length });
       }
 
       try {
+        let lastPartialAt = 0;
         const list = await fetchAllEvents(rangeFor('all'), {
           onPartial: (partial) => {
             if (cancelled || partial.length === 0) return;
-            // Don't shrink below the disk-cache paint while slow providers
-            // (Ticketmaster) are still catching up.
-            setEvents((prev) => (partial.length >= prev.length ? partial : prev));
-            setLoading(false);
+            const now = Date.now();
+            // Partial feeds fire often; applying every burst re-mounts hundreds
+            // of map markers and freezes chrome. Cap to ~2 paints / second.
+            if (now - lastPartialAt < 450) return;
+            lastPartialAt = now;
+            startTransition(() => {
+              setEvents((prev) => (partial.length >= prev.length ? partial : prev));
+              setLoading(false);
+            });
             track('events_partial_loaded', { count: partial.length });
           },
         });
         if (cancelled) return;
-        setEvents(list);
-        setLoading(false);
-        logCoverage(list);
-        track('events_loaded', { count: list.length });
-        void saveCachedEvents(list);
+        // Final paint can wait until the open menu / gesture finishes.
+        InteractionManager.runAfterInteractions(() => {
+          if (cancelled) return;
+          startTransition(() => {
+            setEvents(list);
+            setLoading(false);
+          });
+          logCoverage(list);
+          track('events_loaded', { count: list.length });
+          void saveCachedEvents(list);
+        });
       } catch (e) {
         if (cancelled) return;
         console.warn('[events] fetch failed', e);
@@ -427,9 +522,9 @@ export default function MapScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [showSplash]);
 
-  // Pull live road incidents on mount, then refresh every 5 minutes.
+  // Pull live road incidents after splash so auth + chrome stay responsive.
   // We merge TfL (London proper) with National Highways (surrounding motorways
   // and major A-roads) so users see the full picture from their location into
   // and out of the city.
@@ -445,6 +540,8 @@ export default function MapScreen() {
   }>({ tfl: [], nh: [] });
 
   useEffect(() => {
+    if (showSplash) return;
+
     let cancelled = false;
     const load = async () => {
       const [tfl, nh, lines] = await Promise.all([
@@ -467,7 +564,9 @@ export default function MapScreen() {
 
       // Fire notifications once user prefs are loaded. We snapshot prefs
       // through prefsRef so the loop sees changes from the settings panel.
-      const prefs = prefsRef.current;
+      // No account means no delivery at all, whatever is left in storage from
+      // a previous session — notifications are an account feature.
+      const prefs = hasAccountRef.current ? prefsRef.current : null;
       if (prefs) {
         diffAndNotifyIncidents(incidentList, prefs).catch(() => undefined);
         diffAndNotifyLines(lines as LineStatus[], prefs).catch(() => undefined);
@@ -497,11 +596,11 @@ export default function MapScreen() {
         }
       }
     };
-    // Bootstrap prefs + permission once, then start the poll loop.
+    // Bootstrap prefs once, then start the poll loop. The OS permission ask is
+    // deferred to the account-gated effect below.
     (async () => {
       prefsRef.current = await loadPrefs();
       startNotificationOpenTracking();
-      await ensurePermission();
       load();
     })();
     // 3-minute cadence: incidents / line closures / watched flights should
@@ -511,17 +610,20 @@ export default function MapScreen() {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [showSplash]);
 
   // Apply both filters client-side over the cached week of events.
+  // Deferred so opening the menu / tapping chrome stays urgent while a large
+  // event list is still arriving — pins catch up a frame later.
+  const deferredEvents = useDeferredValue(events);
   const visibleEvents = useMemo(() => {
     const range = rangeFor(filter);
-    return events.filter((e) => {
+    return deferredEvents.filter((e) => {
       if (!eventOverlapsRange(e.startsAt, e.endsAt, range)) return false;
       if (categories.size === 0) return true;
       return categories.has(categoryFilterFor(e));
     });
-  }, [events, filter, categories]);
+  }, [deferredEvents, filter, categories]);
 
   useEffect(() => {
     track('map_filters_changed', {
@@ -616,7 +718,7 @@ export default function MapScreen() {
     for (const { key } of filterChips) {
       const range = rangeFor(key);
       let n = 0;
-      for (const e of events) {
+      for (const e of deferredEvents) {
         if (!eventOverlapsRange(e.startsAt, e.endsAt, range)) continue;
         if (categories.size > 0 && !categories.has(categoryFilterFor(e))) continue;
         n++;
@@ -624,7 +726,7 @@ export default function MapScreen() {
       out[key] = n;
     }
     return out;
-  }, [events, categories, filterChips]);
+  }, [deferredEvents, categories, filterChips]);
 
   // When the date filter OR category set changes and we have visible events,
   // frame them in the viewport so the user doesn't have to play hide-and-seek
@@ -1215,7 +1317,16 @@ export default function MapScreen() {
         onRegionChangeComplete={(r) => {
           lastRegionRef.current = r;
           setMapRegion(r);
-          setRasterEpoch((n) => n + 1);
+          // Re-rasterising every custom marker is expensive (it's a native
+          // snapshot per pin), and the blank-bitmap bug it heals only shows up
+          // when the zoom changes. Panning at a fixed zoom no longer triggers
+          // it, which is what made every gesture feel sluggish.
+          const prev = rasterZoomRef.current;
+          const changed = Math.abs(r.latitudeDelta - prev) / Math.max(prev, 1e-6);
+          if (changed > 0.15) {
+            rasterZoomRef.current = r.latitudeDelta;
+            setRasterEpoch((n) => n + 1);
+          }
         }}
       >
         {/*
@@ -1356,8 +1467,16 @@ export default function MapScreen() {
         ) : null}
       </MapView>
 
-      {/* Top filter chrome — hidden once a destination is locked in. */}
-      {!destination ? (
+      {showSplash ? (
+        <SplashLoading
+          ready={!initializing}
+          onDone={() => setShowSplash(false)}
+        />
+      ) : null}
+
+      {/* Top chrome sits above splash for hit-testing, but stays invisible
+          until splash is done so the brand mark isn't double-shown. */}
+      {!destination && !showSplash ? (
         <SafeAreaView edges={['top']} style={styles.topOverlay} pointerEvents="box-none">
           <View style={styles.brandRow}>
             <Pressable
@@ -1365,7 +1484,10 @@ export default function MapScreen() {
                 track('sidebar_opened');
                 setSidebarOpen(true);
               }}
-              style={styles.menuBtn}
+              style={({ pressed }) => [
+                styles.menuBtn,
+                pressed && styles.menuBtnPressed,
+              ]}
               accessibilityRole="button"
               accessibilityLabel="Open menu"
               hitSlop={8}
@@ -1673,31 +1795,6 @@ export default function MapScreen() {
         onAddToCalendar={handleAddToCalendar}
       />
 
-      <AuthSheet
-        visible={authSheet.open || accountPrompt.open || signupInvite}
-        initialMode={
-          accountPrompt.open
-            ? accountPrompt.mode
-            : signupInvite
-              ? 'signup'
-              : authSheet.mode
-        }
-        reason={accountPrompt.open ? accountPrompt.reason : null}
-        quietSkip={signupInvite && !accountPrompt.open && !authSheet.open}
-        onSkip={() => {
-          void markSignupInviteSeen();
-          setSignupInvite(false);
-        }}
-        onClose={() => {
-          if (accountPrompt.open) closeAccountPrompt();
-          setAuthSheet((s) => ({ ...s, open: false }));
-          if (signupInvite) {
-            void markSignupInviteSeen();
-            setSignupInvite(false);
-          }
-        }}
-      />
-
       <AccountSheet
         visible={accountSheet.open}
         section={accountSheet.section}
@@ -1815,7 +1912,32 @@ export default function MapScreen() {
         }}
       />
 
-      {showSplash ? <SplashLoading onDone={() => setShowSplash(false)} /> : null}
+      {/* Keep auth sheet last so it always appears above other modals. */}
+      <AuthSheet
+        visible={authSheet.open || accountPrompt.open || signupInvite}
+        initialMode={
+          accountPrompt.open
+            ? accountPrompt.mode
+            : signupInvite
+              ? 'signup'
+              : authSheet.mode
+        }
+        reason={accountPrompt.open ? accountPrompt.reason : null}
+        quietSkip={signupInvite && !accountPrompt.open && !authSheet.open}
+        onSkip={() => {
+          void markSignupInviteSeen();
+          setSignupInvite(false);
+        }}
+        onClose={() => {
+          if (accountPrompt.open) closeAccountPrompt();
+          setAuthSheet((s) => ({ ...s, open: false }));
+          if (signupInvite) {
+            void markSignupInviteSeen();
+            setSignupInvite(false);
+          }
+        }}
+      />
+
     </View>
   );
 }
@@ -1832,6 +1954,9 @@ const styles = StyleSheet.create({
     right: 0,
     paddingTop: 8,
     gap: 6,
+    // Above splash (50) so the menu is always hit-testable.
+    zIndex: 200,
+    elevation: 200,
   },
   brandRow: {
     flexDirection: 'row',
@@ -1853,6 +1978,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 5,
+  },
+  menuBtnPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.96 }],
   },
   brandPill: {
     flexDirection: 'row',

@@ -8,12 +8,15 @@ import {
   View,
 } from 'react-native';
 
+import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import {
+  DEFAULT_PREFS,
   ensurePermission,
   hasSeenOnboarding,
   markOnboardingSeen,
+  savePrefs,
 } from '@/services/notifications';
 
 interface Props {
@@ -52,6 +55,7 @@ const PERKS: PerkRow[] = [
  * Notifications panel any time.
  */
 export function NotificationOnboarding({ onDone }: Props) {
+  const { hasAccount, requireAccount } = useAuth();
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -81,6 +85,27 @@ export function NotificationOnboarding({ onDone }: Props) {
   }, [onDone]);
 
   const handleEnable = async () => {
+    // No account yet: alerts have nowhere to go, so send the user to create
+    // one instead of burning the one-shot iOS permission prompt. Dismiss this
+    // card first — two modals presented at once wedges touch handling.
+    if (!hasAccount) {
+      track('notification_onboarding_account_required');
+      await markOnboardingSeen();
+      setVisible(false);
+      onDone();
+      requireAccount('notify', () => {
+        void (async () => {
+          await savePrefs({ ...DEFAULT_PREFS });
+          const granted = await ensurePermission();
+          track('notification_permission_result', {
+            granted,
+            after_signup: true,
+          });
+        })();
+      });
+      return;
+    }
+
     track('notification_onboarding_enabled');
     setBusy(true);
     const granted = await ensurePermission();
@@ -132,9 +157,9 @@ export function NotificationOnboarding({ onDone }: Props) {
           </View>
 
           <Text style={styles.footer}>
-            You stay in control. Every category has its own toggle in
-            Settings, and per-line subscriptions let you pick exactly which
-            lines to follow.
+            {hasAccount
+              ? 'You stay in control. Every category has its own toggle in Settings, and per-line subscriptions let you pick exactly which lines to follow.'
+              : 'Alerts need a free account so we know where to send them. You stay in control — every category has its own toggle in Settings once you are in.'}
           </Text>
 
           <View style={styles.buttonRow}>
@@ -153,7 +178,11 @@ export function NotificationOnboarding({ onDone }: Props) {
               disabled={busy}
             >
               <Text style={styles.enableText}>
-                {busy ? 'Enabling…' : 'Enable notifications'}
+                {busy
+                  ? 'Enabling…'
+                  : hasAccount
+                    ? 'Enable notifications'
+                    : 'Create free account'}
               </Text>
             </Pressable>
           </View>

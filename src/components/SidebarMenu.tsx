@@ -1,8 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   Alert,
+  Animated,
+  Dimensions,
+  Easing,
   Image,
   Pressable,
   ScrollView,
@@ -16,6 +19,9 @@ import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
+
+const SHEET_WIDTH = Math.round(Dimensions.get('window').width * 0.82);
+const SLIDE_MS = 220;
 
 // DriveIQ brand mark shown in the sidebar header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -70,12 +76,19 @@ export function SidebarMenu({
 }: Props) {
   const { user, logout, hasAccount } = useAuth();
   const signedIn = hasAccount;
+  const slide = useRef(new Animated.Value(0)).current;
 
-  React.useEffect(() => {
-    if (visible) trackScreen('sidebar_menu', { signed_in: signedIn });
-  }, [visible, signedIn]);
-
-  if (!visible) return null;
+  useEffect(() => {
+    if (visible) {
+      trackScreen('sidebar_menu', { signed_in: signedIn });
+    }
+    Animated.timing(slide, {
+      toValue: visible ? 1 : 0,
+      duration: SLIDE_MS,
+      easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [visible, signedIn, slide]);
 
   const placeholder = (label: string) =>
     Alert.alert(
@@ -87,8 +100,17 @@ export function SidebarMenu({
   // two modal animations don't collide.
   const afterClose = (fn: () => void) => {
     onClose();
-    setTimeout(fn, 250);
+    setTimeout(fn, SLIDE_MS + 30);
   };
+
+  const translateX = slide.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-SHEET_WIDTH, 0],
+  });
+  const dimOpacity = slide.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 0.28],
+  });
 
   const confirmSignOut = () =>
     Alert.alert('Sign out', 'Are you sure you want to sign out?', [
@@ -151,7 +173,10 @@ export function SidebarMenu({
       key: 'notifications',
       icon: 'notifications',
       label: 'Notifications',
-      body: 'Roads, train lines, saved events',
+      body: signedIn
+        ? 'Roads, train lines, saved events'
+        : 'Off — create a free account to turn on',
+      badge: signedIn ? undefined : 'Off',
       handler: () => {
         onClose();
         // Defer to next tick so the sidebar's slide-out animation can start
@@ -246,11 +271,27 @@ export function SidebarMenu({
   );
 
   return (
-    // Side panel (not a modal) so the map stays live behind it — you can pan
-    // and zoom with the menu open, and it only closes via the X. box-none lets
-    // touches outside the sheet reach the map underneath.
-    <View style={styles.overlay} pointerEvents="box-none">
-      <SafeAreaView edges={['top', 'left']} style={styles.sheet}>
+    // Side panel (not a modal) so chrome stays responsive. Native-driver slide
+    // so opening never waits on event pin work on the JS thread.
+    <View
+      style={styles.overlay}
+      pointerEvents={visible ? 'auto' : 'none'}
+    >
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="Close menu"
+      >
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.dim, { opacity: dimOpacity }]}
+        />
+      </Pressable>
+      <Animated.View
+        style={[styles.sheetWrap, { width: SHEET_WIDTH, transform: [{ translateX }] }]}
+      >
+        <SafeAreaView edges={['top', 'left', 'bottom']} style={styles.sheet}>
           <View style={styles.header}>
             <View style={styles.brandBlock}>
               <View style={styles.brandLogoBacking}>
@@ -317,6 +358,7 @@ export function SidebarMenu({
             <Text style={styles.versionText}>{`DriveIQ v${Constants.expoConfig?.version ?? 'n/a'}`}</Text>
           </ScrollView>
         </SafeAreaView>
+      </Animated.View>
     </View>
   );
 }
@@ -341,17 +383,28 @@ function Section({
 const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    flexDirection: 'row',
+    zIndex: 300,
+    elevation: 300,
   },
-  sheet: {
-    width: '82%',
-    backgroundColor: colors.surface,
-    paddingHorizontal: 16,
+  dim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#0E2A3A',
+  },
+  sheetWrap: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
     shadowColor: colors.shadow,
     shadowOffset: { width: 2, height: 0 },
     shadowOpacity: 0.22,
     shadowRadius: 14,
-    elevation: 10,
+    elevation: 12,
+  },
+  sheet: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 16,
   },
   header: {
     alignItems: 'center',

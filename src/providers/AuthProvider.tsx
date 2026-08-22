@@ -61,6 +61,20 @@ export interface AuthContextValue {
    * `onReady` to run after a successful signup / sign-in.
    */
   requireAccount: (action: AccountAction, onReady: () => void) => boolean;
+  /**
+   * Host screen registers a callback that closes every open sheet. iOS gives
+   * each RN Modal its own window, and presenting the auth sheet on top of an
+   * already-presented one wedges touch handling for the whole app, so the
+   * gated action dismisses what's open before the prompt is presented.
+   */
+  registerSheetDismisser: (fn: (() => void) | null) => void;
+  /**
+   * The gated action that just finished after a successful signup / sign-in,
+   * so the host can restore the surface the user was on. Cleared by
+   * `clearCompletedAction`.
+   */
+  completedAction: AccountAction | null;
+  clearCompletedAction: () => void;
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -75,7 +89,15 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const LAST_EMAIL_KEY = 'diq:lastEmail';
 
 const ACTION_REASON =
-  'Your saves and alerts need an account to live in.';
+  'Sign up to unlock saves, alerts, and AI. It is free.';
+
+const ACTION_REASON_BY_ACTION: Record<AccountAction, string> = {
+  save: 'Sign up to save events and access them anytime. It is free.',
+  notify: 'Sign up to turn on personalised alerts and notifications. It is free.',
+  watched_flight: 'Sign up to watch flights for delays and cancellations. It is free.',
+  ai_question: 'Sign up to use DriveIQ AI Event Guide. It is free.',
+  add_to_calendar: 'Sign up to add events to your calendar. It is free.',
+};
 
 const emptyPrompt = (): AccountPromptState => ({
   open: false,
@@ -83,6 +105,13 @@ const emptyPrompt = (): AccountPromptState => ({
   action: null,
   reason: ACTION_REASON,
 });
+
+/**
+ * Matches the handshake the sidebar already uses: let the open sheet finish
+ * sliding out before presenting the next one, so the two modal windows never
+ * overlap.
+ */
+const SHEET_DISMISS_MS = 300;
 
 async function ensureAnonymousUser(): Promise<void> {
   if (!auth || !authApi) return;
@@ -99,8 +128,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [accountPrompt, setAccountPrompt] = useState<AccountPromptState>(emptyPrompt);
+  const [completedAction, setCompletedAction] = useState<AccountAction | null>(null);
   const pendingActionRef = useRef<(() => void) | null>(null);
+  const pendingActionKindRef = useRef<AccountAction | null>(null);
   const hadAccountRef = useRef(false);
+  const dismissSheetsRef = useRef<(() => void) | null>(null);
+  const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!auth || !authApi) {
@@ -109,28 +149,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const authInstance = auth;
     const api = authApi;
-    const unsub = api.onAuthStateChanged(authInstance, async (u) => {
+
+    // Sync path: if Firebase already restored a session, surface it before the
+    // first paint of the map so splash can dismiss on a known user.
+    const existing = authInstance.currentUser;
+    if (existing) {
+      setUser(existing);
+      setInitializing(false);
+    }
+
+    const unsub = api.onAuthStateChanged(authInstance, (u) => {
       if (!u) {
         // Browse freely with a stable anonymous uid (doc task 09).
-        await ensureAnonymousUser();
-        // Listener will re-fire with the anonymous user.
-        if (!authInstance.currentUser) {
-          setUser(null);
-          resetAnalyticsUser();
-          setInitializing(false);
-        }
+        void ensureAnonymousUser().then(() => {
+          if (!authInstance.currentUser) {
+            setUser(null);
+            resetAnalyticsUser();
+            setInitializing(false);
+          }
+        });
         return;
       }
 
+      // Mark ready immediately — analytics / premium are non-blocking. Waiting
+      // on them previously held initializing=true through the splash and made
+      // the whole chrome feel stuck.
       setUser(u);
+      setInitializing(false);
+
       const hasAccount = !u.isAnonymous;
       if (hasAccount) {
-        await identifyFirebaseUser(u);
-        track('auth_state_changed', { signed_in: true, anonymous: false });
+        void identifyFirebaseUser(u).then(() => {
+          track('auth_state_changed', { signed_in: true, anonymous: false });
+        });
         void syncPremiumEntitlement();
       } else {
-        // Keep PostHog on the anonymous uid so skipped sessions are visible.
-        await identifyFirebaseUser(
+        void identifyFirebaseUser(
           {
             uid: u.uid,
             email: null,
@@ -140,18 +194,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             providerData: u.providerData,
           },
           { signed_in: false, auth_provider: 'anonymous', tier: 'anonymous' },
-        );
-        track('auth_state_changed', { signed_in: false, anonymous: true });
+        ).then(() => {
+          track('auth_state_changed', { signed_in: false, anonymous: true });
+        });
       }
 
       if (u.email) {
-        try {
-          await AsyncStorage.setItem(LAST_EMAIL_KEY, u.email);
-        } catch {
-          /* non-fatal */
-        }
+        AsyncStorage.setItem(LAST_EMAIL_KEY, u.email).catch(() => undefined);
       }
-      setInitializing(false);
     });
     return unsub;
   }, []);
@@ -161,7 +211,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const hasAccount = Boolean(user && !user.isAnonymous);
     if (hasAccount && !hadAccountRef.current && pendingActionRef.current) {
       const run = pendingActionRef.current;
+      const kind = pendingActionKindRef.current;
       pendingActionRef.current = null;
+      pendingActionKindRef.current = null;
       setAccountPrompt(emptyPrompt());
       // Defer so sheets can settle after AuthSheet closes.
       setTimeout(() => {
@@ -170,7 +222,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           console.warn('[auth] pending action failed', e);
         }
-      }, 300);
+        if (kind) setCompletedAction(kind);
+      }, SHEET_DISMISS_MS);
     }
     hadAccountRef.current = hasAccount;
   }, [user]);
@@ -189,10 +242,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const closeAccountPrompt = useCallback(() => {
+    if (promptTimerRef.current) {
+      clearTimeout(promptTimerRef.current);
+      promptTimerRef.current = null;
+    }
     pendingActionRef.current = null;
+    pendingActionKindRef.current = null;
     setAccountPrompt(emptyPrompt());
     track('auth_required_dismissed');
   }, []);
+
+  const registerSheetDismisser = useCallback((fn: (() => void) | null) => {
+    dismissSheetsRef.current = fn;
+  }, []);
+
+  const clearCompletedAction = useCallback(() => setCompletedAction(null), []);
 
   const requireAccount = useCallback(
     (action: AccountAction, onReady: () => void): boolean => {
@@ -202,13 +266,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return true;
       }
       pendingActionRef.current = onReady;
-      setAccountPrompt({
-        open: true,
-        mode: 'signup',
-        action,
-        reason: ACTION_REASON,
-      });
+      pendingActionKindRef.current = action;
       track('auth_required_for_action', { action });
+
+      // The tap came from inside a presented sheet. Close it first, otherwise
+      // the auth sheet is presented on top of another modal window and iOS
+      // stops delivering touches to anything at all.
+      dismissSheetsRef.current?.();
+      if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+      promptTimerRef.current = setTimeout(() => {
+        promptTimerRef.current = null;
+        setAccountPrompt({
+          open: true,
+          mode: 'signup',
+          action,
+          reason: ACTION_REASON_BY_ACTION[action] ?? ACTION_REASON,
+        });
+      }, SHEET_DISMISS_MS);
       return false;
     },
     [user],
@@ -222,6 +296,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountPrompt,
       closeAccountPrompt,
       requireAccount,
+      registerSheetDismisser,
+      completedAction,
+      clearCompletedAction,
       login: async (email, password) => {
         const { a, api } = requireAuth();
         // Leaving anonymous browse for an existing account.
@@ -335,7 +412,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         track('account_email_updated');
       },
     }),
-    [user, initializing, accountPrompt, closeAccountPrompt, requireAccount],
+    [
+      user,
+      initializing,
+      accountPrompt,
+      closeAccountPrompt,
+      requireAccount,
+      registerSheetDismisser,
+      completedAction,
+      clearCompletedAction,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

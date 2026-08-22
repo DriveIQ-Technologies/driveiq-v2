@@ -18,9 +18,17 @@ const TAGLINE = 'KNOW YOUR CITY BEFORE IT MOVES';
 const TYPE_START = 400; // ms before first letter appears
 const TYPE_STEP = 90; // ms between letters
 
+/** Brand beat — long enough for the wordmark, short enough not to feel stuck. */
+const MIN_MS = 1400;
+/** Hard cap so a slow auth never leaves the user staring at splash. */
+const MAX_MS = 3200;
+
 interface Props {
-  /** How long to hold the splash before it fades out (ms). */
-  duration?: number;
+  /**
+   * When true, splash may dismiss (after the min brand beat). Use this to
+   * cover auth warm-up so the session is ready when the map appears.
+   */
+  ready?: boolean;
   /** Called once the fade-out completes so the parent can unmount it. */
   onDone: () => void;
 }
@@ -59,28 +67,36 @@ function RadarRing({ delay }: { delay: number }) {
 }
 
 /**
- * DriveIQ launch / loading screen — "Radar Pulse" concept.
+ * DriveIQ launch screen — "Radar Pulse" concept.
  *
- * Near-black navy screen with a soft blue glow: the brand pin scales in at the
- * centre while thin radar rings ripple outward behind it. The wordmark types
- * itself out ("Drive" in white, "IQ" in brand blue), the spaced-out tagline
- * fades up beneath it, and three dots loop at the bottom. After `duration` the
- * whole screen fades out and calls onDone.
- *
- * All animation runs on the native driver — no JS timers for the visuals — so
- * nothing stalls while the app is busy loading behind the splash.
+ * Covers the map while auth settles. Touches pass through so the menu button
+ * (rendered above this layer) stays clickable from first paint. Dismisses as
+ * soon as `ready` is true after a short brand beat, or at MAX_MS whichever
+ * comes first.
  */
-export function SplashLoading({ duration = 5200, onDone }: Props) {
-  const logo = useRef(new Animated.Value(0)).current; // logo scale/fade-in
-  const glow = useRef(new Animated.Value(0)).current; // breathing glow
-  const tag = useRef(new Animated.Value(0)).current; // tagline fade
-  const fade = useRef(new Animated.Value(1)).current; // whole-screen fade-out
+export function SplashLoading({ ready = true, onDone }: Props) {
+  const logo = useRef(new Animated.Value(0)).current;
+  const glow = useRef(new Animated.Value(0)).current;
+  const tag = useRef(new Animated.Value(0)).current;
+  const fade = useRef(new Animated.Value(1)).current;
   const letters = useRef(WORD_LETTERS.map(() => new Animated.Value(0))).current;
   const dots = [
     useRef(new Animated.Value(0.25)).current,
     useRef(new Animated.Value(0.25)).current,
     useRef(new Animated.Value(0.25)).current,
   ];
+  const startedAt = useRef(Date.now());
+  const finished = useRef(false);
+
+  const finish = () => {
+    if (finished.current) return;
+    finished.current = true;
+    Animated.timing(fade, {
+      toValue: 0,
+      duration: 280,
+      useNativeDriver: true,
+    }).start(() => onDone());
+  };
 
   useEffect(() => {
     Animated.timing(logo, {
@@ -108,8 +124,6 @@ export function SplashLoading({ duration = 5200, onDone }: Props) {
     );
     glowLoop.start();
 
-    // Typewriter wordmark: per-letter staggered reveal on the native driver
-    // (a setInterval here starves while the JS thread loads the app).
     const typing = Animated.stagger(
       TYPE_STEP,
       letters.map((l) =>
@@ -135,22 +149,27 @@ export function SplashLoading({ duration = 5200, onDone }: Props) {
     );
     dotLoops.forEach((l) => l.start());
 
-    const timer = setTimeout(() => {
-      Animated.timing(fade, {
-        toValue: 0,
-        duration: 380,
-        useNativeDriver: true,
-      }).start(() => onDone());
-    }, duration);
+    // Never leave the user stuck if auth is slow.
+    const maxTimer = setTimeout(finish, MAX_MS);
 
     return () => {
-      clearTimeout(timer);
+      clearTimeout(maxTimer);
       glowLoop.stop();
       wordSeq.stop();
       dotLoops.forEach((l) => l.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Dismiss once auth (or other gate) is ready and the brand beat has played.
+  useEffect(() => {
+    if (!ready) return;
+    const elapsed = Date.now() - startedAt.current;
+    const wait = Math.max(0, MIN_MS - elapsed);
+    const id = setTimeout(finish, wait);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   const logoScale = logo.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] });
   const glowOpacity = glow.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] });
@@ -160,12 +179,10 @@ export function SplashLoading({ duration = 5200, onDone }: Props) {
     <Animated.View style={[styles.root, { opacity: fade }]} pointerEvents="none">
       <View style={styles.center}>
         <View style={styles.logoArea}>
-          {/* pre-rendered radial glow: perfectly smooth, no banding */}
           <Animated.Image
             source={GLOW}
             style={[styles.glow, { opacity: glowOpacity, transform: [{ scale: glowScale }] }]}
           />
-          {/* static faint circle + rippling radar rings */}
           <View style={styles.staticRing} />
           <RadarRing delay={0} />
           <RadarRing delay={870} />
@@ -208,7 +225,9 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 1000,
+    // Below chrome (menu) and sidebar so those stay tappable during splash.
+    zIndex: 50,
+    elevation: 50,
   },
   center: { alignItems: 'center', justifyContent: 'center' },
   logoArea: {

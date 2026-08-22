@@ -196,7 +196,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
   const upgrade = () => showProPaywall('Full-day arrivals and unlimited watched flights');
 
   const toggleSave = async (f: AirportFlight) => {
-    requireAccount('watched_flight', () => {
+    const hasAccount = requireAccount('watched_flight', () => {
       void (async () => {
         if (saved[f.id]) {
           const next = await unsaveFlight(f.id);
@@ -245,6 +245,10 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
         );
       })();
     });
+    if (!hasAccount) {
+      // Close the detail card so the account prompt is the obvious next step.
+      setSelectedFlight(null);
+    }
   };
 
   return (

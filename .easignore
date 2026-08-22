@@ -1,0 +1,42 @@
+# Keep the EAS upload tarball small and reliable.
+# EAS already respects .gitignore; this is extra safety.
+
+# Dependencies & caches
+node_modules/
+**/node_modules/
+.expo/
+dist/
+web-build/
+.turbo/
+.cache/
+*.log
+
+# Native build outputs (EAS regenerates / uses remote builders)
+ios/Pods/
+ios/build/
+android/app/build/
+android/build/
+android/.gradle/
+**/DerivedData/
+
+# Lockfiles we do not want EAS to treat as the package manager
+bun.lock
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
+
+# Local / secrets / tooling
+.env
+.env.*
+!.env.example
+.claude/
+functions/lib/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Docs / misc that are not needed for the app binary
+**/*.md
+!README.md

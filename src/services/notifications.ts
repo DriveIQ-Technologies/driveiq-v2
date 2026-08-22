@@ -50,6 +50,27 @@ export const DEFAULT_PREFS: NotificationPrefs = {
   'saved-flights': true,
 };
 
+/**
+ * Every channel off. Notifications are an account feature (doc task 09), so a
+ * signed-out or anonymous session must never show enabled switches or deliver
+ * pings — including when local storage still holds a previous account's prefs.
+ */
+export const PREFS_ALL_OFF: NotificationPrefs = {
+  'road-accidents': false,
+  'line-closures': false,
+  'saved-events': false,
+  'saved-flights': false,
+};
+
+/** Stored prefs for account holders; all-off for everyone else. */
+export function effectivePrefs(
+  prefs: NotificationPrefs | null,
+  hasAccount: boolean,
+): NotificationPrefs {
+  if (!hasAccount) return { ...PREFS_ALL_OFF };
+  return prefs ? { ...prefs } : { ...DEFAULT_PREFS };
+}
+
 const STORAGE_KEY_PREFS = 'driveiq.notif.prefs.v1';
 const STORAGE_KEY_INCIDENTS = 'driveiq.notif.lastIncidents.v1';
 const STORAGE_KEY_LINES = 'driveiq.notif.lastLines.v1';

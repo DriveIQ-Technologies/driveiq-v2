@@ -3,7 +3,7 @@
     "name": "DriveIQ",
     "slug": "driveiq-91cbfgcslw1jeepr9yba",
     "scheme": "driveiq",
-    "version": "6.0.2",
+    "version": "6.1.0",
     "orientation": "portrait",
     "icon": "./assets/driveiq-app-icon-1024.png",
     "userInterfaceStyle": "light",
@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "driveiq.app",
-      "buildNumber": "4",
+      "buildNumber": "12",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location to show nearby events and calculate distance to event venues."
       }
@@ -31,14 +31,13 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
       ],
-      "versionCode": 5
+      "versionCode": 14
     },
     "web": {
       "bundler": "metro"
     },
     "plugins": [
       "expo-router",
-      "posthog-react-native/expo",
       [
         "expo-location",
         {
