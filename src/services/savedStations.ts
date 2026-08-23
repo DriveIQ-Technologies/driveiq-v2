@@ -7,6 +7,7 @@
  */
 
 import { track } from '@/services/analytics';
+import { resetSheetPointers } from '@/components/ui/SheetOverlay';
 import {
   ensurePermission,
   loadLineSubscriptions,
@@ -156,6 +157,7 @@ export async function setStationNotify(
     map = ensured.map;
 
     const granted = await ensurePermission();
+    resetSheetPointers();
     if (!granted) {
       track('station_notify_permission_denied', { station_id: station.id });
       return { result: 'permission-denied', map };

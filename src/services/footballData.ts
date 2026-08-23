@@ -1,7 +1,8 @@
-import { findLondonPlace } from '@/data/londonVenues';
+import { resolveEventPlace } from '@/data/londonVenues';
 import type { AppEvent } from '@/types/event';
 import { isInRange, type DateRange } from '@/utils/dateFilters';
 import { defaultEndsAt } from '@/utils/duration';
+import { londonYmd } from '@/utils/ukTime';
 
 /**
  * Football-Data.org — free-tier service for real, current football fixtures.
@@ -76,12 +77,9 @@ interface FdMatchesResponse {
   count?: number;
 }
 
-const fmtDate = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
+// dateFrom / dateTo are London day edges, so format them in London rather
+// than the device's calendar (which shifts the window west of UTC).
+const fmtDate = (d: Date): string => londonYmd(d);
 
 const addDays = (d: Date, days: number): Date => {
   const x = new Date(d);
@@ -222,12 +220,11 @@ export async function fetchFootballDataLondon(
     const id = `fd-${m.id}`;
     if (seen.has(id)) continue;
 
-    // Try the explicit venue first (often missing on free tier), then the
-    // home-team name (which our curated map always knows for London clubs).
-    const place = findLondonPlace(
+    // Venue first. Home-team is only used when the feed omitted the ground —
+    // otherwise an Arsenal away day at Old Trafford would pin at Emirates.
+    const place = resolveEventPlace(
       m.venue ?? null,
-      m.homeTeam?.name,
-      m.homeTeam?.shortName,
+      m.homeTeam?.name ?? m.homeTeam?.shortName,
     );
     if (!place) {
       droppedNotLondon++;

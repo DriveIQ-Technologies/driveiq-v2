@@ -1,7 +1,8 @@
-import { findLondonPlace } from '@/data/londonVenues';
+import { resolveEventPlace } from '@/data/londonVenues';
 import type { AppEvent } from '@/types/event';
 import { isInRange, type DateRange } from '@/utils/dateFilters';
 import { defaultEndsAt } from '@/utils/duration';
+import { londonYmd } from '@/utils/ukTime';
 
 /**
  * ESPN scoreboard (unofficial public endpoints) — ALL sports.
@@ -135,12 +136,10 @@ interface EspnScoreboardResponse {
   events?: EspnEvent[];
 }
 
-const yyyymmdd = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
-};
+// The range boundaries are London day edges, so they must be formatted in
+// London too. Using the device calendar shifted the queried day for anyone
+// west of UTC and dropped a day's fixtures.
+const yyyymmdd = (d: Date): string => londonYmd(d).replace(/-/g, '');
 
 const fetchFeed = async (
   feed: SportFeed,
@@ -260,7 +259,7 @@ export async function fetchEspnLondon(range: DateRange): Promise<AppEvent[]> {
       const homeName =
         home?.team?.displayName ?? home?.team?.shortDisplayName ?? '';
 
-      const place = findLondonPlace(venueName, homeName);
+      const place = resolveEventPlace(venueName, homeName);
       if (!place) {
         droppedNotLondon++;
         continue;

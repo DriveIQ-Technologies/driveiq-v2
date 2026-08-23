@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import {
   incidentColor,
@@ -39,8 +40,7 @@ export function TrafficIncidentSheet({ incident, onClose, onNavigate }: Props) {
   const end = fmt(incident.endsAt);
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
         <View style={styles.headerRow}>
@@ -97,12 +97,11 @@ export function TrafficIncidentSheet({ incident, onClose, onNavigate }: Props) {
           ) : null}
         </ScrollView>
       </View>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   sheet: {
     position: 'absolute',
     bottom: 0,

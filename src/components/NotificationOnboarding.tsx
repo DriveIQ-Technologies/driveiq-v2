@@ -1,13 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
-  Modal,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
@@ -63,13 +63,14 @@ export function NotificationOnboarding({ onDone }: Props) {
   // first and the modal slides up over it — feels less like an interrupt.
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     (async () => {
       const seen = await hasSeenOnboarding();
       if (cancelled) return;
       if (!seen) {
         // Small delay so it doesn't fire at the exact same instant as the
         // map markers appearing.
-        setTimeout(() => {
+        timer = setTimeout(() => {
           if (!cancelled) {
             setVisible(true);
             trackScreen('notification_onboarding');
@@ -81,6 +82,7 @@ export function NotificationOnboarding({ onDone }: Props) {
     })();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [onDone]);
 
@@ -126,8 +128,8 @@ export function NotificationOnboarding({ onDone }: Props) {
   if (!visible) return null;
 
   return (
-    <Modal transparent animationType="fade" visible onRequestClose={handleSkip}>
-      <View style={styles.backdrop}>
+    <SheetOverlay onRequestClose={handleSkip} dismissOnBackdropPress={false}>
+      <View style={styles.backdrop} pointerEvents="box-none">
         <View style={styles.card}>
           <View style={styles.iconBadge}>
             <Ionicons
@@ -188,14 +190,13 @@ export function NotificationOnboarding({ onDone }: Props) {
           </View>
         </View>
       </View>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(14, 42, 58, 0.55)',
     justifyContent: 'center',
     paddingHorizontal: 20,
   },

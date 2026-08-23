@@ -134,10 +134,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hadAccountRef = useRef(false);
   const dismissSheetsRef = useRef<(() => void) | null>(null);
   const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
     () => () => {
       if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
     },
     [],
   );
@@ -216,7 +218,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       pendingActionKindRef.current = null;
       setAccountPrompt(emptyPrompt());
       // Defer so sheets can settle after AuthSheet closes.
-      setTimeout(() => {
+      if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = setTimeout(() => {
+        pendingTimerRef.current = null;
         try {
           run();
         } catch (e) {
@@ -265,14 +269,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         onReady();
         return true;
       }
+      // Sheets are no longer native Modals (they portal to SheetHost), so
+      // stacking Auth on top is safe. Closing everything first is what made
+      // Save/Notify on a station look like a freeze: the hub vanished, then
+      // a leftover backdrop still ate every tap.
       pendingActionRef.current = onReady;
       pendingActionKindRef.current = action;
       track('auth_required_for_action', { action });
-
-      // The tap came from inside a presented sheet. Close it first, otherwise
-      // the auth sheet is presented on top of another modal window and iOS
-      // stops delivering touches to anything at all.
-      dismissSheetsRef.current?.();
       if (promptTimerRef.current) clearTimeout(promptTimerRef.current);
       promptTimerRef.current = setTimeout(() => {
         promptTimerRef.current = null;

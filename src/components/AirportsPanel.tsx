@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import {
   AIRPORTS,
@@ -63,8 +63,7 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
   if (!visible) return null;
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
         <View style={styles.headerRow}>
@@ -200,12 +199,11 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
         initialSeverity={openConn?.severityBucket}
         onClose={() => setOpenConn(null)}
       />
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   sheet: {
     position: 'absolute',
     bottom: 0,

@@ -550,6 +550,12 @@ const PLACES: Record<string, LondonPlace> = {
   'twickenham stoop': VENUES.harlequins,
   'all england club': VENUES.wimbledon,
   'all england lawn tennis club': VENUES.wimbledon,
+  // Without these, "Wimbledon Championships" fell through to the bare
+  // `wimbledon` alias and pinned tennis at AFC Wimbledon's ground.
+  'wimbledon championships': VENUES.wimbledon,
+  'the championships wimbledon': VENUES.wimbledon,
+  'centre court': VENUES.wimbledon,
+  aeltc: VENUES.wimbledon,
   "queen's club": VENUES.queens,
   'queens club': VENUES.queens,
   wembley: VENUES.wembley,
@@ -590,7 +596,23 @@ const PLACES: Record<string, LondonPlace> = {
   'vauxhall road': VENUES.hemel,
 };
 
-const PLACE_KEYS = Object.keys(PLACES);
+/**
+ * Longest alias first. The substring pass used to run in object order, so a
+ * short generic key could win over a specific one and pin an event at the
+ * wrong place: "Wembley Arena" matched `wembley` (the stadium), "Wimbledon
+ * Championships" matched `wimbledon` (AFC Wimbledon's ground), "Kennington
+ * Oval" matched `oval`. Checking the most specific alias first fixes all of
+ * that class of bug at once.
+ */
+const PLACE_KEYS = Object.keys(PLACES).sort((a, b) => b.length - a.length);
+
+/**
+ * Aliases that are only safe as a whole-string match. "England" as a home team
+ * means a Wembley football fixture, but as part of any longer name (an England
+ * cricket or rugby side) it would have pinned the event at Wembley instead of
+ * Lord's, The Oval or Twickenham.
+ */
+const EXACT_ONLY_KEYS = new Set(['england']);
 
 /**
  * Strip the noise common to team / venue names before matching:
@@ -624,6 +646,7 @@ export function findLondonPlace(
     if (PLACES[norm]) return PLACES[norm];
 
     for (const key of PLACE_KEYS) {
+      if (EXACT_ONLY_KEYS.has(key)) continue;
       // word-boundary match — avoids "watford" matching "wat" etc.
       const re = new RegExp(`(^|\\s)${escapeRegExp(key)}(\\s|$)`);
       if (re.test(norm)) return PLACES[key];
@@ -634,4 +657,21 @@ export function findLondonPlace(
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Pin an event by its actual venue. Never fall back to the home club when a
+ * venue string is present but unrecognised — that is how Arsenal away days
+ * were landing on Emirates, and why two copies of the same match appeared
+ * at two grounds.
+ */
+export function resolveEventPlace(
+  venue?: string | null,
+  homeTeam?: string | null,
+): LondonPlace | null {
+  const named = venue?.trim();
+  if (named) return findLondonPlace(named);
+  const home = homeTeam?.trim();
+  if (home) return findLondonPlace(home);
+  return null;
 }

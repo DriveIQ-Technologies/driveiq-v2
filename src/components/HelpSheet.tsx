@@ -1,15 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import {
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 
 interface Props {
@@ -66,10 +66,10 @@ const FAQS: QA[] = [
 export function HelpSheet({ visible, onClose, onOpenAISupport }: Props) {
   const [open, setOpen] = useState<number | null>(0);
 
+  if (!visible) return null;
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      {/* Own provider: root insets don't reach a native Modal window. */}
-      <SafeAreaProvider>
+    <SheetOverlay onRequestClose={onClose} dim={false} visible={visible}>
       <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Help & FAQs</Text>
@@ -118,8 +118,7 @@ export function HelpSheet({ visible, onClose, onOpenAISupport }: Props) {
           ) : null}
         </ScrollView>
       </SafeAreaView>
-      </SafeAreaProvider>
-    </Modal>
+    </SheetOverlay>
   );
 }
 

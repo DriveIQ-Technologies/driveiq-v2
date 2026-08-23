@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -10,11 +9,9 @@ import {
   Text,
   View,
 } from 'react-native';
-import {
-  SafeAreaProvider,
-  SafeAreaView,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 
 import {
   getAiQuota,
@@ -826,10 +823,10 @@ export function AISupportSheet({
     send(prompt);
   };
 
+  if (!visible) return null;
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      {/* Own provider: root insets don't reach a native Modal window. */}
-      <SafeAreaProvider>
+    <SheetOverlay onRequestClose={onClose} dim={false}>
       <SafeAreaView style={styles.root} edges={['bottom']}>
         <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 4 }]}>
           <View style={styles.headerLeft}>
@@ -950,8 +947,7 @@ export function AISupportSheet({
           />
         </KeyboardAvoidingView>
       </SafeAreaView>
-      </SafeAreaProvider>
-    </Modal>
+    </SheetOverlay>
   );
 }
 

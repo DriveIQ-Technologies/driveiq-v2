@@ -156,17 +156,67 @@ function applyOverlay(event: AppEvent, overlay: EventRecordOverlay): AppEvent {
   return next;
 }
 
-async function getDocData(
-  collection: string,
-  id: string,
-): Promise<Record<string, unknown> | null> {
-  if (!db || !fsApi) return null;
+export function venueKeyFor(venue: string | undefined): string {
+  return (venue ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+/** Firestore caps `in` filters at 30 values. */
+const ID_CHUNK = 30;
+/** Parallel chunk queries. Enough to be quick without flooding the socket. */
+const CHUNK_CONCURRENCY = 6;
+
+type OverlayMap = Map<string, EventRecordOverlay>;
+
+async function fetchOverlayChunk(
+  collectionName: string,
+  ids: string[],
+): Promise<[string, EventRecordOverlay][]> {
+  if (!db || !fsApi || ids.length === 0) return [];
   try {
-    const snap = await fsApi.getDoc(fsApi.doc(db, collection, id));
-    return snap.exists() ? (snap.data() as Record<string, unknown>) : null;
-  } catch {
-    return null;
+    const snap = await fsApi.getDocs(
+      fsApi.query(
+        fsApi.collection(db, collectionName),
+        fsApi.where(fsApi.documentId(), 'in', ids),
+      ),
+    );
+    return snap.docs.map(
+      (d) => [d.id, pickOverlay(d.data() as Record<string, unknown>)] as [
+        string,
+        EventRecordOverlay,
+      ],
+    );
+  } catch (e) {
+    console.warn(`[events] overlay read failed for ${collectionName}`, e);
+    return [];
   }
+}
+
+/**
+ * Read a whole set of overlay docs in chunked `documentId() in [...]` queries.
+ *
+ * This used to be one `getDoc` per event per collection — roughly 2,000 round
+ * trips on a ~1,000 event launch, which pinned the JS thread and made the map
+ * feel frozen for the first half minute. Chunking cuts it to a few dozen.
+ */
+async function fetchOverlays(
+  collectionName: string,
+  ids: string[],
+): Promise<OverlayMap> {
+  const out: OverlayMap = new Map();
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += ID_CHUNK) {
+    chunks.push(unique.slice(i, i + ID_CHUNK));
+  }
+  for (let i = 0; i < chunks.length; i += CHUNK_CONCURRENCY) {
+    const results = await Promise.all(
+      chunks.slice(i, i + CHUNK_CONCURRENCY).map((c) => fetchOverlayChunk(collectionName, c)),
+    );
+    for (const rows of results) {
+      for (const [id, overlay] of rows) out.set(id, overlay);
+    }
+  }
+  return out;
 }
 
 /**
@@ -178,36 +228,27 @@ export async function mergeRemoteEventRecords(events: AppEvent[]): Promise<AppEv
   if (!db || !fsApi || events.length === 0) return events;
 
   const run = async (): Promise<AppEvent[]> => {
-    const venueKeys = Array.from(
-      new Set(
-        events.map((e) => (e.venue ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-      ),
-    ).filter(Boolean);
+    const recordIds = events.map((e) => recordIdFor(e.id));
+    const venueKeys = events.map((e) => venueKeyFor(e.venue));
 
-    const venueEntries = await Promise.all(
-      venueKeys.map(async (key) => [key, pickOverlay((await getDocData('venueOverrides', key)) ?? undefined)] as const),
-    );
-    const venueCache = new Map(venueEntries);
+    const [records, overrides, venues] = await Promise.all([
+      fetchOverlays('eventRecords', recordIds),
+      fetchOverlays('eventOverrides', recordIds),
+      fetchOverlays('venueOverrides', venueKeys),
+    ]);
 
-    return Promise.all(
-      events.map(async (event) => {
-        const id = recordIdFor(event.id);
-        const venueKey = (event.venue ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        const [record, override] = await Promise.all([
-          getDocData('eventRecords', id),
-          getDocData('eventOverrides', id),
-        ]);
-        let next = applyOverlay(event, pickOverlay(record ?? undefined));
-        next = applyOverlay(next, venueCache.get(venueKey) ?? {});
-        next = applyOverlay(next, pickOverlay(override ?? undefined));
-        if (next.estimatedFinishAt) next.endsAt = next.estimatedFinishAt;
-        return next;
-      }),
-    );
+    return events.map((event) => {
+      const id = recordIdFor(event.id);
+      let next = applyOverlay(event, records.get(id) ?? {});
+      next = applyOverlay(next, venues.get(venueKeyFor(event.venue)) ?? {});
+      next = applyOverlay(next, overrides.get(id) ?? {});
+      if (next.estimatedFinishAt) next.endsAt = next.estimatedFinishAt;
+      return next;
+    });
   };
 
   return Promise.race([
     run(),
-    new Promise<AppEvent[]>((resolve) => setTimeout(() => resolve(events), 2500)),
+    new Promise<AppEvent[]>((resolve) => setTimeout(() => resolve(events), 6000)),
   ]);
 }

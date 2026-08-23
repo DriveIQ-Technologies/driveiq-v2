@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +10,7 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
@@ -162,8 +162,7 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
   const anyLineExplicit = Object.values(lineSubs).some(Boolean);
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
         <View style={styles.headerRow}>
@@ -271,12 +270,11 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
           ) : null}
         </ScrollView>
       </View>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   sheet: {
     position: 'absolute',
     bottom: 0,

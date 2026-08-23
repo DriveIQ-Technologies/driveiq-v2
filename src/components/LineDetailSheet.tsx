@@ -3,7 +3,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
-  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -12,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import {
@@ -119,8 +119,7 @@ export function LineDetailSheet({
   const modeName = detail?.modeName ?? '';
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose} level={3}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
 
@@ -267,12 +266,11 @@ export function LineDetailSheet({
           )}
         </ScrollView>
       </View>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
   sheet: {
     position: 'absolute',
     bottom: 0,

@@ -1,9 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import {
-  Alert,
   Linking,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -11,6 +9,8 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
+import { showDialog } from '@/services/dialog';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 
@@ -69,7 +69,7 @@ async function openExternal(
     await Linking.openURL(fallbackUrl);
   } catch (e) {
     console.warn(`[nav-picker] openURL fallback failed for ${appName}`, e);
-    Alert.alert(
+    showDialog(
       `Couldn't open ${appName}`,
       `Make sure ${appName} is installed, or pick a different app.`,
     );
@@ -127,10 +127,12 @@ export function NavigationAppPicker({ destination, onClose, onPickDriveIQ }: Pro
     onClose();
   };
 
+  if (!visible) return null;
+
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+    <SheetOverlay onRequestClose={onClose}>
+      <View style={styles.backdrop} pointerEvents="box-none">
+        <View style={styles.sheet}>
           <View style={styles.handle} />
           <Text style={styles.title}>Open with</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
@@ -165,16 +167,15 @@ export function NavigationAppPicker({ destination, onClose, onPickDriveIQ }: Pro
           >
             <Text style={styles.cancelText}>Cancel</Text>
           </Pressable>
-        </Pressable>
-      </Pressable>
-    </Modal>
+        </View>
+      </View>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(14, 42, 58, 0.45)',
     justifyContent: 'flex-end',
   },
   sheet: {

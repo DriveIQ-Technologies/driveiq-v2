@@ -1,9 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,8 +10,10 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
+import { showDialog } from '@/services/dialog';
 import {
   loadSavedStations,
   setStationNotify,
@@ -61,6 +61,17 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
   const [openLine, setOpenLine] = useState<StationLineStatus | null>(null);
   const [savedStations, setSavedStations] = useState<SavedStationMap>({});
   const [isPremium, setIsPremium] = useState(false);
+  // Guards double taps: two overlapping writes to the same key used to leave
+  // the toggles out of sync with storage.
+  const [busy, setBusy] = useState<'save' | 'notify' | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!station) return;
@@ -100,23 +111,55 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
   const hiddenCount = Math.max(0, MAJOR_STATIONS.length - savedCount);
 
   const runSave = async () => {
-    const res = await toggleSaveStation(station);
-    setSavedStations(res.map);
+    if (busy) return;
+    setBusy('save');
+    try {
+      const res = await toggleSaveStation(station);
+      if (!mountedRef.current) return;
+      setSavedStations(res.map);
+      if (res.result === 'blocked-limit') {
+        showProPaywall('Saving more than one station');
+      }
+    } catch (e) {
+      console.warn('[stations] save failed', e);
+      if (mountedRef.current) {
+        showDialog('Could not save', 'Please try that again in a moment.');
+      }
+    } finally {
+      if (mountedRef.current) setBusy(null);
+    }
   };
 
   const runNotify = async (next: boolean) => {
-    const res = await setStationNotify(station, next);
-    setSavedStations(res.map);
-    if (res.result === 'permission-denied') {
-      Alert.alert(
-        'Notifications off',
-        'Turn on notifications for DriveIQ in your phone settings to get station alerts.',
-      );
+    if (busy) return;
+    setBusy('notify');
+    try {
+      const res = await setStationNotify(station, next);
+      if (!mountedRef.current) return;
+      setSavedStations(res.map);
+      if (res.result === 'blocked-limit') {
+        showProPaywall('Alerts for more than one station');
+      } else if (res.result === 'permission-denied') {
+        showDialog(
+          'Notifications are off',
+          'Turn on notifications for DriveIQ in your phone settings to get alerts for this station.',
+        );
+      }
+    } catch (e) {
+      console.warn('[stations] notify failed', e);
+      if (mountedRef.current) {
+        showDialog('Could not update alerts', 'Please try that again in a moment.');
+      }
+    } finally {
+      if (mountedRef.current) setBusy(null);
     }
   };
 
   const onToggleSave = () => {
-    if (stationBoundaryLocked) return;
+    if (stationBoundaryLocked) {
+      showProPaywall('Saving more than one station');
+      return;
+    }
     requireAccount('save', () => {
       void runSave();
     });
@@ -124,15 +167,17 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
 
   const onToggleNotify = () => {
     const next = !notify;
-    if (stationBoundaryLocked && next) return;
+    if (stationBoundaryLocked && next) {
+      showProPaywall('Alerts for more than one station');
+      return;
+    }
     requireAccount('notify', () => {
       void runNotify(next);
     });
   };
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose} level={2}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
         <View style={styles.headerRow}>
@@ -167,16 +212,23 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
               style={[
                 styles.secondaryBtn,
                 saved && styles.secondaryBtnActive,
-                stationBoundaryLocked && styles.secondaryBtnDisabled,
+                stationBoundaryLocked && styles.secondaryBtnLocked,
               ]}
-              disabled={stationBoundaryLocked}
+              disabled={busy !== null}
               accessibilityRole="button"
             >
-              <Ionicons
-                name={saved ? 'bookmark' : 'bookmark-outline'}
-                size={16}
-                color={saved ? colors.textOnPrimary : colors.primary}
-              />
+              {busy === 'save' ? (
+                <ActivityIndicator
+                  size="small"
+                  color={saved ? colors.textOnPrimary : colors.primary}
+                />
+              ) : (
+                <Ionicons
+                  name={saved ? 'bookmark' : 'bookmark-outline'}
+                  size={16}
+                  color={saved ? colors.textOnPrimary : colors.primary}
+                />
+              )}
               <Text
                 style={[styles.secondaryBtnText, saved && styles.secondaryBtnTextActive]}
               >
@@ -188,16 +240,23 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
               style={[
                 styles.secondaryBtn,
                 notify && styles.secondaryBtnActive,
-                stationBoundaryLocked && !notify && styles.secondaryBtnDisabled,
+                stationBoundaryLocked && !notify && styles.secondaryBtnLocked,
               ]}
-              disabled={stationBoundaryLocked && !notify}
+              disabled={busy !== null}
               accessibilityRole="button"
             >
-              <Ionicons
-                name={notify ? 'notifications' : 'notifications-outline'}
-                size={16}
-                color={notify ? colors.textOnPrimary : colors.primary}
-              />
+              {busy === 'notify' ? (
+                <ActivityIndicator
+                  size="small"
+                  color={notify ? colors.textOnPrimary : colors.primary}
+                />
+              ) : (
+                <Ionicons
+                  name={notify ? 'notifications' : 'notifications-outline'}
+                  size={16}
+                  color={notify ? colors.textOnPrimary : colors.primary}
+                />
+              )}
               <Text
                 style={[styles.secondaryBtnText, notify && styles.secondaryBtnTextActive]}
               >
@@ -302,12 +361,11 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
         initialSeverity={openLine?.severityBucket}
         onClose={() => setOpenLine(null)}
       />
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   sheet: {
     position: 'absolute',
     bottom: 0,
@@ -391,7 +449,7 @@ const styles = StyleSheet.create({
     color: colors.primaryDark,
     lineHeight: 17,
   },
-  secondaryBtnDisabled: { opacity: 0.55 },
+  secondaryBtnLocked: { opacity: 0.55 },
   directionsBtn: {
     flexDirection: 'row',
     alignItems: 'center',

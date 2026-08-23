@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import {
   Image,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,8 +9,9 @@ import {
   View,
 } from 'react-native';
 import Constants from 'expo-constants';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -30,13 +30,10 @@ export function AboutSheet({
   // (it was hardcoded and stuck on 5.0.2).
   version = Constants.expoConfig?.version ?? 'n/a',
 }: Props) {
+  if (!visible) return null;
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      {/* A full-screen Modal is its own native window on iOS, so the app-root
-          SafeAreaProvider's insets don't reach it — SafeAreaView read a top
-          inset of 0 and the header rendered under the status bar (the
-          "cropped page" bug). Each modal needs its own provider. */}
-      <SafeAreaProvider>
+    <SheetOverlay onRequestClose={onClose} dim={false} visible={visible}>
       <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>About DriveIQ</Text>
@@ -91,8 +88,7 @@ export function AboutSheet({
           </Text>
         </ScrollView>
       </SafeAreaView>
-      </SafeAreaProvider>
-    </Modal>
+    </SheetOverlay>
   );
 }
 

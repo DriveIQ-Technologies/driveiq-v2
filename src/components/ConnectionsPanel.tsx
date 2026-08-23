@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,7 +10,7 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
-import { StationHubSheet } from '@/components/StationHubSheet';
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
 import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
 import { colors } from '@/theme/colors';
@@ -25,8 +24,8 @@ import {
 interface Props {
   visible: boolean;
   onClose: () => void;
-  /** Optional: navigate / centre map on a major station hub. */
-  onNavigateToStation?: (station: MajorStation) => void;
+  /** Open the hub sheet as a sibling overlay — never nested inside this one. */
+  onOpenStation?: (station: MajorStation) => void;
 }
 
 const modeIcon = (mode: string): React.ComponentProps<typeof Ionicons>['name'] => {
@@ -66,21 +65,21 @@ const modeLabel = (mode: string): string => {
   }
 };
 
-export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Props) {
+export function ConnectionsPanel({ visible, onClose, onOpenStation }: Props) {
   const [lines, setLines] = useState<LineStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Currently-open line detail popup. `null` = closed.
   const [openLine, setOpenLine] = useState<LineStatus | null>(null);
-  const [openStation, setOpenStation] = useState<MajorStation | null>(null);
 
   useEffect(() => {
     if (visible) trackScreen('connections_panel');
+    else setOpenLine(null);
   }, [visible]);
 
   const handleStationTap = (station: MajorStation) => {
     track('connections_station_tapped', { station_id: station.id });
-    setOpenStation(station);
+    onOpenStation?.(station);
   };
 
   useEffect(() => {
@@ -112,8 +111,7 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
   }
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
         <View style={styles.headerRow}>
@@ -233,7 +231,8 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
         </ScrollView>
       </View>
 
-      {/* Stacked detail popup — opens on top of this sheet. */}
+      {/* Stacked detail sheets. Rendered after the panel so they paint above
+          it; these are plain overlays, so nesting can't wedge touch handling. */}
       <LineDetailSheet
         lineId={openLine?.id ?? null}
         fallbackTitle={openLine?.name}
@@ -241,25 +240,11 @@ export function ConnectionsPanel({ visible, onClose, onNavigateToStation }: Prop
         initialSeverity={openLine?.severityBucket}
         onClose={() => setOpenLine(null)}
       />
-      <StationHubSheet
-        station={openStation}
-        onClose={() => setOpenStation(null)}
-        onNavigate={
-          onNavigateToStation
-            ? (s) => {
-                setOpenStation(null);
-                onClose();
-                onNavigateToStation(s);
-              }
-            : undefined
-        }
-      />
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   sheet: {
     position: 'absolute',
     bottom: 0,

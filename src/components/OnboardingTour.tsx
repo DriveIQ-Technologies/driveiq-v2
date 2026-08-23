@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import { hasSeenTour, markTourSeen } from '@/services/onboarding';
@@ -63,6 +64,7 @@ export function OnboardingTour({ onDone }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     (async () => {
       const seen = await hasSeenTour();
       if (cancelled) return;
@@ -70,7 +72,7 @@ export function OnboardingTour({ onDone }: Props) {
         onDone('already_seen');
       } else {
         // Let the map paint first.
-        setTimeout(() => {
+        timer = setTimeout(() => {
           if (!cancelled) {
             setVisible(true);
             trackScreen('onboarding_tour');
@@ -80,6 +82,7 @@ export function OnboardingTour({ onDone }: Props) {
     })();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [onDone]);
 
@@ -104,8 +107,8 @@ export function OnboardingTour({ onDone }: Props) {
   const isLast = step === STEPS.length - 1;
 
   return (
-    <Modal transparent animationType="fade" visible onRequestClose={finish}>
-      <View style={styles.backdrop}>
+    <SheetOverlay onRequestClose={finish} dismissOnBackdropPress={false}>
+      <View style={styles.backdrop} pointerEvents="box-none">
         <View style={styles.card}>
           <Pressable
             onPress={() => {
@@ -143,14 +146,13 @@ export function OnboardingTour({ onDone }: Props) {
           </Pressable>
         </View>
       </View>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(14, 42, 58, 0.6)',
     justifyContent: 'center',
     paddingHorizontal: 20,
   },

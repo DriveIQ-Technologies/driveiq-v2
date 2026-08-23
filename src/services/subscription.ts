@@ -5,7 +5,7 @@
  * to exercise gated features during Play Store review / TestFlight.
  */
 
-import { Alert } from 'react-native';
+import { showDialog } from './dialog';
 import { getItem, setItem } from './storage';
 import { refreshUserTraits, track } from './analytics';
 import { getWaitlistTrialEnds, waitlistTrialActive } from './waitlist';
@@ -52,7 +52,7 @@ export async function syncPremiumEntitlement(): Promise<void> {
 
 export function showProPaywall(feature: string): void {
   track('paywall_viewed', { trigger: feature });
-  Alert.alert(
+  showDialog(
     'DriveIQ Premium',
     `${feature} is part of DriveIQ Premium. Subscriptions are not live in stores yet. This is a preview of what is coming.`,
   );

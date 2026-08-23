@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import React, { useEffect, useRef } from 'react';
 import {
-  Alert,
   Animated,
   Dimensions,
   Easing,
@@ -17,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
+import { showConfirm, showDialog } from '@/services/dialog';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
 
@@ -91,7 +91,7 @@ export function SidebarMenu({
   }, [visible, signedIn, slide]);
 
   const placeholder = (label: string) =>
-    Alert.alert(
+    showDialog(
       label,
       'This will be wired once we connect the payments backend. The UI shell is already in place.',
     );
@@ -113,17 +113,14 @@ export function SidebarMenu({
   });
 
   const confirmSignOut = () =>
-    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: () => {
-          onClose();
-          logout().catch(() => undefined);
-        },
+    showConfirm('Sign out', 'Are you sure you want to sign out?', {
+      confirmLabel: 'Sign out',
+      destructive: true,
+      onConfirm: () => {
+        onClose();
+        logout().catch(() => undefined);
       },
-    ]);
+    });
 
   const accountRows: MenuRow[] = signedIn
     ? [
@@ -383,8 +380,9 @@ function Section({
 const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 300,
-    elevation: 300,
+    // Below sheet overlays (300) so a sheet opened from the menu covers it.
+    zIndex: 250,
+    elevation: 250,
   },
   dim: {
     ...StyleSheet.absoluteFillObject,

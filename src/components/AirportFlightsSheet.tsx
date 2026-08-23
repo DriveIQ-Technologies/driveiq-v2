@@ -2,8 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,6 +10,8 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
+import { showDialog } from '@/services/dialog';
 import { useAuth } from '@/providers/AuthProvider';
 import type { Airport, ConnectionStatus } from '@/services/airports';
 import { fetchAirportConnectionStatuses } from '@/services/airports';
@@ -213,12 +213,12 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
         const watchedCount = Object.keys(saved).length;
         if (!isPro && watchedCount >= FREE_WATCH_LIMIT) {
           track('flight_save_blocked_limit', { tier: 'free', watched_count: watchedCount });
-          Alert.alert(
+          showDialog(
             'Flight watch limit',
             `Free tracks ${FREE_WATCH_LIMIT} flight at a time. Upgrade to DriveIQ Premium to watch unlimited flights, or stop watching your current one first.`,
             [
-              { text: 'Not now', style: 'cancel' },
-              { text: 'See Premium', onPress: upgrade },
+              { label: 'Not now', style: 'cancel' },
+              { label: 'See Premium', onPress: upgrade },
             ],
           );
           return;
@@ -227,7 +227,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
         await ensurePermission();
         const prefs = await loadPrefs();
         if (!prefs['saved-flights']) {
-          Alert.alert(
+          showDialog(
             'Flight alerts off',
             'Turn on “Watched flights” in Notification settings to get delay and cancel pings.',
           );
@@ -239,7 +239,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
           flight_id: f.id,
           direction: f.direction,
         });
-        Alert.alert(
+        showDialog(
           'Watching flight',
           `${f.flightNumber}. We will ping you if it is delayed or cancelled.`,
         );
@@ -252,8 +252,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
   };
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
 
@@ -500,8 +499,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
       />
 
       {selectedFlight ? (
-        <Modal transparent animationType="fade" visible onRequestClose={() => setSelectedFlight(null)}>
-          <Pressable style={styles.detailBackdrop} onPress={() => setSelectedFlight(null)} />
+        <SheetOverlay onRequestClose={() => setSelectedFlight(null)}>
           <View style={styles.detailCard}>
             <Text style={styles.detailTitle}>{selectedFlight.flightNumber}</Text>
             <Text style={styles.detailBody}>
@@ -549,14 +547,13 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
               <Text style={styles.detailCloseText}>Close</Text>
             </Pressable>
           </View>
-        </Modal>
+        </SheetOverlay>
       ) : null}
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   sheet: {
     position: 'absolute',
     bottom: 0,
@@ -704,10 +701,6 @@ const styles = StyleSheet.create({
   flightStatusText: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
   statusPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, maxWidth: 120 },
   statusText: { fontSize: 11, fontWeight: '800', color: colors.textOnPrimary, textAlign: 'center' },
-  detailBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
   detailCard: {
     position: 'absolute',
     left: 20,

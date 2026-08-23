@@ -2,9 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -14,6 +12,8 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
+import { showDialog } from '@/services/dialog';
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { colors } from '@/theme/colors';
@@ -105,16 +105,16 @@ export function AccountSheet({ visible, section, onClose }: Props) {
 
   const done = (msg: string) => {
     onClose();
-    Alert.alert('Done', msg);
+    showDialog('Done', msg);
   };
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
+    <SheetOverlay onRequestClose={onClose}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
+        pointerEvents="box-none"
       >
-        <Pressable style={styles.backdrop} onPress={onClose} />
         <View style={styles.sheet}>
           <View style={styles.handle} />
           <ScrollView
@@ -191,7 +191,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
@@ -214,8 +214,7 @@ function Field({
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(14, 42, 58, 0.45)' },
+  flex: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: 24,

@@ -1,5 +1,6 @@
 import type { AppEvent } from '@/types/event';
 import { eventOverlapsRange, type DateRange } from '@/utils/dateFilters';
+import { ukOffset } from '@/utils/ukTime';
 
 /**
  * Curated "featured" events.
@@ -75,8 +76,8 @@ function cricketMatch(
     source: 'featured',
     category: 'sports',
     title,
-    startsAt: `${date}T${startLocal}:00+01:00`,
-    endsAt: `${date}T${endLocal}:00+01:00`,
+    startsAt: `${date}T${startLocal}:00${ukOffset(date)}`,
+    endsAt: `${date}T${endLocal}:00${ukOffset(date)}`,
     venue: loc.venue,
     latitude: loc.latitude,
     longitude: loc.longitude,
@@ -239,8 +240,8 @@ function parkEvent(
     source: 'featured',
     category: 'other',
     title,
-    startsAt: `${date}T${startLocal}:00+01:00`,
-    endsAt: `${date}T${endLocal}:00+01:00`,
+    startsAt: `${date}T${startLocal}:00${ukOffset(date)}`,
+    endsAt: `${date}T${endLocal}:00${ukOffset(date)}`,
     venue: place.venue,
     latitude: place.latitude,
     longitude: place.longitude,
@@ -256,8 +257,8 @@ function raceday(idSlug: string, title: string, date: string): AppEvent {
     source: 'featured',
     category: 'sports',
     title,
-    startsAt: `${date}T13:30:00+01:00`,
-    endsAt: `${date}T17:45:00+01:00`,
+    startsAt: `${date}T13:30:00${ukOffset(date)}`,
+    endsAt: `${date}T17:45:00${ukOffset(date)}`,
     venue: 'Ascot Racecourse',
     latitude: 51.4106,
     longitude: -0.6785,
@@ -355,8 +356,8 @@ function promsEvents(): AppEvent[] {
     source: 'featured' as const,
     category: 'other' as const,
     title: `BBC Proms: ${title}`,
-    startsAt: `${date}T${startLocal}:00+01:00`,
-    endsAt: `${date}T${endLocal}:00+01:00`,
+    startsAt: `${date}T${startLocal}:00${ukOffset(date)}`,
+    endsAt: `${date}T${endLocal}:00${ukOffset(date)}`,
     venue: 'Royal Albert Hall',
     latitude: 51.5009,
     longitude: -0.1774,
@@ -373,8 +374,8 @@ function ascot(dayLabel: string, date: string): AppEvent {
     source: 'featured',
     category: 'sports',
     title: `Royal Ascot 2026 — Day ${dayLabel}`,
-    startsAt: `${date}T14:00:00+01:00`,
-    endsAt: `${date}T18:00:00+01:00`,
+    startsAt: `${date}T14:00:00${ukOffset(date)}`,
+    endsAt: `${date}T18:00:00${ukOffset(date)}`,
     venue: 'Ascot Racecourse',
     latitude: 51.4106,
     longitude: -0.6785,
@@ -387,8 +388,8 @@ function ascot(dayLabel: string, date: string): AppEvent {
 /**
  * Generate one featured entry per day across an inclusive date range. Reusable
  * for any multi-day event where roughly the same daily window applies
- * (Wimbledon fortnight, a cricket Test, a festival run). Times are local London
- * (BST, +01:00 in summer).
+ * (Wimbledon fortnight, a cricket Test, a festival run). Times are London
+ * wall-clock; the BST/GMT offset is derived per date.
  */
 function recurringDaily(opts: {
   idPrefix: string;
@@ -403,9 +404,9 @@ function recurringDaily(opts: {
   description: string;
   subCategory: string;
   category: AppEvent['category'];
-  offset?: string; // tz offset, default '+01:00'
+  /** Override only if the source really publishes a fixed offset. */
+  offset?: string;
 }): AppEvent[] {
-  const off = opts.offset ?? '+01:00';
   const out: AppEvent[] = [];
   const start = new Date(`${opts.startDate}T00:00:00Z`);
   const end = new Date(`${opts.endDate}T00:00:00Z`);
@@ -414,6 +415,7 @@ function recurringDaily(opts: {
     index += 1;
     const date = d.toISOString().slice(0, 10);
     const dayLabel = `Day ${index}`;
+    const off = opts.offset ?? ukOffset(date);
     out.push({
       id: `${opts.idPrefix}-${date}`,
       source: 'featured',

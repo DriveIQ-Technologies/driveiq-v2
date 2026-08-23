@@ -142,7 +142,14 @@ export const SEVERITY_LABEL: Record<LineSeverityBucket, string> = {
   closed: 'Closed / suspended',
 };
 
+const STATUS_TTL_MS = 45_000;
+let allLinesCache: { at: number; data: LineStatus[] } | null = null;
+const byIdsCache = new Map<string, { at: number; data: LineStatus[] }>();
+
 export async function fetchLineStatuses(): Promise<LineStatus[]> {
+  if (allLinesCache && Date.now() - allLinesCache.at < STATUS_TTL_MS && allLinesCache.data.length) {
+    return allLinesCache.data;
+  }
   // Cache-buster + no-store: intermediate CDN/HTTP caches must never serve a
   // stale copy of a "live status" response.
   const url = `${ENDPOINT}?_=${Date.now()}${APP_KEY ? `&app_key=${encodeURIComponent(APP_KEY)}` : ''}`;
@@ -151,11 +158,11 @@ export async function fetchLineStatuses(): Promise<LineStatus[]> {
     res = await fetch(url, { cache: 'no-store' });
   } catch (e) {
     console.warn('[tfl-lines] network error', e);
-    return [];
+    return allLinesCache?.data ?? [];
   }
   if (!res.ok) {
     console.warn('[tfl-lines] non-OK', res.status);
-    return [];
+    return allLinesCache?.data ?? [];
   }
 
   const raw = (await res.json()) as RawLine[];
@@ -164,7 +171,8 @@ export async function fetchLineStatuses(): Promise<LineStatus[]> {
   // Sort: worst-first so problems surface at the top of the panel.
   out.sort((a, b) => SEVERITY_RANK[a.severityBucket] - SEVERITY_RANK[b.severityBucket]);
   console.log(`[tfl-lines] ${out.length} lines (${out.filter((l) => l.severityBucket !== 'good').length} disrupted)`);
-  return out;
+  if (out.length > 0) allLinesCache = { at: Date.now(), data: out };
+  return out.length > 0 ? out : allLinesCache?.data ?? [];
 }
 
 /**
@@ -178,6 +186,11 @@ export async function fetchLineStatusesByIds(
 ): Promise<LineStatus[]> {
   const unique = Array.from(new Set(lineIds.filter(Boolean)));
   if (unique.length === 0) return [];
+  const cacheKey = unique.slice().sort().join(',');
+  const cached = byIdsCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < STATUS_TTL_MS && cached.data.length) {
+    return cached.data;
+  }
 
   const url = `https://api.tfl.gov.uk/Line/${unique
     .map(encodeURIComponent)
@@ -190,17 +203,18 @@ export async function fetchLineStatusesByIds(
     res = await fetch(url, { cache: 'no-store' });
   } catch (e) {
     console.warn('[tfl-lines] byIds network error', e);
-    return [];
+    return cached?.data ?? [];
   }
   if (!res.ok) {
     console.warn('[tfl-lines] byIds non-OK', res.status);
-    return [];
+    return cached?.data ?? [];
   }
 
   const raw = (await res.json()) as RawLine[];
   const out = raw.map((l) => mapRawLine(l));
   out.sort((a, b) => SEVERITY_RANK[a.severityBucket] - SEVERITY_RANK[b.severityBucket]);
-  return out;
+  if (out.length > 0) byIdsCache.set(cacheKey, { at: Date.now(), data: out });
+  return out.length > 0 ? out : cached?.data ?? [];
 }
 
 function mapRawLine(l: RawLine): LineStatus {

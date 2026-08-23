@@ -1,10 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -13,8 +11,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
+import { showDialog } from '@/services/dialog';
 import { colors } from '@/theme/colors';
 
 interface Props {
@@ -55,7 +55,7 @@ export function FeedbackSheet({ visible, onClose }: Props) {
   const handleSend = async () => {
     const body = text.trim();
     if (!body) {
-      Alert.alert('Add a note', 'Tell us a little about your feedback first.');
+      showDialog('Add a note', 'Tell us a little about your feedback first.');
       return;
     }
     const subjectLabel = KINDS.find((k) => k.key === kind)?.label ?? 'Feedback';
@@ -68,18 +68,17 @@ export function FeedbackSheet({ visible, onClose }: Props) {
       await Linking.openURL(url);
       handleClose();
     } catch {
-      Alert.alert(
+      showDialog(
         'No mail app found',
         `Please email us directly at ${SUPPORT_EMAIL}.`,
       );
     }
   };
 
+  if (!visible) return null;
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={handleClose}>
-      {/* Own provider: root insets don't reach a native Modal window, which
-          left the header under the status bar (the "cropped page" bug). */}
-      <SafeAreaProvider>
+    <SheetOverlay onRequestClose={handleClose} dim={false} visible={visible}>
       <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Send feedback</Text>
@@ -139,8 +138,7 @@ export function FeedbackSheet({ visible, onClose }: Props) {
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
-      </SafeAreaProvider>
-    </Modal>
+    </SheetOverlay>
   );
 }
 

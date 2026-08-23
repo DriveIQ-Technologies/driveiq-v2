@@ -1,4 +1,4 @@
-import { findLondonPlace } from '@/data/londonVenues';
+import { findLondonPlace, resolveEventPlace } from '@/data/londonVenues';
 import type { AppEvent } from '@/types/event';
 import {
   eventOverlapsRange,
@@ -79,12 +79,9 @@ interface EspnHeaderResponse {
   sports?: { leagues?: EspnHeaderLeague[] }[];
 }
 
-const yyyymmdd = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
-};
+// London calendar day, not the device's — see the same note in espn.ts.
+const yyyymmdd = (d: Date): string => londonYmd(d).replace(/-/g, '');
+
 
 const subCategoryFor = (seriesName: string, description: string): string => {
   const hay = `${seriesName} ${description}`.toLowerCase();
@@ -202,7 +199,7 @@ const normaliseEvent = (
   const homeName =
     home?.team?.displayName ?? home?.team?.shortDisplayName ?? '';
 
-  const place = findLondonPlace(venueName, homeName);
+  const place = resolveEventPlace(venueName, homeName);
   if (!place) return null;
 
   const subCategory = subCategoryFor(seriesName, event.name ?? '');

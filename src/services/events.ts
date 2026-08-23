@@ -4,6 +4,7 @@ import type { DateRange } from '@/utils/dateFilters';
 import { track } from './analytics';
 
 import { fetchCricinfoLondon } from './cricinfo';
+import { dedupeEvents } from './eventDedupe';
 import { fetchEspnLondon } from './espn';
 import { fetchFeaturedLondon } from './featuredEvents';
 import { fetchFootballDataLondon } from './footballData';
@@ -180,25 +181,24 @@ function finalize(
     ...buckets.ticketmaster,
   ];
 
-  const THREE_H = 3 * 60 * 60 * 1000;
-  const venueSiteUnique = buckets.venueSites.filter((v) => {
-    const t = new Date(v.startsAt).getTime();
-    return !apiCombined.some(
-      (a) =>
-        a.venue === v.venue &&
-        Math.abs(new Date(a.startsAt).getTime() - t) <= THREE_H,
-    );
-  });
-  apiCombined.push(...venueSiteUnique);
+  apiCombined.push(...buckets.venueSites);
 
   const base = apiCombined.length === 0 && allowSample ? null : apiCombined;
   const combined = [...buckets.featured, ...(base ?? [])];
 
-  const byId = new Map<string, AppEvent>();
-  for (const e of combined) if (!byId.has(e.id)) byId.set(e.id, e);
+  // Every provider namespaces its own ids, so id-only dedupe let the same
+  // fixture through once per provider. dedupeEvents matches on what the event
+  // actually is (teams + day, or title + venue + performance).
+  const { events: deduped, removed, samples } = dedupeEvents(combined);
+  if (removed > 0) {
+    console.log(`[events] collapsed ${removed} duplicate records across providers`);
+    for (const s of samples) {
+      console.log(`[events]   kept ${s.kept} — dropped ${s.dropped.join('; ')}`);
+    }
+  }
 
   let droppedGeo = 0;
-  const merged = Array.from(byId.values())
+  const merged = deduped
     .filter((e) => {
       if (isInDriveIQArea(e.latitude, e.longitude)) return true;
       droppedGeo++;

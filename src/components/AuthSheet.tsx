@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -13,6 +12,7 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { colors } from '@/theme/colors';
@@ -137,20 +137,12 @@ export function AuthSheet({
   };
 
   return (
-    <Modal
-      transparent
-      animationType="slide"
-      visible
-      onRequestClose={quietSkip ? handleSkip : onClose}
-    >
+    <SheetOverlay onRequestClose={quietSkip ? handleSkip : onClose} level={8}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
+        pointerEvents="box-none"
       >
-        <Pressable
-          style={styles.backdrop}
-          onPress={quietSkip ? handleSkip : onClose}
-        />
         <View style={styles.sheet}>
           <View style={styles.handle} />
           <ScrollView
@@ -303,7 +295,7 @@ export function AuthSheet({
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
@@ -326,8 +318,7 @@ function Field({
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(14, 42, 58, 0.45)' },
+  flex: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: 24,

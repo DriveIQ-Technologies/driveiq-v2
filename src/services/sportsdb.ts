@@ -1,5 +1,5 @@
 import {
-  findLondonPlace,
+  resolveEventPlace,
   LONDON_VENUE_LIST,
   type LondonPlace,
 } from '@/data/londonVenues';
@@ -133,7 +133,7 @@ const normalise = (
   if (!iso || !isInRange(iso, range)) return null;
 
   const place =
-    knownPlace ?? findLondonPlace(e.strVenue, e.strHomeTeam) ?? null;
+    knownPlace ?? resolveEventPlace(e.strVenue, e.strHomeTeam) ?? null;
   if (!place) return null;
 
   const title =
@@ -333,7 +333,7 @@ const fetchFreeTierByLeague = async (
     for (const e of events) {
       if (seen.has(e.idEvent)) continue;
 
-      const place = findLondonPlace(e.strVenue, e.strHomeTeam);
+      const place = resolveEventPlace(e.strVenue, e.strHomeTeam);
       if (!place) {
         droppedNotLondon++;
         continue;

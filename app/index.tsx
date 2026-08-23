@@ -11,7 +11,6 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   AppState,
   Image,
   InteractionManager,
@@ -38,6 +37,7 @@ import { AIRPORTS, type Airport } from '@/services/airports';
 import { CategoryFilterBar } from '@/components/CategoryFilterBar';
 import { ClusterPin } from '@/components/ClusterPin';
 import { ConnectionsPanel } from '@/components/ConnectionsPanel';
+import { showDialog } from '@/services/dialog';
 import { EventDetailsSheet } from '@/components/EventDetailsSheet';
 import { EventPin } from '@/components/EventPin';
 import { FilterBar } from '@/components/FilterBar';
@@ -543,7 +543,23 @@ export default function MapScreen() {
     if (showSplash) return;
 
     let cancelled = false;
+    // On a slow connection a poll can outlive the 3-minute interval. Without
+    // this guard the next tick started anyway, so polls stacked up, hammered
+    // TfL / AeroDataBox and churned state — the app got slower the longer it
+    // stayed open.
+    let inFlight = false;
     const load = async () => {
+      if (inFlight || cancelled) return;
+      inFlight = true;
+      try {
+        await runLoad();
+      } catch (e) {
+        console.warn('[poll] live data refresh failed', e);
+      } finally {
+        inFlight = false;
+      }
+    };
+    const runLoad = async () => {
       const [tfl, nh, lines] = await Promise.all([
         fetchTrafficIncidents(),
         fetchHighwaysIncidents(),
@@ -872,19 +888,19 @@ export default function MapScreen() {
             result: res.ok ? 'ok' : res.reason,
           });
           if (res.ok) {
-            Alert.alert('Added to calendar', `“${event.title}” is in your calendar.`);
+            showDialog('Added to calendar', `“${event.title}” is in your calendar.`);
           } else if (res.reason === 'denied') {
-            Alert.alert(
+            showDialog(
               'Calendar access needed',
               'Allow calendar access in Settings to add events.',
             );
           } else if (res.reason === 'unavailable') {
-            Alert.alert(
+            showDialog(
               'Not available yet',
               'Calendar export turns on in the next build. Your event is still saved with a reminder.',
             );
           } else {
-            Alert.alert('Could not add', 'Something went wrong adding to your calendar.');
+            showDialog('Could not add', 'Something went wrong adding to your calendar.');
           }
         })();
       });
@@ -917,7 +933,7 @@ export default function MapScreen() {
           track('report_submitted', { category, has_note: Boolean(note) });
           setReports(next);
           setReportSheetOpen(false);
-          Alert.alert(
+          showDialog(
             'Report added',
             `Thanks — your ${REPORT_META[category].label.toLowerCase()} report is on the map.`,
           );
@@ -935,13 +951,13 @@ export default function MapScreen() {
       hour: '2-digit',
       minute: '2-digit',
     });
-    Alert.alert(
+    showDialog(
       meta.label,
       `${report.note ? `${report.note}\n\n` : ''}Reported at ${when}`,
       [
-        { text: 'Close', style: 'cancel' },
+        { label: 'Close', style: 'cancel' },
         {
-          text: 'Remove',
+          label: 'Remove',
           style: 'destructive',
           onPress: () =>
             removeReport(report.id).then(setReports).catch(() => undefined),
@@ -993,7 +1009,7 @@ export default function MapScreen() {
       track('route_requested', { destination_kind: dest.kind });
       const origin = await ensureLocation();
       if (!origin) {
-        Alert.alert(
+        showDialog(
           'Location required',
           'We need your location to plan a route. Enable location access in Settings and try again.',
         );
@@ -1179,12 +1195,25 @@ export default function MapScreen() {
           },
         );
 
+        // Cleanup may already have run while the await above was pending; in
+        // that case remove immediately or the watcher leaks for the rest of
+        // the session (battery drain + stale camera moves after exiting nav).
+        if (cancelled) {
+          posSub.remove();
+          posSub = null;
+          return;
+        }
+
         headSub = await Location.watchHeadingAsync((h) => {
           if (cancelled) return;
           // trueHeading is preferred; fall back to magHeading.
           const value = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
           if (Number.isFinite(value)) setUserHeading(value);
         });
+        if (cancelled) {
+          headSub.remove();
+          headSub = null;
+        }
       } catch (e) {
         console.warn('[nav] watchers failed', e);
       }
@@ -1194,6 +1223,8 @@ export default function MapScreen() {
       cancelled = true;
       posSub?.remove();
       headSub?.remove();
+      posSub = null;
+      headSub = null;
     };
   }, [isNavigating]);
 
@@ -1700,24 +1731,8 @@ export default function MapScreen() {
       <ConnectionsPanel
         visible={connectionsOpen}
         onClose={() => setConnectionsOpen(false)}
-        onNavigateToStation={(station: MajorStation) => {
-          track('connections_station_navigate', { station_id: station.id });
-          setConnectionsOpen(false);
-          mapRef.current?.animateToRegion(
-            {
-              latitude: station.latitude,
-              longitude: station.longitude,
-              latitudeDelta: 0.04,
-              longitudeDelta: 0.04,
-            },
-            500,
-          );
-          setDestination({
-            kind: 'station',
-            label: station.name,
-            latitude: station.latitude,
-            longitude: station.longitude,
-          });
+        onOpenStation={(station) => {
+          setStationHub(station);
         }}
       />
 
@@ -1816,6 +1831,7 @@ export default function MapScreen() {
         onNavigate={(station) => {
           track('station_hub_navigate', { station_id: station.id });
           setStationHub(null);
+          setConnectionsOpen(false);
           mapRef.current?.animateToRegion(
             {
               latitude: station.latitude,

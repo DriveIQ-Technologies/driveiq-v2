@@ -207,15 +207,20 @@ function toAppEvent(e: TmEvent): AppEvent | null {
   // drop anything outside the DriveIQ coverage box. TM also sometimes
   // sends 0,0 when geo is missing — treat that as absent.
   const venue = e._embedded?.venues?.[0];
-  const place = findLondonPlace(venue?.name, venue?.city?.name);
+  const place = findLondonPlace(venue?.name);
   let lat = toNum(venue?.location?.latitude);
   let lon = toNum(venue?.location?.longitude);
   if (lat === 0 && lon === 0) {
     lat = null;
     lon = null;
   }
-  lat = lat ?? place?.latitude ?? null;
-  lon = lon ?? place?.longitude ?? null;
+  // Known venues always snap to the curated pin. TM geocodes parks and
+  // "London, GB" to the city centroid, which stacked unrelated events
+  // on top of each other in the wrong place.
+  if (place) {
+    lat = place.latitude;
+    lon = place.longitude;
+  }
   if (lat == null || lon == null) return null;
   if (!isInDriveIQArea(lat, lon)) return null;
 

@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState } from 'react';
 import {
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,6 +8,7 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
 import {
   buildCorridorBuckets,
@@ -55,8 +55,7 @@ export function RoadsPanel({ visible, incidents, onClose, onNavigate }: Props) {
   const active = buckets.find((b) => b.corridor.id === selectedCorridor) ?? buckets[0];
 
   return (
-    <Modal transparent animationType="slide" visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <SheetOverlay onRequestClose={onClose}>
       <View style={styles.sheet}>
         <View style={styles.handle} />
         <View style={styles.headerRow}>
@@ -177,12 +176,11 @@ export function RoadsPanel({ visible, incidents, onClose, onNavigate }: Props) {
           })}
         </ScrollView>
       </View>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   sheet: {
     position: 'absolute',
     bottom: 0,

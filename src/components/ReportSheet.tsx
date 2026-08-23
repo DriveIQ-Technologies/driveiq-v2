@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -11,6 +10,7 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import {
@@ -57,19 +57,16 @@ export function ReportSheet({ visible, onClose, onSubmit }: Props) {
     if (visible) trackScreen('report_sheet');
   }, [visible]);
 
+  if (!visible) return null;
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={handleClose}
-    >
+    <SheetOverlay onRequestClose={handleClose}>
       <KeyboardAvoidingView
         style={styles.flexEnd}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        pointerEvents="box-none"
       >
-        <Pressable style={styles.backdrop} onPress={handleClose} />
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+        <View style={styles.sheet}>
           <View style={styles.handle} />
 
           <View style={styles.titleRow}>
@@ -133,9 +130,9 @@ export function ReportSheet({ visible, onClose, onSubmit }: Props) {
             <Ionicons name="add-circle" size={18} color={colors.textOnPrimary} />
             <Text style={styles.submitText}>Submit report</Text>
           </Pressable>
-        </Pressable>
+        </View>
       </KeyboardAvoidingView>
-    </Modal>
+    </SheetOverlay>
   );
 }
 
@@ -143,10 +140,6 @@ const styles = StyleSheet.create({
   flexEnd: {
     flex: 1,
     justifyContent: 'flex-end',
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(14, 42, 58, 0.45)',
   },
   sheet: {
     backgroundColor: colors.surface,

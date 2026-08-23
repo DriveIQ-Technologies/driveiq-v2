@@ -46,14 +46,20 @@ function EventPinBase({ event, selected, onPress, rasterEpoch = 0 }: EventPinPro
   // safety timeout still freezes in case onReady never fires.
   const [tracks, setTracks] = useState(true);
   const frozenRef = useRef(false);
+  const freezeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const freezeSoon = () => {
     if (frozenRef.current) return;
     frozenRef.current = true;
-    setTimeout(() => setTracks(false), 200);
+    freezeTimerRef.current = setTimeout(() => setTracks(false), 200);
   };
   useEffect(() => {
     const safety = setTimeout(() => setTracks(false), 2000);
-    return () => clearTimeout(safety);
+    return () => {
+      clearTimeout(safety);
+      // Hundreds of pins mount and unmount as filters change; an orphan timer
+      // per pin adds up to real work on the JS thread.
+      if (freezeTimerRef.current) clearTimeout(freezeTimerRef.current);
+    };
   }, []);
 
   // Self-heal pass: after each completed map gesture, briefly re-enable

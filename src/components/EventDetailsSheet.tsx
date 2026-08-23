@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import {
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,6 +8,7 @@ import {
   View,
 } from 'react-native';
 
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import type { AppEvent } from '@/types/event';
@@ -49,15 +49,12 @@ export function EventDetailsSheet({
     });
   }, [event]);
 
+  if (!visible) return null;
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+    <SheetOverlay onRequestClose={onClose}>
+      <View style={styles.backdrop} pointerEvents="box-none">
+        <View style={styles.sheet}>
           {event && <SheetBody event={event} userLocation={userLocation} />}
           <View style={styles.actions}>
             {event && onNavigate ? (
@@ -131,9 +128,9 @@ export function EventDetailsSheet({
               <Text style={styles.closeText}>Close</Text>
             </Pressable>
           </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+        </View>
+      </View>
+    </SheetOverlay>
   );
 }
 
@@ -217,7 +214,6 @@ function SheetBody({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(14, 42, 58, 0.45)',
     justifyContent: 'flex-end',
   },
   sheet: {
