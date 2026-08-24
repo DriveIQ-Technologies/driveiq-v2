@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -27,7 +27,7 @@ import {
   type SavedFlightMap,
 } from '@/services/savedFlights';
 import { track, trackScreen } from '@/services/analytics';
-import { hasProAccess, showProPaywall } from '@/services/subscription';
+import { hasProAccess, showPremiumPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import { ensurePermission, loadPrefs } from '@/services/notifications';
 
@@ -191,9 +191,23 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     return [visible, locked] as const;
   }, [flights, direction, isPro]);
 
+  const boundaryTracked = useRef(false);
+  useEffect(() => {
+    if (isPro || lockedFlights.length === 0 || boundaryTracked.current || !airport) return;
+    boundaryTracked.current = true;
+    track('three_hour_boundary_reached', {
+      airport_id: airport.id,
+      locked_count: lockedFlights.length,
+    });
+  }, [isPro, lockedFlights.length, airport]);
+
   if (!airport) return null;
 
-  const upgrade = () => showProPaywall('Full-day arrivals and unlimited watched flights');
+  const upgrade = () =>
+    showPremiumPaywall('Full-day arrivals and unlimited watched flights', {
+      source: 'airport_flights',
+      inline: true,
+    });
 
   const toggleSave = async (f: AirportFlight) => {
     const hasAccount = requireAccount('watched_flight', () => {

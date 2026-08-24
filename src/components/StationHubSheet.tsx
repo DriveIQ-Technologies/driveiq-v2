@@ -35,6 +35,8 @@ interface Props {
   onClose: () => void;
   /** Optional: centre the map / start navigation to this hub. */
   onNavigate?: (station: MajorStation) => void;
+  /** Fired after the user's first station save (permission priming). */
+  onFirstStationSaved?: () => void;
 }
 
 const modeIcon = (mode: string): React.ComponentProps<typeof Ionicons>['name'] => {
@@ -53,7 +55,7 @@ const modeIcon = (mode: string): React.ComponentProps<typeof Ionicons>['name'] =
   }
 };
 
-export function StationHubSheet({ station, onClose, onNavigate }: Props) {
+export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSaved }: Props) {
   const { requireAccount } = useAuth();
   const [lines, setLines] = useState<StationLineStatus[]>([]);
   const [loading, setLoading] = useState(false);
@@ -108,7 +110,6 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
   const notify = Boolean(savedStations[station.id]?.notify);
   const savedCount = Object.keys(savedStations).length;
   const stationBoundaryLocked = !isPremium && !saved && savedCount >= 1;
-  const hiddenCount = Math.max(0, MAJOR_STATIONS.length - savedCount);
 
   const runSave = async () => {
     if (busy) return;
@@ -118,7 +119,9 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
       if (!mountedRef.current) return;
       setSavedStations(res.map);
       if (res.result === 'blocked-limit') {
-        showProPaywall('Saving more than one station');
+        showProPaywall('Saving more than one station', { source: 'station_hub' });
+      } else if (res.result === 'saved' && Object.keys(res.map).length === 1) {
+        onFirstStationSaved?.();
       }
     } catch (e) {
       console.warn('[stations] save failed', e);
@@ -197,12 +200,14 @@ export function StationHubSheet({ station, onClose, onNavigate }: Props) {
           {stationBoundaryLocked ? (
             <Pressable
               style={styles.inlineUpgradeBar}
-              onPress={() => showProPaywall('Save more than one station')}
+              onPress={() =>
+                showProPaywall('Save more than one station', { source: 'station_hub', inline: true })
+              }
               accessibilityRole="button"
             >
               <Ionicons name="lock-closed" size={15} color={colors.primaryDark} />
               <Text style={styles.inlineUpgradeText}>
-                Another {hiddenCount} stations are locked. Save all stations and get alerts with DriveIQ Premium.
+                Free saves one station. Upgrade to save all seven hubs and turn on alerts for each.
               </Text>
             </Pressable>
           ) : null}

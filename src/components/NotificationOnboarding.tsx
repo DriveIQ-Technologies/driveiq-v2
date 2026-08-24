@@ -22,6 +22,8 @@ import {
 interface Props {
   /** Called when the user closes the popup (either decision). */
   onDone: () => void;
+  /** Controlled mode: show when true (e.g. after first station save). */
+  open?: boolean;
 }
 
 interface PerkRow {
@@ -43,8 +45,8 @@ const PERKS: PerkRow[] = [
   },
   {
     icon: 'calendar',
-    title: 'Events you’ve saved',
-    body: 'A reminder one hour before any event you save, so there is always time to plan your route.',
+    title: 'Events you have saved',
+    body: 'Two reminders: 1 hour before it starts, and 25 minutes before crowds leave.',
   },
 ];
 
@@ -54,37 +56,21 @@ const PERKS: PerkRow[] = [
  * never re-appears — users can revisit notification settings from the
  * Notifications panel any time.
  */
-export function NotificationOnboarding({ onDone }: Props) {
+export function NotificationOnboarding({ onDone, open }: Props) {
   const { hasAccount, requireAccount } = useAuth();
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // Decide whether to show on mount. Defer to next tick so the map paints
-  // first and the modal slides up over it — feels less like an interrupt.
   useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    (async () => {
-      const seen = await hasSeenOnboarding();
-      if (cancelled) return;
-      if (!seen) {
-        // Small delay so it doesn't fire at the exact same instant as the
-        // map markers appearing.
-        timer = setTimeout(() => {
-          if (!cancelled) {
-            setVisible(true);
-            trackScreen('notification_onboarding');
-          }
-        }, 900);
-      } else {
-        onDone();
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [onDone]);
+    if (open) {
+      setVisible(true);
+      trackScreen('notification_onboarding');
+      return;
+    }
+    if (open === false) {
+      setVisible(false);
+    }
+  }, [open]);
 
   const handleEnable = async () => {
     // No account yet: alerts have nowhere to go, so send the user to create
@@ -161,7 +147,7 @@ export function NotificationOnboarding({ onDone }: Props) {
           <Text style={styles.footer}>
             {hasAccount
               ? 'You stay in control. Every category has its own toggle in Settings, and per-line subscriptions let you pick exactly which lines to follow.'
-              : 'Alerts need a free account so we know where to send them. You stay in control — every category has its own toggle in Settings once you are in.'}
+              : 'Alerts need a free account so we know where to send them. You stay in control. Every category has its own toggle in Settings once you are in.'}
           </Text>
 
           <View style={styles.buttonRow}>

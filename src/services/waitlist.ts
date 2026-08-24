@@ -15,6 +15,7 @@ import { getItem, setItem } from './storage';
 
 const TRIAL_ENDS_KEY = 'driveiq.premium.trialEnds';
 const TRIAL_EMAIL_KEY = 'driveiq.premium.trialEmail';
+const TRIAL_END_SEEN_KEY = 'driveiq.waitlist.trialEndSeen';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 const envEmails = (): string[] =>
@@ -26,6 +27,15 @@ const envEmails = (): string[] =>
 export async function getWaitlistTrialEnds(): Promise<string | null> {
   const ends = await getItem(TRIAL_ENDS_KEY);
   return ends || null;
+}
+
+export async function hasSeenWaitlistTrialEnd(): Promise<boolean> {
+  const v = await getItem(TRIAL_END_SEEN_KEY);
+  return v === '1';
+}
+
+export async function markWaitlistTrialEndSeen(): Promise<void> {
+  await setItem(TRIAL_END_SEEN_KEY, '1');
 }
 
 export async function waitlistTrialActive(): Promise<boolean> {

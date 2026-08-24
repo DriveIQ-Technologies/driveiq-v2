@@ -34,6 +34,8 @@ import {
   type DateRange,
 } from '@/utils/dateFilters';
 import { turnoutRange, venueProfileFor } from '@/data/venueProfiles';
+import { reminderConfirmationCopy } from '@/services/eventReminders';
+import { showDialog } from '@/services/dialog';
 import { ChatComposer } from '@/components/ai/ChatComposer';
 import { EmptyHero, type PromptCard } from '@/components/ai/EmptyHero';
 import { EventSectionBlock } from '@/components/ai/EventSectionBlock';
@@ -549,6 +551,15 @@ export function AISupportSheet({
   const pushBot = (text: string) =>
     setMessages((prev) => [...prev, { id: `b-${Date.now()}-${Math.random()}`, role: 'bot', text }]);
 
+  const confirmRemind = (event: AppEvent, source: 'chat' | 'card') => {
+    if (!onSaveEvent) return;
+    onSaveEvent(event);
+    track('ai_event_action_tapped', { action: 'remind', source });
+    const copy = reminderConfirmationCopy(event);
+    pushBot(copy);
+    showDialog('Reminder on', copy);
+  };
+
   /** Build reminder / calendar chips for the events the answer offered. */
   const buildActions = (offer: AppEvent[]): ChatAction[] => {
     const actions: ChatAction[] = [];
@@ -557,11 +568,7 @@ export function AISupportSheet({
         actions.push({
           label: i === 0 ? 'Remind me' : `Remind: ${shortTitle(e.title)}`,
           icon: 'notifications-outline',
-          onPress: () => {
-            onSaveEvent(e);
-            track('ai_event_action_tapped', { action: 'remind', source: 'chat' });
-            pushBot(`Reminder set for “${e.title}”. I’ll nudge you an hour before it starts.`);
-          },
+          onPress: () => confirmRemind(e, 'chat'),
         });
       }
     });
@@ -798,10 +805,7 @@ export function AISupportSheet({
   };
 
   const handleRemind = (event: AppEvent) => {
-    if (!onSaveEvent) return;
-    onSaveEvent(event);
-    track('ai_event_action_tapped', { action: 'remind', source: 'card' });
-    pushBot(`Reminder set for “${event.title}”. I’ll nudge you an hour before it starts.`);
+    confirmRemind(event, 'card');
   };
 
   const handleCalendar = (event: AppEvent) => {

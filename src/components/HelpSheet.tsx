@@ -39,7 +39,7 @@ const FAQS: QA[] = [
   },
   {
     q: 'How do I save an event?',
-    a: "Tap a pin to open the event, then tap Save. We'll remind you one hour before it starts. Tap Calendar to add it to your phone's calendar with the start and end time.",
+    a: "Tap a pin to open the event, then tap Save. We'll remind you 1 hour before it starts and 25 minutes before crowds leave. Tap Calendar to add it to your phone's calendar with the start and end time.",
   },
   {
     q: 'How do notifications work?',

@@ -2,7 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { SheetOverlay } from '@/components/ui/SheetOverlay';
+import { PremiumInlineBar } from '@/components/PremiumInlineBar';
+import { showPremiumPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
 import { formatEventDate } from '@/utils/dateFilters';
@@ -11,6 +12,8 @@ import { CATEGORY_FILTERS, categoryFilterFor, pinDescriptorFor } from '@/utils/e
 interface Props {
   /** Events sharing one location, soonest first. Null/empty → hidden. */
   events: AppEvent[] | null;
+  /** Premium-locked events at this venue (dimmed rows). */
+  lockedEvents?: AppEvent[];
   onClose: () => void;
   /** User picked one event from the list → open its details. */
   onPickEvent: (event: AppEvent) => void;
@@ -22,9 +25,13 @@ interface Props {
  * the real spot). Tapping that pin opens this sheet: every event at the
  * venue, soonest first. Picking a row opens the normal event details sheet.
  */
-export function VenueEventsSheet({ events, onClose, onPickEvent }: Props) {
-  if (!events || events.length === 0) return null;
-  const venue = events[0].venue || 'This location';
+export function VenueEventsSheet({ events, lockedEvents = [], onClose, onPickEvent }: Props) {
+  if (!events || events.length === 0) {
+    if (lockedEvents.length === 0) return null;
+  }
+  const venue = events?.[0]?.venue || lockedEvents[0]?.venue || 'This location';
+  const openCount = events?.length ?? 0;
+  const lockedCount = lockedEvents.length;
 
   return (
     <SheetOverlay onRequestClose={onClose}>
@@ -39,7 +46,7 @@ export function VenueEventsSheet({ events, onClose, onPickEvent }: Props) {
               {venue}
             </Text>
             <Text style={styles.subtitle}>
-              {events.length} events at this location
+              {openCount + lockedCount} events at this location
             </Text>
           </View>
           <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button">
@@ -48,7 +55,7 @@ export function VenueEventsSheet({ events, onClose, onPickEvent }: Props) {
         </View>
 
         <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 24 }}>
-          {events.map((event) => {
+          {(events ?? []).map((event) => {
             const desc = pinDescriptorFor(event);
             const cat = CATEGORY_FILTERS.find((c) => c.key === categoryFilterFor(event));
             return (
@@ -74,6 +81,39 @@ export function VenueEventsSheet({ events, onClose, onPickEvent }: Props) {
               </Pressable>
             );
           })}
+          {lockedCount > 0 ? (
+            <>
+              <PremiumInlineBar
+                feature="Browse events beyond tomorrow"
+                source="venue_events"
+                message={`${lockedCount} later event${lockedCount === 1 ? '' : 's'} at this venue need DriveIQ Premium.`}
+              />
+              {lockedEvents.map((event) => (
+                <View key={`locked-${event.id}`} style={[styles.row, styles.rowLocked]}>
+                  <View style={[styles.rowIcon, styles.rowIconLocked]}>
+                    <Ionicons name="lock-closed" size={16} color={colors.textSecondary} />
+                  </View>
+                  <View style={styles.rowText}>
+                    <Text style={styles.rowTitleLocked} numberOfLines={2}>
+                      {event.title}
+                    </Text>
+                    <Text style={styles.rowMeta}>{formatEventDate(event.startsAt)}</Text>
+                  </View>
+                  <Pressable
+                    onPress={() =>
+                      showPremiumPaywall('Browse events beyond tomorrow', {
+                        source: 'venue_events',
+                        inline: true,
+                      })
+                    }
+                    hitSlop={8}
+                  >
+                    <Text style={styles.premiumTag}>Premium</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </>
+          ) : null}
         </ScrollView>
       </View>
     </SheetOverlay>
@@ -135,4 +175,12 @@ const styles = StyleSheet.create({
   rowText: { flex: 1 },
   rowTitle: { fontSize: 14.5, fontWeight: '700', color: colors.textPrimary },
   rowMeta: { fontSize: 12.5, color: colors.textSecondary, marginTop: 2 },
+  rowLocked: { opacity: 0.55 },
+  rowIconLocked: { borderColor: colors.border },
+  rowTitleLocked: { fontSize: 14.5, fontWeight: '600', color: colors.textSecondary },
+  premiumTag: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primaryDark,
+  },
 });

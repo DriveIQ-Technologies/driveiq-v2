@@ -29,6 +29,7 @@ import type { AirportFlight } from './aerodatabox';
 import type { SavedFlight } from './savedFlights';
 import { track } from './analytics';
 import { templateRailLine, templateRoadLine } from './copyTemplates';
+import { eventReminderPlan, PRE_END_MINUTES } from './eventReminders';
 
 export type NotificationChannel =
   | 'road-accidents'
@@ -72,7 +73,7 @@ export function effectivePrefs(
 }
 
 const STORAGE_KEY_PREFS = 'driveiq.notif.prefs.v1';
-const STORAGE_KEY_INCIDENTS = 'driveiq.notif.lastIncidents.v1';
+const STORAGE_KEY_INCIDENTS = 'driveiq.notif.lastIncidents.v2';
 const STORAGE_KEY_LINES = 'driveiq.notif.lastLines.v1';
 const STORAGE_KEY_ONBOARDING_SEEN = 'driveiq.notif.onboardingSeen.v1';
 
@@ -237,6 +238,45 @@ const localHhmm = (local: string): string => {
   return (local.split(sep)[1] ?? '').slice(0, 5);
 };
 
+/** London quiet hours 02:00–05:00 — no pings (Part D). */
+const isQuietHours = (now: Date = new Date()): boolean => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+  const mins = hour * 60 + minute;
+  return mins >= 2 * 60 && mins < 5 * 60;
+};
+
+type IncidentSnapshot = {
+  severity: string;
+  category: string;
+  hasClosures: boolean;
+};
+
+const incidentFingerprint = (inc: TrafficIncident): IncidentSnapshot => ({
+  severity: inc.severity,
+  category: String(inc.category),
+  hasClosures: !!inc.hasClosures,
+});
+
+const incidentMaterialChange = (
+  prev: IncidentSnapshot | undefined,
+  inc: TrafficIncident,
+): boolean => {
+  if (!prev) return true;
+  const next = incidentFingerprint(inc);
+  return (
+    prev.severity !== next.severity ||
+    prev.category !== next.category ||
+    prev.hasClosures !== next.hasClosures
+  );
+};
+
 const fire = async (
   title: string,
   body: string,
@@ -245,6 +285,10 @@ const fire = async (
   const N = getNotifications();
   if (!N) {
     console.log('[notif] (no-op)', title, body);
+    return;
+  }
+  if (isQuietHours()) {
+    console.log('[notif] quiet hours, skipped', title);
     return;
   }
   try {
@@ -327,25 +371,34 @@ export async function diffAndNotifyIncidents(
   prefs: NotificationPrefs,
 ): Promise<void> {
   if (!prefs['road-accidents']) {
-    await safeSet(STORAGE_KEY_INCIDENTS, JSON.stringify(next.map((i) => i.id)));
+    const snap: Record<string, IncidentSnapshot> = {};
+    for (const inc of next) snap[inc.id] = incidentFingerprint(inc);
+    await safeSet(STORAGE_KEY_INCIDENTS, JSON.stringify(snap));
     return;
   }
 
   const raw = await safeGet(STORAGE_KEY_INCIDENTS);
-  let prevIds = new Set<string>();
+  let prev: Record<string, IncidentSnapshot> = {};
   if (raw) {
     try {
-      prevIds = new Set(JSON.parse(raw) as string[]);
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        // v1 id list — treat as first run after upgrade.
+        prev = {};
+      } else {
+        prev = parsed as Record<string, IncidentSnapshot>;
+      }
     } catch {
-      prevIds = new Set();
+      prev = {};
     }
   }
 
   // First-run guard — don't ping on initial population.
-  const isFirstRun = prevIds.size === 0;
+  const isFirstRun = Object.keys(prev).length === 0;
 
   for (const inc of next) {
-    if (prevIds.has(inc.id)) continue;
+    const before = prev[inc.id];
+    if (!incidentMaterialChange(before, inc)) continue;
     const keyRoad = matchKeyRoad(inc);
     const isAccident = String(inc.category).toLowerCase() === 'accident';
     const isMajor =
@@ -373,7 +426,9 @@ export async function diffAndNotifyIncidents(
     await fire(title, body, { kind: 'road-accident', incidentId: inc.id });
   }
 
-  await safeSet(STORAGE_KEY_INCIDENTS, JSON.stringify(next.map((i) => i.id)));
+  const snap: Record<string, IncidentSnapshot> = {};
+  for (const inc of next) snap[inc.id] = incidentFingerprint(inc);
+  await safeSet(STORAGE_KEY_INCIDENTS, JSON.stringify(snap));
 }
 
 /**
@@ -448,50 +503,44 @@ export async function scheduleEventReminder(
   const N = getNotifications();
   if (!N) return;
 
-  const startMs = Date.parse(event.realStartAt ?? event.startsAt);
-  if (Number.isFinite(startMs)) {
-    const fireAt = startMs - 60 * 60 * 1000;
-    if (fireAt >= Date.now() + 30_000) {
-      try {
-        await N.scheduleNotificationAsync({
-          content: {
-            title: `${event.title} starts in 1 hour`,
-            body:
-              (event.venue ? `Doors at ${event.venue}. ` : '') +
-              'Tap for the fastest route with live traffic.',
-            data: { kind: 'saved-event', eventId: event.id },
-            sound: 'default',
-          },
-          trigger: { date: new Date(fireAt) },
-        });
-        track('event_reminder_scheduled', { phase: 'pre_start', event_id: event.id });
-      } catch (e) {
-        console.warn('[notif] event reminder failed', e);
-      }
+  const plan = eventReminderPlan(event);
+
+  if (plan.preStartAtMs != null) {
+    try {
+      await N.scheduleNotificationAsync({
+        content: {
+          title: `${event.title} starts in 1 hour`,
+          body:
+            (event.venue ? `Time to head to ${event.venue}. ` : '') +
+            'Tap for the fastest route with live traffic.',
+          data: { kind: 'saved-event', eventId: event.id },
+          sound: 'default',
+        },
+        trigger: { date: new Date(plan.preStartAtMs) },
+      });
+      track('event_reminder_scheduled', { phase: 'pre_start', event_id: event.id });
+    } catch (e) {
+      console.warn('[notif] event reminder failed', e);
     }
   }
 
-  const endMs = Date.parse(event.estimatedFinishAt ?? event.endsAt ?? '');
-  if (Number.isFinite(endMs)) {
-    const fireAt = endMs - 25 * 60 * 1000;
-    if (fireAt >= Date.now() + 30_000) {
-      try {
-        await N.scheduleNotificationAsync({
-          content: {
-            title: `${event.title} is about to end`,
-            body:
-              `Wrapping up in about 25 minutes. Expect traffic around ` +
-              `${event.venue ?? 'the venue'} as crowds leave. Heading off? ` +
-              'Tap for the quickest way out.',
-            data: { kind: 'saved-event-end', eventId: event.id },
-            sound: 'default',
-          },
-          trigger: { date: new Date(fireAt) },
-        });
-        track('event_reminder_scheduled', { phase: 'pre_end', event_id: event.id });
-      } catch (e) {
-        console.warn('[notif] event end reminder failed', e);
-      }
+  if (plan.preEndAtMs != null) {
+    try {
+      await N.scheduleNotificationAsync({
+        content: {
+          title: `${event.title} is about to end`,
+          body:
+            `Wrapping up in about ${PRE_END_MINUTES} minutes. Expect traffic around ` +
+            `${plan.venue} as crowds leave. Heading off? ` +
+            'Tap for the quickest way out.',
+          data: { kind: 'saved-event-end', eventId: event.id },
+          sound: 'default',
+        },
+        trigger: { date: new Date(plan.preEndAtMs) },
+      });
+      track('event_reminder_scheduled', { phase: 'pre_end', event_id: event.id });
+    } catch (e) {
+      console.warn('[notif] event end reminder failed', e);
     }
   }
 }

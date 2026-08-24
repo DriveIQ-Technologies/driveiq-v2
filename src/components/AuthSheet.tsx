@@ -15,6 +15,7 @@ import {
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
+import { showDialog } from '@/services/dialog';
 import { colors } from '@/theme/colors';
 
 type Mode = 'signin' | 'signup';
@@ -102,12 +103,17 @@ export function AuthSheet({
       track('auth_submit_started', { mode });
       if (isSignup) {
         await signup(name, email.trim(), password);
+        setPassword('');
+        onClose();
+        showDialog(
+          'Welcome to DriveIQ',
+          `Hi ${name.trim().split(' ')[0] || 'there'}. Your account is ready. I have sent a verification email to ${email.trim()}. Tap the link so we can keep your saves and alerts tied to you. Then open Notifications if you want pings for roads, trains, saved events and flights.`,
+        );
       } else {
         await login(email.trim(), password);
+        setPassword('');
+        onClose();
       }
-      // Success — onAuthStateChanged updates the app; close the sheet.
-      setPassword('');
-      onClose();
     } catch (e) {
       track('auth_submit_failed', { mode });
       setError(friendlyAuthError(e));
@@ -171,7 +177,7 @@ export function AuthSheet({
               {reason
                 ? reason
                 : isSignup
-                  ? 'Save events, sync preferences, and get personalised alerts.'
+                  ? 'Welcome to DriveIQ. Save events, get alerts, and ask the AI, all tied to your account.'
                   : 'Sign in to sync your saved events and alert preferences.'}
             </Text>
 

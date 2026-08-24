@@ -60,7 +60,7 @@ const ROWS: Row[] = [
     icon: 'calendar',
     title: 'Saved events',
     body:
-      'A heads-up one hour before each event you have saved or followed, so you have time to plan a route.',
+      'Two pings: 1 hour before the start so you can plan the route, and 25 minutes before it ends so you can leave ahead of the crowd.',
   },
   {
     key: 'saved-flights',

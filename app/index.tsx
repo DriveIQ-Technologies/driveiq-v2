@@ -55,6 +55,7 @@ import { SplashLoading } from '@/components/SplashLoading';
 import { TrafficIncidentSheet } from '@/components/TrafficIncidentSheet';
 import { TrafficMarker } from '@/components/TrafficMarker';
 import { loadCachedEvents, saveCachedEvents } from '@/services/eventCache';
+import { reminderDialogMessage } from '@/services/eventReminders';
 import { isPlausibleLondonEvent } from '@/services/eventSanity';
 import { fetchAllEvents } from '@/services/events';
 import {
@@ -77,6 +78,7 @@ import {
   diffAndNotifyLines,
   diffAndNotifyFlights,
   ensurePermission,
+  hasSeenOnboarding,
   loadPrefs,
   scheduleEventReminder,
   startNotificationOpenTracking,
@@ -108,6 +110,12 @@ import {
 } from '@/services/reports';
 import { NotificationOnboarding } from '@/components/NotificationOnboarding';
 import { OnboardingTour } from '@/components/OnboardingTour';
+import { PremiumInlineBar } from '@/components/PremiumInlineBar';
+import {
+  markWaitlistTrialEndSeen,
+  shouldShowWaitlistTrialEnd,
+  WaitlistTrialEndSheet,
+} from '@/components/WaitlistTrialEndSheet';
 import { NotificationSettingsPanel } from '@/components/NotificationSettingsPanel';
 import { SidebarMenu } from '@/components/SidebarMenu';
 import { HelpSheet } from '@/components/HelpSheet';
@@ -116,7 +124,7 @@ import { AboutSheet } from '@/components/AboutSheet';
 import { AISupportSheet } from '@/components/AISupportSheet';
 import { AuthSheet } from '@/components/AuthSheet';
 import { AccountSheet, type AccountSection } from '@/components/AccountSheet';
-import { useAuth } from '@/providers/AuthProvider';
+import { hasProAccess, showPremiumPaywall } from '@/services/subscription';
 import {
   hasSeenSignupInvite,
   markSignupInviteSeen,
@@ -138,9 +146,16 @@ import {
 } from '@/utils/clustering';
 import { distanceMeters, type LatLng } from '@/utils/distance';
 import {
+  isEventBeyondFreeHorizon,
+  isPremiumDayFilter,
+  formatStaleLabel,
+  splitEventsByPremium,
+} from '@/utils/premiumHorizon';
+import {
   categoryFilterFor,
   type CategoryFilterKey,
 } from '@/utils/eventIcons';
+import { useAuth } from '@/providers/AuthProvider';
 
 interface Destination {
   /** What kind of pin spawned this route. */
@@ -222,6 +237,11 @@ export default function MapScreen() {
   // Events at the venue pin the user just tapped (when 2+ events share that
   // location). Drives the venue list sheet.
   const [venueEvents, setVenueEvents] = useState<AppEvent[] | null>(null);
+  const [venueLockedEvents, setVenueLockedEvents] = useState<AppEvent[]>([]);
+  const [isPremium, setIsPremium] = useState(false);
+  const [notifPrimingOpen, setNotifPrimingOpen] = useState(false);
+  const [waitlistTrialEndOpen, setWaitlistTrialEndOpen] = useState(false);
+  const [liveUpdatedAt, setLiveUpdatedAt] = useState<number | null>(null);
 
   // Traffic incidents (TfL).
   const [incidents, setIncidents] = useState<TrafficIncident[]>([]);
@@ -319,6 +339,7 @@ export default function MapScreen() {
   const closeAllSheets = useCallback(() => {
     setSelected(null);
     setVenueEvents(null);
+    setVenueLockedEvents([]);
     setSelectedIncident(null);
     setFlightsAirport(null);
     setStationHub(null);
@@ -504,6 +525,7 @@ export default function MapScreen() {
           startTransition(() => {
             setEvents(list);
             setLoading(false);
+            setLiveUpdatedAt(Date.now());
           });
           logCoverage(list);
           track('events_loaded', { count: list.length });
@@ -578,6 +600,7 @@ export default function MapScreen() {
       if (Array.isArray(lines) && lines.length > 0) {
         setLineStatuses(lines as LineStatus[]);
       }
+      setLiveUpdatedAt(Date.now());
 
       // Fire notifications once user prefs are loaded. We snapshot prefs
       // through prefsRef so the loop sees changes from the settings panel.
@@ -633,7 +656,7 @@ export default function MapScreen() {
   // Deferred so opening the menu / tapping chrome stays urgent while a large
   // event list is still arriving — pins catch up a frame later.
   const deferredEvents = useDeferredValue(events);
-  const visibleEvents = useMemo(() => {
+  const filteredEvents = useMemo(() => {
     const range = rangeFor(filter);
     return deferredEvents.filter((e) => {
       if (!isPlausibleLondonEvent(e)) return false;
@@ -642,6 +665,11 @@ export default function MapScreen() {
       return categories.has(categoryFilterFor(e));
     });
   }, [deferredEvents, filter, categories]);
+
+  const { open: visibleEvents, locked: lockedEventsInFilter } = useMemo(
+    () => splitEventsByPremium(filteredEvents, isPremium),
+    [filteredEvents, isPremium],
+  );
 
   useEffect(() => {
     track('map_filters_changed', {
@@ -665,6 +693,20 @@ export default function MapScreen() {
   // referentially stable (keeps the memoized pins from re-rendering).
   const venueGroupsRef = useRef<Map<string, AppEvent[]>>(new Map());
   const { venuePins, eventClusters } = useMemo(() => {
+    const allGroups = new Map<string, AppEvent[]>();
+    for (const e of filteredEvents) {
+      const key = `${e.latitude.toFixed(4)}:${e.longitude.toFixed(4)}`;
+      const bucket = allGroups.get(key);
+      if (bucket) bucket.push(e);
+      else allGroups.set(key, [e]);
+    }
+    const byRepId = new Map<string, AppEvent[]>();
+    for (const members of allGroups.values()) {
+      const rep = members.find((m) => m.source === 'featured') ?? members[0];
+      byRepId.set(rep.id, members);
+    }
+    venueGroupsRef.current = byRepId;
+
     const groups = new Map<string, AppEvent[]>();
     for (const e of visibleEvents) {
       const key = `${e.latitude.toFixed(4)}:${e.longitude.toFixed(4)}`;
@@ -672,26 +714,21 @@ export default function MapScreen() {
       if (bucket) bucket.push(e);
       else groups.set(key, [e]);
     }
-    const byRepId = new Map<string, AppEvent[]>();
     const featured: AppEvent[] = [];
     const regular: AppEvent[] = [];
     for (const members of groups.values()) {
       const rep = members.find((m) => m.source === 'featured') ?? members[0];
-      byRepId.set(rep.id, members);
       if (rep.source === 'featured') featured.push(rep);
       else regular.push(rep);
     }
-    venueGroupsRef.current = byRepId;
 
-    // Bubble counts reflect EVENTS, not venues (a venue pin standing for 4
-    // shows contributes 4 to its bubble's number).
     const { clusters, singles } = clusterEvents(
       regular,
       mapRegion,
       (rep) => byRepId.get(rep.id)?.length ?? 1,
     );
     return { venuePins: [...featured, ...singles], eventClusters: clusters };
-  }, [visibleEvents, mapRegion]);
+  }, [filteredEvents, visibleEvents, mapRegion]);
 
   // Tap a bubble → zoom into its footprint. If its venues are packed too
   // tight for fitToCoordinates to change anything, jump straight below the
@@ -728,6 +765,24 @@ export default function MapScreen() {
   // Ordered filter chips: the four presets plus a scrollable strip of
   // individual future days. Built once on mount so the day labels stay stable.
   const filterChips = useMemo(() => buildFilterChips(), []);
+
+  const lockedFilterKeys = useMemo(() => {
+    if (isPremium) return [] as FilterKey[];
+    return filterChips
+      .filter(({ key }) => isPremiumDayFilter(key))
+      .map(({ key }) => key);
+  }, [filterChips, isPremium]);
+
+  useEffect(() => {
+    void hasProAccess().then(setIsPremium);
+  }, [hasAccount, completedAction]);
+
+  useEffect(() => {
+    if (showSplash) return;
+    void shouldShowWaitlistTrialEnd().then((show) => {
+      if (show) setWaitlistTrialEndOpen(true);
+    });
+  }, [showSplash, hasAccount]);
 
   // Per-filter event counts for the FilterBar chip badges. Recomputed when
   // events or the category set change; filter chip never recomputes itself.
@@ -819,7 +874,12 @@ export default function MapScreen() {
     track('event_pin_tapped', { event_id: event.id, category: event.category });
     const group = venueGroupsRef.current.get(event.id);
     if (group && group.length > 1) {
-      setVenueEvents(group);
+      const split = splitEventsByPremium(group, isPremium);
+      setVenueEvents(split.open.length ? split.open : null);
+      setVenueLockedEvents(split.locked);
+    } else if (!isPremium && isEventBeyondFreeHorizon(event.startsAt)) {
+      showPremiumPaywall('Browse events beyond tomorrow', { source: 'event_pin' });
+      return;
     } else {
       setSelected(event);
     }
@@ -832,7 +892,7 @@ export default function MapScreen() {
       },
       350,
     );
-  }, []);
+  }, [isPremium]);
 
   // Hydrate saved events once on mount.
   useEffect(() => {
@@ -872,6 +932,7 @@ export default function MapScreen() {
           saveEvent(event).catch(() => undefined);
           const prefs = prefsRef.current;
           if (prefs) scheduleEventReminder(event, prefs).catch(() => undefined);
+          showDialog('Saved and reminding you', reminderDialogMessage(event));
           return { ...prev, [event.id]: event };
         });
       });
@@ -1547,6 +1608,7 @@ export default function MapScreen() {
             }}
             chips={filterChips}
             counts={filterCounts}
+            lockedKeys={lockedFilterKeys}
           />
           <CategoryFilterBar
             selected={categories}
@@ -1570,6 +1632,31 @@ export default function MapScreen() {
               <Text style={styles.loadingText}>Loading events…</Text>
             </View>
           )}
+          {!loading && liveUpdatedAt ? (
+            <View style={styles.stalePill}>
+              <Text style={styles.staleText}>{formatStaleLabel(liveUpdatedAt)}</Text>
+            </View>
+          ) : null}
+          {!loading &&
+          !visibleEvents.length &&
+          lockedEventsInFilter.length > 0 &&
+          !isPremium ? (
+            <View style={styles.quietEmptyPill}>
+              <Text style={styles.quietEmptyText}>
+                Nothing free to show on this day. {lockedEventsInFilter.length} event
+                {lockedEventsInFilter.length === 1 ? '' : 's'} need Premium.
+              </Text>
+            </View>
+          ) : null}
+          {!isPremium && lockedEventsInFilter.length > 0 && !loading ? (
+            <View style={styles.upgradeWrap}>
+              <PremiumInlineBar
+                feature="Browse events beyond tomorrow"
+                source="map_filter"
+                message={`${lockedEventsInFilter.length} event${lockedEventsInFilter.length === 1 ? '' : 's'} on this day need DriveIQ Premium. Today and tomorrow stay free.`}
+              />
+            </View>
+          ) : null}
           {errorMsg && !loading && (
             <View style={styles.errorPill}>
               <Text style={styles.errorText}>{errorMsg}</Text>
@@ -1663,10 +1750,15 @@ export default function MapScreen() {
 
       <VenueEventsSheet
         events={venueEvents}
-        onClose={() => setVenueEvents(null)}
+        lockedEvents={venueLockedEvents}
+        onClose={() => {
+          setVenueEvents(null);
+          setVenueLockedEvents([]);
+        }}
         onPickEvent={(event) => {
           track('venue_event_selected', { event_id: event.id, category: event.category });
           setVenueEvents(null);
+          setVenueLockedEvents([]);
           setSelected(event);
         }}
       />
@@ -1749,13 +1841,21 @@ export default function MapScreen() {
         }}
       />
 
-      {tourDone && !signupInvite ? (
-        <NotificationOnboarding
-          onDone={async () => {
-            prefsRef.current = await loadPrefs();
-          }}
-        />
-      ) : null}
+      <NotificationOnboarding
+        open={notifPrimingOpen}
+        onDone={async () => {
+          setNotifPrimingOpen(false);
+          prefsRef.current = await loadPrefs();
+        }}
+      />
+
+      <WaitlistTrialEndSheet
+        visible={waitlistTrialEndOpen}
+        onClose={() => {
+          void markWaitlistTrialEndSeen();
+          setWaitlistTrialEndOpen(false);
+        }}
+      />
 
       <SidebarMenu
         visible={sidebarOpen}
@@ -1830,6 +1930,12 @@ export default function MapScreen() {
       <StationHubSheet
         station={stationHub}
         onClose={() => setStationHub(null)}
+        onFirstStationSaved={() => {
+          void (async () => {
+            const seen = await hasSeenOnboarding();
+            if (!seen) setNotifPrimingOpen(true);
+          })();
+        }}
         onNavigate={(station) => {
           track('station_hub_navigate', { station_id: station.id });
           setStationHub(null);
@@ -2061,6 +2167,40 @@ const styles = StyleSheet.create({
   loadingText: {
     color: colors.textOnPrimary,
     fontWeight: '600',
+  },
+  stalePill: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.surface,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  staleText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  upgradeWrap: {
+    width: '92%',
+    marginBottom: 8,
+  },
+  quietEmptyPill: {
+    width: '92%',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: colors.surface,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  quietEmptyText: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: colors.textPrimary,
+    textAlign: 'center',
   },
   errorPill: {
     paddingHorizontal: 18,

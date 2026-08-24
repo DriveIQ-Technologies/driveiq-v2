@@ -50,10 +50,30 @@ export async function syncPremiumEntitlement(): Promise<void> {
   }
 }
 
-export function showProPaywall(feature: string): void {
-  track('paywall_viewed', { trigger: feature });
+export interface PaywallOptions {
+  source?: string;
+  inline?: boolean;
+}
+
+export function showPremiumPaywall(feature: string, opts?: PaywallOptions): void {
+  track('paywall_viewed', { trigger: feature, source: opts?.source });
+  if (opts?.inline) {
+    track('inline_upgrade_taken', { feature, source: opts?.source });
+  }
   showDialog(
     'DriveIQ Premium',
     `${feature} is part of DriveIQ Premium. Subscriptions are not live in stores yet. This is a preview of what is coming.`,
+    [
+      { label: 'Not now', style: 'cancel' },
+      {
+        label: 'See Premium',
+        onPress: () => {
+          track('paywall_cta_tapped', { feature, source: opts?.source ?? 'dialog' });
+        },
+      },
+    ],
   );
 }
+
+/** @deprecated Use showPremiumPaywall */
+export const showProPaywall = showPremiumPaywall;

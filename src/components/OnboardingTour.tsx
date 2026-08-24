@@ -39,7 +39,7 @@ const STEPS: Step[] = [
   {
     icon: 'bookmark',
     title: 'Save what matters',
-    body: "Open an event and tap Save to get a reminder an hour before it starts, or add it straight to your phone's calendar.",
+    body: "Open an event and tap Save. You'll get a ping 1 hour before it starts and 25 minutes before crowds leave, or add it straight to your phone's calendar.",
   },
   {
     icon: 'train',

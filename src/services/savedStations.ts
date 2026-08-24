@@ -75,6 +75,9 @@ export async function toggleSaveStation(
       current_saved_count: savedCount,
       attempted_station_id: station.id,
     });
+    if (savedCount >= 1) {
+      track('second_station_save_attempted', { station_id: station.id });
+    }
     return { result: 'blocked-limit', map };
   }
 

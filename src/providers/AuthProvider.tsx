@@ -374,6 +374,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await applyWaitlistPremium(nextUser.email);
         }
         await syncPremiumEntitlement();
+
+        try {
+          const origin =
+            process.env.EXPO_PUBLIC_AUTH_CONTINUE_URL ?? 'https://driveiq.app';
+          await api.sendEmailVerification(nextUser, {
+            url: origin,
+            handleCodeInApp: false,
+          });
+          track('auth_verification_email_sent');
+        } catch (e) {
+          console.warn('[auth] verification email failed', e);
+          track('auth_verification_email_failed');
+        }
       },
       logout: async () => {
         const { a, api } = requireAuth();
