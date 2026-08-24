@@ -55,6 +55,7 @@ import { SplashLoading } from '@/components/SplashLoading';
 import { TrafficIncidentSheet } from '@/components/TrafficIncidentSheet';
 import { TrafficMarker } from '@/components/TrafficMarker';
 import { loadCachedEvents, saveCachedEvents } from '@/services/eventCache';
+import { isPlausibleLondonEvent } from '@/services/eventSanity';
 import { fetchAllEvents } from '@/services/events';
 import {
   fetchRoutes,
@@ -635,6 +636,7 @@ export default function MapScreen() {
   const visibleEvents = useMemo(() => {
     const range = rangeFor(filter);
     return deferredEvents.filter((e) => {
+      if (!isPlausibleLondonEvent(e)) return false;
       if (!eventOverlapsRange(e.startsAt, e.endsAt, range)) return false;
       if (categories.size === 0) return true;
       return categories.has(categoryFilterFor(e));

@@ -3,7 +3,7 @@
     "name": "DriveIQ",
     "slug": "driveiq-91cbfgcslw1jeepr9yba",
     "scheme": "driveiq",
-    "version": "6.1.1",
+    "version": "6.1.2",
     "orientation": "portrait",
     "icon": "./assets/driveiq-app-icon-1024.png",
     "userInterfaceStyle": "light",

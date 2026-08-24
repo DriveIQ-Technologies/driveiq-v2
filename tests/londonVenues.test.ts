@@ -14,6 +14,22 @@ describe('findLondonPlace — specific aliases must beat generic ones', () => {
     );
   });
 
+  it('does not pin Wembley Park theatre shows at the stadium', () => {
+    expect(findLondonPlace('Troubadour Wembley Park Theatre')?.venue).toBe(
+      'Troubadour Wembley Park Theatre',
+    );
+    expect(findLondonPlace('Wembley Park Theatre')?.venue).toBe(
+      'Troubadour Wembley Park Theatre',
+    );
+    expect(findLondonPlace('Wembley Stadium')?.venue).toBe('Wembley Stadium');
+  });
+
+  it('does not treat Adelaide Oval as Kennington Oval', () => {
+    expect(findLondonPlace('Adelaide Oval')).toBeNull();
+    expect(findLondonPlace('Karen Rolton Oval')).toBeNull();
+    expect(findLondonPlace('The Oval')?.venue).toBeTruthy();
+  });
+
   it('separates Wembley Stadium from OVO Arena Wembley', () => {
     const stadium = findLondonPlace('Wembley Stadium');
     const arena = findLondonPlace('Wembley Arena');

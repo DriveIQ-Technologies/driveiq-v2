@@ -286,6 +286,14 @@ const VENUES = {
     longitude: -0.2826,
     sportsdbVenueId: null,
   },
+  // Theatre next to the stadium. Ticketmaster listings say "Wembley" and
+  // were snapping onto the 90,000-seat bowl (Dinosaur World, Chaka Khan).
+  troubadourWembley: {
+    venue: 'Troubadour Wembley Park Theatre',
+    latitude: 51.5578,
+    longitude: -0.2833,
+    sportsdbVenueId: null,
+  },
   crystalPalaceSC: {
     venue: 'Crystal Palace National Sports Centre',
     latitude: 51.418,
@@ -560,6 +568,10 @@ const PLACES: Record<string, LondonPlace> = {
   'queens club': VENUES.queens,
   wembley: VENUES.wembley,
   'wembley stadium': VENUES.wembley,
+  'troubadour wembley park theatre': VENUES.troubadourWembley,
+  'troubadour theatre': VENUES.troubadourWembley,
+  'wembley park theatre': VENUES.troubadourWembley,
+  'troubadour wembley': VENUES.troubadourWembley,
   'o2 arena': VENUES.o2,
   'the o2 arena': VENUES.o2,
   'the o2': VENUES.o2,
@@ -612,7 +624,16 @@ const PLACE_KEYS = Object.keys(PLACES).sort((a, b) => b.length - a.length);
  * cricket or rugby side) it would have pinned the event at Wembley instead of
  * Lord's, The Oval or Twickenham.
  */
-const EXACT_ONLY_KEYS = new Set(['england']);
+const EXACT_ONLY_KEYS = new Set([
+  'england',
+  // Short tokens that appear inside other venues worldwide / next door.
+  // "Karen Rolton Oval" / "Adelaide Oval" used to pin at Kennington;
+  // "Troubadour Wembley Park Theatre" used to pin at the stadium.
+  'oval',
+  'wembley',
+  'emirates',
+  'excel',
+]);
 
 /**
  * Strip the noise common to team / venue names before matching:

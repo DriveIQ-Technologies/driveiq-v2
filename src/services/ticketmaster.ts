@@ -105,6 +105,9 @@ const toNum = (v: string | undefined): number | null => {
 const BIG_MUSIC_VENUES = [
   'o2', 'wembley', 'tottenham', 'twickenham', 'ovo arena',
   'alexandra palace', 'excel', 'hyde park',
+  'victoria park', 'national bowl', 'crystal palace bowl',
+  'finsbury park', 'gunnersbury', 'boston manor', 'burgess park',
+  'clapham common', 'brockwell',
 ];
 const isBigMusicVenue = (venueName?: string): boolean => {
   const v = (venueName ?? '').toLowerCase();
@@ -207,7 +210,17 @@ function toAppEvent(e: TmEvent): AppEvent | null {
   // drop anything outside the DriveIQ coverage box. TM also sometimes
   // sends 0,0 when geo is missing — treat that as absent.
   const venue = e._embedded?.venues?.[0];
-  const place = findLondonPlace(venue?.name);
+  const rawVenueName = venue?.name ?? '';
+  let place = findLondonPlace(rawVenueName);
+  // "Troubadour Wembley Park Theatre" used to match the token "wembley"
+  // and inherit the stadium name + 90k turnout. Keep the listing's own
+  // name when the snap would upgrade a theatre into a stadium.
+  const listingLooksIntimate = /theatre|theater|troubadour|park theatre|musical|family|kids|dinosaur/i.test(
+    `${rawVenueName} ${e.name ?? ''} ${segName} ${genreName}`,
+  );
+  if (place?.venue === 'Wembley Stadium' && listingLooksIntimate) {
+    place = findLondonPlace('Troubadour Wembley Park Theatre');
+  }
   let lat = toNum(venue?.location?.latitude);
   let lon = toNum(venue?.location?.longitude);
   if (lat === 0 && lon === 0) {

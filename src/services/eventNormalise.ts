@@ -8,8 +8,10 @@
  * overrides) win field-by-field when present.
  */
 
+import { findLondonPlace } from '@/data/londonVenues';
 import {
   occupancyBand,
+  profileFitsEvent,
   turnoutRange,
   venueProfileFor,
 } from '@/data/venueProfiles';
@@ -21,6 +23,8 @@ import { db, fsApi } from './firebase';
 
 const MUSIC = /music|concert|rock|pop|jazz|festival|dance|electronic/i;
 const THEATRE = /theatre|theater|musical|comedy|arts|opera|ballet/i;
+const FESTIVAL_DAY =
+  /festival|points east|south facing|wireless|hyde park|bowl|park|common/i;
 
 const isMusic = (e: AppEvent): boolean =>
   MUSIC.test(e.subCategory ?? '') || MUSIC.test(e.title);
@@ -48,10 +52,31 @@ export function recordIdFor(eventId: string): string {
 }
 
 export function normaliseEventLocal(event: AppEvent): AppEvent {
-  const profile = venueProfileFor(event.venue);
   const sports = event.category === 'sports';
   const music = !sports && isMusic(event);
   const theatre = !sports && isTheatre(event);
+  const intimate =
+    !sports &&
+    (theatre ||
+      event.category === 'family' ||
+      /family|musical|kids|children|dinosaur|comedy|theatre|theater/i.test(
+        `${event.title} ${event.subCategory ?? ''}`,
+      ));
+
+  // Cached TM rows still said "Wembley Stadium" for park-theatre shows.
+  if (intimate && /wembley stadium/i.test(event.venue ?? '')) {
+    const theatrePlace = findLondonPlace('Troubadour Wembley Park Theatre');
+    if (theatrePlace) {
+      event = {
+        ...event,
+        venue: theatrePlace.venue,
+        latitude: theatrePlace.latitude,
+        longitude: theatrePlace.longitude,
+      };
+    }
+  }
+
+  const profile = venueProfileFor(event.venue);
 
   let doorsAt = event.doorsAt;
   let realStartAt = event.realStartAt;
@@ -61,8 +86,18 @@ export function normaliseEventLocal(event: AppEvent): AppEvent {
     realStartAt = realStartAt ?? event.startsAt;
     const doorsMin = profile?.sportsDoorsBeforeMin ?? 75;
     doorsAt = doorsAt ?? addMinutesIso(realStartAt, -doorsMin);
+    const listedEnd = event.endsAt ? Date.parse(event.endsAt) : NaN;
+    const startMs = Date.parse(realStartAt);
+    const endLooksLikeMultiDay =
+      Number.isFinite(listedEnd) &&
+      Number.isFinite(startMs) &&
+      listedEnd - startMs > 16 * 60 * 60 * 1000;
     estimatedFinishAt =
-      estimatedFinishAt ?? event.endsAt ?? defaultEndsAt(realStartAt, event.subCategory);
+      estimatedFinishAt ??
+      (endLooksLikeMultiDay
+        ? defaultEndsAt(realStartAt, event.subCategory)
+        : event.endsAt) ??
+      defaultEndsAt(realStartAt, event.subCategory);
   } else if (music) {
     const listedHour = londonWallHour(event.startsAt);
     const listedLooksLikeDoors = listedHour >= 17 && listedHour <= 19;
@@ -74,10 +109,18 @@ export function normaliseEventLocal(event: AppEvent): AppEvent {
       realStartAt = realStartAt ?? event.startsAt;
       doorsAt = doorsAt ?? addMinutesIso(realStartAt, -60);
     }
+    const festivalDay =
+      FESTIVAL_DAY.test(`${event.title} ${event.venue} ${event.subCategory ?? ''}`) ||
+      listedHour < 17;
     if (!estimatedFinishAt) {
-      estimatedFinishAt = profile?.concertFinishHhmm
-        ? finishAtHour(event.startsAt, profile.concertFinishHhmm)
-        : event.endsAt ?? defaultEndsAt(realStartAt, event.subCategory ?? 'Music');
+      if (profile?.concertFinishHhmm) {
+        estimatedFinishAt = finishAtHour(event.startsAt, profile.concertFinishHhmm);
+      } else if (festivalDay) {
+        estimatedFinishAt = finishAtHour(event.startsAt, '22:30');
+      } else {
+        estimatedFinishAt =
+          event.endsAt ?? defaultEndsAt(realStartAt, event.subCategory ?? 'Music');
+      }
     }
   } else if (theatre) {
     realStartAt = realStartAt ?? event.startsAt;
@@ -93,9 +136,10 @@ export function normaliseEventLocal(event: AppEvent): AppEvent {
 
   let turnoutMin = event.turnoutMin;
   let turnoutMax = event.turnoutMax;
-  if (profile && (turnoutMin == null || turnoutMax == null)) {
+  const usableProfile = profile && profileFitsEvent(profile, event) ? profile : null;
+  if (usableProfile && (turnoutMin == null || turnoutMax == null)) {
     const range = turnoutRange(
-      profile.capacity,
+      usableProfile.capacity,
       occupancyBand(event.subCategory, sports),
     );
     turnoutMin = turnoutMin ?? range.min;

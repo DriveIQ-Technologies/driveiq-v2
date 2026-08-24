@@ -39,6 +39,63 @@ export const VENUE_PROFILES: VenueProfile[] = [
     concertFinishHhmm: '22:45',
   },
   {
+    names: [
+      'troubadour wembley park theatre',
+      'wembley park theatre',
+      'troubadour theatre',
+    ],
+    capacity: 2000,
+    concertStartAfterDoorsMin: 30,
+  },
+  {
+    names: ['victoria park', 'victoria park london'],
+    capacity: 40000,
+    concertStartAfterDoorsMin: 60,
+    concertFinishHhmm: '22:30',
+  },
+  {
+    names: ['the national bowl', 'national bowl', 'milton keynes bowl'],
+    capacity: 65000,
+    concertStartAfterDoorsMin: 75,
+    concertFinishHhmm: '23:00',
+  },
+  {
+    names: ['hyde park'],
+    capacity: 65000,
+    concertStartAfterDoorsMin: 75,
+    concertFinishHhmm: '22:30',
+  },
+  {
+    names: ['crystal palace bowl'],
+    capacity: 20000,
+    concertStartAfterDoorsMin: 60,
+    concertFinishHhmm: '22:30',
+  },
+  {
+    names: ['finsbury park'],
+    capacity: 45000,
+    concertStartAfterDoorsMin: 60,
+    concertFinishHhmm: '22:30',
+  },
+  {
+    names: ['boston manor park', 'boston manor'],
+    capacity: 25000,
+    concertStartAfterDoorsMin: 60,
+    concertFinishHhmm: '22:30',
+  },
+  {
+    names: ['gunnersbury park'],
+    capacity: 25000,
+    concertStartAfterDoorsMin: 60,
+    concertFinishHhmm: '22:30',
+  },
+  {
+    names: ['burgess park'],
+    capacity: 15000,
+    concertStartAfterDoorsMin: 60,
+    concertFinishHhmm: '22:00',
+  },
+  {
     names: ['tottenham hotspur stadium'],
     capacity: 62850,
     sportsDoorsBeforeMin: 90,
@@ -168,7 +225,27 @@ export function occupancyBand(subCategory: string | undefined, isSports: boolean
   if (kind.includes('theatre') || kind.includes('comedy') || kind.includes('arts')) {
     return { low: 0.7, high: 0.95 };
   }
+  if (kind.includes('family') || kind.includes('kids') || kind.includes('children')) {
+    return { low: 0.5, high: 0.85 };
+  }
   return { low: 0.75, high: 1 };
+}
+
+/** A 90k stadium profile must not dress a 2k theatre show. */
+export function profileFitsEvent(
+  profile: VenueProfile,
+  event: { category?: string; title?: string; subCategory?: string },
+): boolean {
+  if (profile.capacity < 40000) return true;
+  const hay = `${event.title ?? ''} ${event.subCategory ?? ''}`.toLowerCase();
+  const intimate =
+    event.category === 'theatre' ||
+    event.category === 'family' ||
+    event.category === 'comedy' ||
+    /theatre|theater|musical|comedy|family|kids|children|dinosaur|ballet|opera/.test(
+      hay,
+    );
+  return !intimate;
 }
 
 export function turnoutRange(

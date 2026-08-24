@@ -5,6 +5,7 @@ import { track } from './analytics';
 
 import { fetchCricinfoLondon } from './cricinfo';
 import { dedupeEvents } from './eventDedupe';
+import { sanitizeEvents } from './eventSanity';
 import { fetchEspnLondon } from './espn';
 import { fetchFeaturedLondon } from './featuredEvents';
 import { fetchFootballDataLondon } from './footballData';
@@ -198,15 +199,15 @@ function finalize(
   }
 
   let droppedGeo = 0;
-  const merged = deduped
-    .filter((e) => {
+  const merged = sanitizeEvents(
+    deduped.filter((e) => {
       if (isInDriveIQArea(e.latitude, e.longitude)) return true;
       droppedGeo++;
       return false;
-    })
-    .sort(
-      (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
-    );
+    }),
+  ).sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
+  );
   if (droppedGeo > 0 && allowSample) {
     console.warn(`[events] dropped ${droppedGeo} outside DriveIQ area`);
   }

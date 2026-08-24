@@ -184,20 +184,6 @@ function buildFeatured(): AppEvent[] {
   cricketMatch('hundred-oval-4', 'The Hundred: Oval Invincibles vs Trent Rockets', '2026-08-08', '18:00', '22:00', OVAL, 'The Hundred 2026 at The Oval.'),
   cricketMatch('hundred-lords-4', 'The Hundred: London Spirit vs Birmingham Phoenix', '2026-08-09', '14:30', '21:00', LORDS, 'The Hundred 2026 at Lord\'s Cricket Ground.'),
 
-  ...recurringDaily({
-    idPrefix: 'featured-england-test-oval-2026',
-    title: (lbl) => `England Test Match at The Oval — ${lbl}`,
-    startDate: '2026-08-20',
-    endDate: '2026-08-24',
-    startLocal: '11:00',
-    endLocal: '18:30',
-    venue: OVAL.venue,
-    latitude: OVAL.latitude,
-    longitude: OVAL.longitude,
-    description: 'International Test Match at The Oval.',
-    subCategory: 'Cricket Test',
-    category: 'sports',
-  }),
   parkEvent('gunnersbury', 'Jimmy Eat World live at Gunnersbury Park', '2026-08-16', '15:00', '22:30', GUNNERSBURY),
 
   // ── Longines Global Champions Tour — Royal Hospital Chelsea ────────────

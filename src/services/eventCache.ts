@@ -7,9 +7,10 @@
  */
 
 import type { AppEvent } from '@/types/event';
+import { sanitizeEvents } from './eventSanity';
 import { getJSON, setJSON } from './storage';
 
-const CACHE_KEY = 'driveiq.events.v1';
+const CACHE_KEY = 'driveiq.events.v2';
 
 /** Keep showing cached pins for up to 24h; always refresh in the background. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -26,8 +27,8 @@ export async function loadCachedEvents(): Promise<AppEvent[] | null> {
   // Drop anything that already ended (cache can span overnight). Small
   // grace only — launch must not paint yesterday's pins.
   const cutoff = Date.now() - 30 * 60 * 1000;
-  const live = cached.events.filter((e) => {
-    const end = Date.parse(e.endsAt || e.startsAt);
+  const live = sanitizeEvents(cached.events).filter((e) => {
+    const end = Date.parse(e.estimatedFinishAt || e.endsAt || e.startsAt);
     return Number.isFinite(end) ? end >= cutoff : true;
   });
   return live.length > 0 ? live : null;

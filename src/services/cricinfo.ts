@@ -94,27 +94,34 @@ const subCategoryFor = (seriesName: string, description: string): string => {
   return 'Cricket';
 };
 
+const LONDON_CRICKET_SIDE =
+  /\b(surrey|middlesex|essex|kent|oval invincibles|london spirit|england|mcc)\b/i;
+
+const isLondonCricketSide = (name: string): boolean => LONDON_CRICKET_SIDE.test(name);
+
+const teamName = (
+  team?: { displayName?: string; shortDisplayName?: string; abbreviation?: string },
+): string => team?.displayName ?? team?.shortDisplayName ?? team?.abbreviation ?? '';
+
 const buildTitle = (event: EspnEvent): string => {
   const comp = event.competitions?.[0];
   const home = comp?.competitors?.find((c) => c.homeAway === 'home');
   const away = comp?.competitors?.find((c) => c.homeAway === 'away');
-  const homeName =
-    home?.team?.abbreviation ??
-    home?.team?.shortDisplayName ??
-    home?.team?.displayName ??
-    '';
-  const awayName =
-    away?.team?.abbreviation ??
-    away?.team?.shortDisplayName ??
-    away?.team?.displayName ??
-    '';
-  if (homeName && awayName) {
-    const hs = home?.score;
-    const as = away?.score;
-    if (hs || as) return `${homeName} ${hs ?? '-'} vs ${awayName} ${as ?? '-'}`;
-    return `${homeName} vs ${awayName}`;
-  }
-  return event.shortName ?? event.name ?? 'Cricket match';
+  const homeName = teamName(home?.team);
+  const awayName = teamName(away?.team);
+  if (homeName && awayName) return `${homeName} vs ${awayName}`;
+  const raw = event.shortName ?? event.name ?? 'Cricket match';
+  // Scoreboard leftovers: "SUR 162 & 183 (56 ov) vs NOT 184"
+  return raw.replace(/\s+\d.*$/g, '').replace(/\s+\d+\/\d+.*$/g, '').trim() || raw;
+};
+
+const londonHour = (iso: string): number => {
+  const hour = new Date(iso).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    hour12: false,
+    timeZone: 'Europe/London',
+  });
+  return Number.parseInt(hour, 10);
 };
 
 const fetchJson = async <T>(url: string): Promise<T | null> => {
@@ -199,11 +206,27 @@ const normaliseEvent = (
   const homeName =
     home?.team?.displayName ?? home?.team?.shortDisplayName ?? '';
 
-  const place = resolveEventPlace(venueName, homeName);
+  const place = resolveEventPlace(venueName);
   if (!place) return null;
 
+  const away = comp?.competitors?.find((c) => c.homeAway === 'away');
+  const awayName =
+    away?.team?.displayName ?? away?.team?.shortDisplayName ?? '';
+  // Teams only — series names like "England" used to let every A-team
+  // scoreboard through because the header feed is global.
+  if (!isLondonCricketSide(homeName) && !isLondonCricketSide(awayName)) {
+    return null;
+  }
+
+  // A 01:30 "start" at The Oval is almost always an overseas feed with a
+  // colliding venue name, not a London fixture.
+  const hour = londonHour(event.date);
+  if (hour < 9 || hour > 20) return null;
+
   const subCategory = subCategoryFor(seriesName, event.name ?? '');
-  const endsAt = event.endDate ?? defaultEndsAt(event.date, subCategory);
+  // ESPN test/county `endDate` is often the last day of the match, which
+  // made T20s "finish" 48 hours later. Crowds leave at the end of that day.
+  const endsAt = defaultEndsAt(event.date, subCategory);
   if (!eventOverlapsRange(event.date, endsAt, range)) return null;
 
   return {
@@ -257,8 +280,8 @@ export async function fetchCricinfoLondon(
             const venueName = comp?.venue?.fullName ?? '';
             if (venueName && !findLondonPlace(venueName)) droppedNotLondon++;
             else droppedOutOfRange++;
-            continue;
-          }
+      continue;
+    }
           if (seenIds.has(norm.id)) continue;
           seenIds.add(norm.id);
           out.push(norm);
