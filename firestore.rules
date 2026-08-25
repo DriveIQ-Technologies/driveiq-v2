@@ -31,6 +31,21 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /airportCache/{icao} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /roadCache/corridors/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /users/{uid}/notificationState/{doc} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
     // Emails are doc ids. Get is allowed so sign-in can match a waitlister.
     // List is denied so the cohort cannot be dumped.
     match /waitlist/{email} {

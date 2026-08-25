@@ -9,7 +9,7 @@ import type { AppEvent } from '@/types/event';
 const event: AppEvent = {
   id: 'e1',
   source: 'ticketmaster',
-  category: 'music',
+  category: 'other',
   title: 'All Points East',
   startsAt: '2026-08-23T16:00:00+01:00',
   endsAt: '2026-08-23T22:30:00+01:00',

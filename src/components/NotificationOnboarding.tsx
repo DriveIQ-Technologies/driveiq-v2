@@ -101,6 +101,8 @@ export function NotificationOnboarding({ onDone, open }: Props) {
     await markOnboardingSeen();
     setVisible(false);
     setBusy(false);
+    const { registerPushToken } = await import('@/services/pushTokens');
+    void registerPushToken();
     onDone();
   };
 

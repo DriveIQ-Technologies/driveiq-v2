@@ -166,6 +166,20 @@ export async function loadPrefs(): Promise<NotificationPrefs> {
 
 export async function savePrefs(prefs: NotificationPrefs): Promise<void> {
   await safeSet(STORAGE_KEY_PREFS, JSON.stringify(prefs));
+  void syncNotificationProfile();
+}
+
+async function syncNotificationProfile(): Promise<void> {
+  try {
+    const { syncUserProfileFromLocal } = await import('./userSync');
+    const { loadSavedFlights } = await import('./savedFlights');
+    const prefs = await loadPrefs();
+    const lineSubs = await loadLineSubscriptions();
+    const flights = Object.values(await loadSavedFlights());
+    await syncUserProfileFromLocal(prefs, lineSubs, flights);
+  } catch (e) {
+    console.warn('[notif] profile sync skipped', e);
+  }
 }
 
 /**
@@ -206,6 +220,7 @@ export async function loadLineSubscriptions(): Promise<LineSubscriptions> {
 
 export async function saveLineSubscriptions(subs: LineSubscriptions): Promise<void> {
   await safeSet(STORAGE_KEY_LINE_SUBS, JSON.stringify(subs));
+  void syncNotificationProfile();
 }
 
 /** True if the user is subscribed to this line (or has no specific subs). */

@@ -29,6 +29,7 @@ import {
 import { auth, authApi } from '@/services/firebase';
 import { applyWaitlistPremium } from '@/services/waitlist';
 import { syncPremiumEntitlement } from '@/services/subscription';
+import { registerPushToken, clearPushTokenOnLogout } from '@/services/pushTokens';
 
 export type AccountAction =
   | 'save'
@@ -185,6 +186,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           track('auth_state_changed', { signed_in: true, anonymous: false });
         });
         void syncPremiumEntitlement();
+        void registerPushToken();
+        void (async () => {
+          const { loadPrefs, loadLineSubscriptions } = await import('@/services/notifications');
+          const { loadSavedFlights } = await import('@/services/savedFlights');
+          const { syncUserProfileFromLocal } = await import('@/services/userSync');
+          await syncUserProfileFromLocal(
+            await loadPrefs(),
+            await loadLineSubscriptions(),
+            Object.values(await loadSavedFlights()),
+          );
+        })();
       } else {
         void identifyFirebaseUser(
           {
@@ -390,6 +402,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       logout: async () => {
         const { a, api } = requireAuth();
+        await clearPushTokenOnLogout();
         await api.signOut(a);
         track('auth_sign_out');
         // Return to anonymous browse mode.

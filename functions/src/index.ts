@@ -22,19 +22,61 @@ import { phraseAndStore, loadSystemPrompt } from './copy.js';
 import { ingestLiveFeeds } from './ingest.js';
 import { normaliseTomorrow, type RawEvent } from './events.js';
 import { ensureAgentRuntimeDefaults, handleAskAgent } from './agent.js';
+import { ingestAirports } from './airports.js';
+import { ingestEventsRaw } from './eventsIngest.js';
+import { isAirportPollWindow } from './londonTime.js';
+import {
+  dispatchPushNotifications,
+  loadFlightsByAirport,
+  parseLineStatuses,
+} from './dispatch.js';
 
 initializeApp();
 const db = getFirestore();
 const anthropicKey = defineSecret('Anthropic-API-key-Production');
+const aerodataboxKey = defineSecret('AERODATABOX_RAPIDAPI_KEY');
+const ticketmasterKey = defineSecret('TICKETMASTER_API_KEY');
 
 const london = { timeZone: 'Europe/London' };
 
-async function keyOrEmpty(): Promise<string | undefined> {
+async function keyOrEmpty(secret: ReturnType<typeof defineSecret>): Promise<string | undefined> {
   try {
-    const v = anthropicKey.value();
+    const v = secret.value();
     return v && v.trim() ? v.trim() : undefined;
   } catch {
     return undefined;
+  }
+}
+
+async function processCopyQueue(apiKey: string | undefined): Promise<void> {
+  const snap = await db.collection('copyQueue').limit(80).get();
+  if (snap.empty) {
+    logger.info('copy.queue_empty');
+    return;
+  }
+  for (const doc of snap.docs) {
+    const data = doc.data() as {
+      kind?: 'road' | 'rail' | 'flight' | 'event';
+      rawRecord?: string;
+      model?: 'haiku' | 'sonnet';
+      collection?: string;
+    };
+    const kind = data.kind ?? 'road';
+    const raw = data.rawRecord ?? '';
+    if (!raw) {
+      await doc.ref.delete();
+      continue;
+    }
+    await phraseAndStore({
+      db,
+      apiKey,
+      collection: data.collection ?? kind,
+      id: doc.id,
+      kind,
+      rawRecord: raw,
+      model: data.model ?? (kind === 'event' ? 'sonnet' : 'haiku'),
+    });
+    await doc.ref.delete();
   }
 }
 
@@ -47,47 +89,95 @@ export const seedCopyPrompt = onSchedule(
 );
 
 /**
- * Roads, rail and flights: phrase whatever raw records were queued by the
- * ingest jobs into `copyQueue/{kind}`. Until those pollers live on the
- * server, this still no-ops cleanly and logs the queue size.
+ * Every 5 minutes: TfL + Highways ingest, corridor cache, airport cache
+ * (LHR/LGW), copy queue drain, FCM push dispatch.
  */
 export const writeQueuedCopy = onSchedule(
-  { schedule: 'every 5 minutes', timeoutSeconds: 120, ...london, secrets: [anthropicKey] },
+  {
+    schedule: 'every 5 minutes',
+    timeoutSeconds: 300,
+    ...london,
+    secrets: [anthropicKey, aerodataboxKey],
+  },
   async () => {
+    let incidents = [] as Awaited<ReturnType<typeof ingestLiveFeeds>>;
     try {
-      await ingestLiveFeeds(db);
+      incidents = await ingestLiveFeeds(db);
     } catch (e) {
       logger.warn('ingest.live_fail', { error: e instanceof Error ? e.message : 'error' });
     }
-    const apiKey = await keyOrEmpty();
-    const snap = await db.collection('copyQueue').limit(80).get();
-    if (snap.empty) {
-      logger.info('copy.queue_empty');
-      return;
-    }
-    for (const doc of snap.docs) {
-      const data = doc.data() as {
-        kind?: 'road' | 'rail' | 'flight' | 'event';
-        rawRecord?: string;
-        model?: 'haiku' | 'sonnet';
-        collection?: string;
-      };
-      const kind = data.kind ?? 'road';
-      const raw = data.rawRecord ?? '';
-      if (!raw) {
-        await doc.ref.delete();
-        continue;
+
+    const apiKey = await keyOrEmpty(anthropicKey);
+    await processCopyQueue(apiKey);
+
+    if (isAirportPollWindow()) {
+      try {
+        await ingestAirports(db, await keyOrEmpty(aerodataboxKey), {
+          major: true,
+          regional: false,
+        });
+      } catch (e) {
+        logger.warn('ingest.airports_major_fail', {
+          error: e instanceof Error ? e.message : 'error',
+        });
       }
-      await phraseAndStore({
+    }
+
+    try {
+      const lineRes = await fetch(
+        'https://api.tfl.gov.uk/Line/Mode/tube,overground,dlr,elizabeth-line,tram,national-rail/Status',
+      );
+      const lineRows = lineRes.ok ? ((await lineRes.json()) as unknown[]) : [];
+      const lines = parseLineStatuses(lineRows);
+      const flightsByAirport = await loadFlightsByAirport(db);
+      await dispatchPushNotifications({
         db,
-        apiKey,
-        collection: data.collection ?? kind,
-        id: doc.id,
-        kind,
-        rawRecord: raw,
-        model: data.model ?? (kind === 'event' ? 'sonnet' : 'haiku'),
+        incidents,
+        lines,
+        flightsByAirport,
       });
-      await doc.ref.delete();
+    } catch (e) {
+      logger.warn('dispatch.fail', { error: e instanceof Error ? e.message : 'error' });
+    }
+  },
+);
+
+/** STN / LTN / LCY every 15 minutes during the airport poll window. */
+export const ingestRegionalAirports = onSchedule(
+  {
+    schedule: 'every 15 minutes',
+    timeoutSeconds: 180,
+    ...london,
+    secrets: [aerodataboxKey],
+  },
+  async () => {
+    if (!isAirportPollWindow()) return;
+    try {
+      await ingestAirports(db, await keyOrEmpty(aerodataboxKey), {
+        major: false,
+        regional: true,
+      });
+    } catch (e) {
+      logger.warn('ingest.airports_regional_fail', {
+        error: e instanceof Error ? e.message : 'error',
+      });
+    }
+  },
+);
+
+/** Ticketmaster → eventsRaw, nightly before normalisation. */
+export const ingestEventsNightly = onSchedule(
+  {
+    schedule: '0 1 * * *',
+    timeoutSeconds: 300,
+    ...london,
+    secrets: [ticketmasterKey],
+  },
+  async () => {
+    try {
+      await ingestEventsRaw(db, await keyOrEmpty(ticketmasterKey));
+    } catch (e) {
+      logger.warn('events.ingest_fail', { error: e instanceof Error ? e.message : 'error' });
     }
   },
 );
@@ -99,20 +189,22 @@ export const writeQueuedCopy = onSchedule(
 export const normaliseEventsNightly = onSchedule(
   { schedule: '0 2 * * *', timeoutSeconds: 300, ...london, secrets: [anthropicKey] },
   async () => {
-    const apiKey = await keyOrEmpty();
+    const apiKey = await keyOrEmpty(anthropicKey);
     const snap = await db.collection('eventsRaw').limit(80).get();
-    const events: RawEvent[] = snap.docs.map((d) => {
-      const x = d.data();
-      return {
-        id: String(x.id ?? d.id),
-        title: String(x.title ?? 'Event'),
-        venue: String(x.venue ?? 'London'),
-        subCategory: typeof x.subCategory === 'string' ? x.subCategory : undefined,
-        category: typeof x.category === 'string' ? x.category : undefined,
-        startsAt: String(x.startsAt ?? ''),
-        endsAt: typeof x.endsAt === 'string' ? x.endsAt : undefined,
-      };
-    }).filter((e) => e.startsAt);
+    const events: RawEvent[] = snap.docs
+      .map((d) => {
+        const x = d.data();
+        return {
+          id: String(x.id ?? d.id),
+          title: String(x.title ?? 'Event'),
+          venue: String(x.venue ?? 'London'),
+          subCategory: typeof x.subCategory === 'string' ? x.subCategory : undefined,
+          category: typeof x.category === 'string' ? x.category : undefined,
+          startsAt: String(x.startsAt ?? ''),
+          endsAt: typeof x.endsAt === 'string' ? x.endsAt : undefined,
+        };
+      })
+      .filter((e) => e.startsAt);
     await normaliseTomorrow({ db, apiKey, events });
   },
 );
@@ -137,7 +229,7 @@ export const askDriveiqAgent = onCall(
       questionChars:
         typeof request.data?.question === 'string' ? request.data.question.length : 0,
     });
-    const apiKey = await keyOrEmpty();
+    const apiKey = await keyOrEmpty(anthropicKey);
     return handleAskAgent({ db, apiKey, request });
   },
 );
@@ -249,7 +341,7 @@ export const askDriveiqAgentHttp = onRequest(
     }
 
     try {
-      const apiKey = await keyOrEmpty();
+      const apiKey = await keyOrEmpty(anthropicKey);
       const result = await handleAskAgent({
         db,
         apiKey,
@@ -322,7 +414,7 @@ export const askDriveiqAgentV1 = v1
     if (!context.auth?.uid) {
       throw new v1.https.HttpsError('unauthenticated', 'Sign in required');
     }
-    const apiKey = await keyOrEmpty();
+    const apiKey = await keyOrEmpty(anthropicKey);
     const result = await handleAskAgent({
       db,
       apiKey,

@@ -30,6 +30,7 @@ export async function saveFlight(
   const map = await loadSavedFlights();
   map[flight.id] = { ...flight, airportId, savedAt: Date.now() };
   await setJSON(STORAGE_KEY, map);
+  void syncFlightsProfile(map);
   return map;
 }
 
@@ -37,7 +38,20 @@ export async function unsaveFlight(id: string): Promise<SavedFlightMap> {
   const map = await loadSavedFlights();
   delete map[id];
   await setJSON(STORAGE_KEY, map);
+  void syncFlightsProfile(map);
   return map;
+}
+
+async function syncFlightsProfile(map: SavedFlightMap): Promise<void> {
+  try {
+    const { syncUserProfileFromLocal } = await import('./userSync');
+    const { loadPrefs, loadLineSubscriptions } = await import('./notifications');
+    const prefs = await loadPrefs();
+    const lineSubs = await loadLineSubscriptions();
+    await syncUserProfileFromLocal(prefs, lineSubs, Object.values(map));
+  } catch (e) {
+    console.warn('[flights] profile sync skipped', e);
+  }
 }
 
 export async function isFlightSaved(id: string): Promise<boolean> {

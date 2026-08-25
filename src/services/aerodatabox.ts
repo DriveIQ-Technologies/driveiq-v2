@@ -180,6 +180,14 @@ export async function fetchAirportFlights(
   now: Date = new Date(),
   opts: { fullDay?: boolean } = {},
 ): Promise<AirportFlightsResult> {
+  if (!opts.fullDay) {
+    const { readAirportCache } = await import('./airportCache');
+    const cached = await readAirportCache(airportId);
+    if (cached?.flights?.length) {
+      return { flights: cached.flights };
+    }
+  }
+
   if (!API_KEY) {
     console.warn('[aerodatabox] EXPO_PUBLIC_AERODATABOX_API_KEY not set — skipping');
     return { flights: [], error: 'no-key' };

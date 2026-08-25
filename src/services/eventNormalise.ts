@@ -58,7 +58,6 @@ export function normaliseEventLocal(event: AppEvent): AppEvent {
   const intimate =
     !sports &&
     (theatre ||
-      event.category === 'family' ||
       /family|musical|kids|children|dinosaur|comedy|theatre|theater/i.test(
         `${event.title} ${event.subCategory ?? ''}`,
       ));

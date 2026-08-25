@@ -3,6 +3,7 @@ import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { PremiumInlineBar } from '@/components/PremiumInlineBar';
+import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { showPremiumPaywall } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
