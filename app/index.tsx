@@ -778,6 +778,18 @@ export default function MapScreen() {
   }, [hasAccount, completedAction]);
 
   useEffect(() => {
+    let unsub: (() => void) | undefined;
+    void (async () => {
+      const { subscribePremiumChanges } = await import('@/services/purchases');
+      unsub = subscribePremiumChanges((pro) => {
+        if (pro) setIsPremium(true);
+        else void hasProAccess().then(setIsPremium);
+      });
+    })();
+    return () => unsub?.();
+  }, []);
+
+  useEffect(() => {
     if (showSplash) return;
     void shouldShowWaitlistTrialEnd().then((show) => {
       if (show) setWaitlistTrialEndOpen(true);

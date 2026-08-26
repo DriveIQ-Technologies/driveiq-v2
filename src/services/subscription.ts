@@ -1,8 +1,13 @@
 /**
- * Soft Premium entitlement until RevenueCat is wired.
+ * DriveIQ Premium entitlement + paywall.
  *
- * Flip `driveiq.pro.unlock` in AsyncStorage (or set EXPO_PUBLIC_PRO_PREVIEW=1)
- * to exercise gated features during Play Store review / TestFlight.
+ * Sources of Premium (any one unlocks):
+ *   1. RevenueCat active entitlement (`premium`)
+ *   2. Waitlist free week
+ *   3. EXPO_PUBLIC_PRO_PREVIEW=1 or local test unlock
+ *
+ * Paywall UI is in-app (branded sheet). Purchases still go through RevenueCat
+ * packages on offering `default` ($rc_annual / $rc_monthly).
  */
 
 import { showDialog } from './dialog';
@@ -10,17 +15,44 @@ import { getItem, setItem } from './storage';
 import { refreshUserTraits, track } from './analytics';
 import { getWaitlistTrialEnds, waitlistTrialActive } from './waitlist';
 import { auth, db, fsApi } from './firebase';
+import { configurePurchases, hasRevenueCatPremium } from './purchases';
 
 const UNLOCK_KEY = 'driveiq.pro.unlock';
 
-export async function hasProAccess(): Promise<boolean> {
-  if (process.env.EXPO_PUBLIC_PRO_PREVIEW === '1') return true;
-  const v = await getItem(UNLOCK_KEY);
-  if (v === '1') return true;
-  return waitlistTrialActive();
+type PaywallListener = (req: { feature: string; source?: string; inline?: boolean }) => void;
+let paywallListener: PaywallListener | null = null;
+
+/** PremiumPaywallHost registers here so services can open the sheet. */
+export function registerPaywallHost(listener: PaywallListener | null): void {
+  paywallListener = listener;
 }
 
-/** Dev / review helper — not shown in production UI yet. */
+export type PremiumSource =
+  | 'none'
+  | 'revenuecat'
+  | 'waitlist'
+  | 'preview'
+  | 'dev_unlock';
+
+/** Which path unlocked Premium — for UI labels and debugging. */
+export async function getPremiumSource(): Promise<PremiumSource> {
+  if (process.env.EXPO_PUBLIC_PRO_PREVIEW === '1') return 'preview';
+  const v = await getItem(UNLOCK_KEY);
+  if (v === '1') return 'dev_unlock';
+  if (await waitlistTrialActive()) return 'waitlist';
+  try {
+    if (await hasRevenueCatPremium()) return 'revenuecat';
+  } catch {
+    /* SDK may be unavailable in Expo Go */
+  }
+  return 'none';
+}
+
+export async function hasProAccess(): Promise<boolean> {
+  return (await getPremiumSource()) !== 'none';
+}
+
+/** Dev / review helper — not shown in production UI. */
 export async function setProAccessForTesting(on: boolean): Promise<void> {
   await setItem(UNLOCK_KEY, on ? '1' : '0');
   await refreshUserTraits({ tier: on ? 'premium' : 'free' });
@@ -29,8 +61,8 @@ export async function setProAccessForTesting(on: boolean): Promise<void> {
 }
 
 /**
- * Write the current local entitlement to Firestore so the Cloud Function
- * agent uses the same Free/Premium window as the app.
+ * Write the current entitlement to Firestore so Cloud Functions use the
+ * same Free/Premium window as the app.
  */
 export async function syncPremiumEntitlement(): Promise<void> {
   const uid = auth?.currentUser?.uid;
@@ -44,7 +76,9 @@ export async function syncPremiumEntitlement(): Promise<void> {
       updatedAt: new Date().toISOString(),
     };
     if (pro && trialEnds) patch.premiumUntil = trialEnds;
+    else if (!pro) patch.premiumUntil = null;
     await fsApi.setDoc(fsApi.doc(db, 'users', uid), patch, { merge: true });
+    await refreshUserTraits({ tier: pro ? 'premium' : 'free' });
   } catch (e) {
     console.warn('[subscription] entitlement sync failed', e);
   }
@@ -55,24 +89,32 @@ export interface PaywallOptions {
   inline?: boolean;
 }
 
+/**
+ * Open the branded Premium paywall.
+ * Inline upgrade bars are the trigger; this sheet is the destination.
+ * Store purchases still use RevenueCat offerings / packages.
+ */
 export function showPremiumPaywall(feature: string, opts?: PaywallOptions): void {
   track('paywall_viewed', { trigger: feature, source: opts?.source });
   if (opts?.inline) {
     track('inline_upgrade_taken', { feature, source: opts?.source });
   }
-  showDialog(
-    'DriveIQ Premium',
-    `${feature} is part of DriveIQ Premium. Subscriptions are not live in stores yet. This is a preview of what is coming.`,
-    [
-      { label: 'Not now', style: 'cancel' },
-      {
-        label: 'See Premium',
-        onPress: () => {
-          track('paywall_cta_tapped', { feature, source: opts?.source ?? 'dialog' });
-        },
-      },
-    ],
-  );
+  track('paywall_cta_tapped', { feature, source: opts?.source ?? 'dialog' });
+
+  void (async () => {
+    await configurePurchases();
+
+    if (paywallListener) {
+      paywallListener({ feature, source: opts?.source, inline: opts?.inline });
+      return;
+    }
+
+    showDialog(
+      'DriveIQ Premium',
+      `${feature} is part of DriveIQ Premium. Open the menu and tap Upgrade to Premium, or Restore Purchases if you already subscribed.`,
+      [{ label: 'OK' }],
+    );
+  })();
 }
 
 /** @deprecated Use showPremiumPaywall */

@@ -5,14 +5,19 @@ import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { DialogHost } from '@/components/ui/DialogHost';
+import { PremiumPaywallHost } from '@/components/PremiumPaywallHost';
 import { SheetHost } from '@/components/ui/SheetOverlay';
 import { AuthProvider } from '@/providers/AuthProvider';
 import { initAnalytics } from '@/services/analytics';
+import { configurePurchases, prefetchOfferings } from '@/services/purchases';
 import { colors } from '@/theme/colors';
 
 export default function RootLayout() {
   useEffect(() => {
     initAnalytics();
+    void configurePurchases().then((ok) => {
+      if (ok) void prefetchOfferings();
+    });
   }, []);
 
   return (
@@ -31,6 +36,7 @@ export default function RootLayout() {
             <Stack.Screen name="index" />
           </Stack>
           <SheetHost />
+          <PremiumPaywallHost />
           <DialogHost />
         </View>
       </AuthProvider>

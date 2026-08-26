@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -17,6 +17,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { showConfirm, showDialog } from '@/services/dialog';
+import { restorePurchases } from '@/services/purchases';
+import { getPremiumSource, hasProAccess, showPremiumPaywall, syncPremiumEntitlement } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
 
@@ -49,8 +51,9 @@ interface MenuRow {
   icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
   body?: string;
-  /** When `null`, the row uses the built-in placeholder alert. */
-  handler?: (() => void) | null;
+  handler?: () => void;
+  /** Status-only row — shows badge, no tap action. */
+  static?: boolean;
   /** Optional pill rendered on the right (e.g. "Free plan"). */
   badge?: string;
   /** Whether the row should pop off the destructive accent (e.g. Sign out). */
@@ -77,10 +80,19 @@ export function SidebarMenu({
   const { user, logout, hasAccount } = useAuth();
   const signedIn = hasAccount;
   const slide = useRef(new Animated.Value(0)).current;
+  const [isPremium, setIsPremium] = useState(false);
+  const [premiumSource, setPremiumSource] = useState<
+    'revenuecat' | 'waitlist' | 'preview' | 'dev_unlock' | 'none'
+  >('none');
 
   useEffect(() => {
     if (visible) {
       trackScreen('sidebar_menu', { signed_in: signedIn });
+      void (async () => {
+        const [pro, source] = await Promise.all([hasProAccess(), getPremiumSource()]);
+        setIsPremium(pro);
+        setPremiumSource(source);
+      })();
     }
     Animated.timing(slide, {
       toValue: visible ? 1 : 0,
@@ -90,13 +102,8 @@ export function SidebarMenu({
     }).start();
   }, [visible, signedIn, slide]);
 
-  const placeholder = (label: string) =>
-    showDialog(
-      label,
-      'This will be wired once we connect the payments backend. The UI shell is already in place.',
-    );
-
   // Defer a navigation/sheet action until the sidebar has slid out, so the
+  // next sheet animates cleanly.
   // two modal animations don't collide.
   const afterClose = (fn: () => void) => {
     onClose();
@@ -183,18 +190,87 @@ export function SidebarMenu({
     },
   ];
 
-  const billingRows: MenuRow[] = [
-    {
-      key: 'upgrade',
-      icon: 'rocket',
-      label: 'Upgrade to Premium',
-      body: 'Push alerts, route history, no rate limits',
-      badge: 'Free plan',
-      handler: null,
-    },
-    { key: 'payment', icon: 'card', label: 'Payment methods', handler: null },
-    { key: 'billing', icon: 'receipt', label: 'Billing history', handler: null },
-  ];
+  const premiumBadge =
+    premiumSource === 'revenuecat'
+      ? 'Active'
+      : premiumSource === 'waitlist'
+        ? 'Waitlist week'
+        : premiumSource === 'preview'
+          ? 'Preview'
+          : premiumSource === 'dev_unlock'
+            ? 'Dev unlock'
+            : undefined;
+
+  const billingRows: MenuRow[] = isPremium
+    ? [
+        {
+          key: 'premium-active',
+          icon: 'star',
+          label: 'DriveIQ Premium',
+          body:
+            premiumSource === 'revenuecat'
+              ? 'Full-day flights, all stations, unlimited AI'
+              : premiumSource === 'waitlist'
+                ? 'Free waitlist week — subscribe to keep Premium after it ends'
+                : premiumSource === 'preview'
+                  ? 'Preview mode is on — turn off EXPO_PUBLIC_PRO_PREVIEW to test purchases'
+                  : 'Dev unlock — not a real subscription',
+          badge: premiumBadge,
+          static: true,
+        },
+        {
+          key: 'restore',
+          icon: 'refresh',
+          label: 'Restore purchases',
+          handler: () => {
+            afterClose(() => {
+              void (async () => {
+                const result = await restorePurchases();
+                if (result.ok) {
+                  await syncPremiumEntitlement();
+                  setIsPremium(true);
+                  showDialog('Restored', 'DriveIQ Premium is active on this account.');
+                } else {
+                  showDialog('Restore', result.message);
+                }
+              })();
+            });
+          },
+        },
+      ]
+    : [
+        {
+          key: 'upgrade',
+          icon: 'rocket',
+          label: 'Upgrade to Premium',
+          body: 'Full-day flights, all stations, unlimited AI',
+          badge: 'Free plan',
+          handler: () => {
+            afterClose(() => {
+              showPremiumPaywall('DriveIQ Premium', { source: 'sidebar' });
+            });
+          },
+        },
+        {
+          key: 'restore',
+          icon: 'refresh',
+          label: 'Restore purchases',
+          handler: () => {
+            afterClose(() => {
+              void (async () => {
+                const result = await restorePurchases();
+                if (result.ok) {
+                  await syncPremiumEntitlement();
+                  setIsPremium(true);
+                  showDialog('Restored', 'DriveIQ Premium is active on this account.');
+                } else {
+                  showDialog('Restore', result.message);
+                }
+              })();
+            });
+          },
+        },
+      ];
 
   const supportRows: MenuRow[] = [
     {
@@ -224,17 +300,8 @@ export function SidebarMenu({
     },
   ];
 
-  const renderRow = (row: MenuRow) => (
-    <Pressable
-      key={row.key}
-      onPress={() => {
-        track('sidebar_row_tapped', { row_key: row.key, signed_in: signedIn });
-        if (row.handler) row.handler();
-        else placeholder(row.label);
-      }}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      accessibilityRole="button"
-    >
+  const renderRowContent = (row: MenuRow) => (
+    <>
       <View style={styles.rowIcon}>
         <Ionicons
           name={row.icon}
@@ -264,8 +331,32 @@ export function SidebarMenu({
           color={colors.textSecondary}
         />
       )}
-    </Pressable>
+    </>
   );
+
+  const renderRow = (row: MenuRow) =>
+    row.static ? (
+      <View
+        key={row.key}
+        style={styles.row}
+        accessibilityRole="text"
+        accessibilityLabel={`${row.label}. ${row.badge ?? ''}`}
+      >
+        {renderRowContent(row)}
+      </View>
+    ) : (
+      <Pressable
+        key={row.key}
+        onPress={() => {
+          track('sidebar_row_tapped', { row_key: row.key, signed_in: signedIn });
+          row.handler?.();
+        }}
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+        accessibilityRole="button"
+      >
+        {renderRowContent(row)}
+      </Pressable>
+    );
 
   return (
     // Side panel (not a modal) so chrome stays responsive. Native-driver slide

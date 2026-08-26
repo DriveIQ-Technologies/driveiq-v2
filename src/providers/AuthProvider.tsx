@@ -29,6 +29,7 @@ import {
 import { auth, authApi } from '@/services/firebase';
 import { applyWaitlistPremium } from '@/services/waitlist';
 import { syncPremiumEntitlement } from '@/services/subscription';
+import { identifyPurchasesUser } from '@/services/purchases';
 import { registerPushToken, clearPushTokenOnLogout } from '@/services/pushTokens';
 
 export type AccountAction =
@@ -179,6 +180,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // the whole chrome feel stuck.
       setUser(u);
       setInitializing(false);
+
+      // Tie RevenueCat to Firebase uid (anonymous or full account).
+      void identifyPurchasesUser(u.uid);
 
       const hasAccount = !u.isAnonymous;
       if (hasAccount) {

@@ -482,7 +482,13 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
                 </Text>
               </Pressable>
               {lockedFlights.map((f) => (
-                <View key={`locked-${f.id}`} style={[styles.flightRow, styles.flightRowLocked]}>
+                <Pressable
+                  key={`locked-${f.id}`}
+                  style={[styles.flightRow, styles.flightRowLocked]}
+                  onPress={upgrade}
+                  accessibilityRole="button"
+                  accessibilityLabel="Upgrade to view full-day flights"
+                >
                   <View style={[styles.flightBar, { backgroundColor: colors.border }]} />
                   <View style={styles.timeCol}>
                     <Text style={styles.timeLocked}>--:--</Text>
@@ -491,13 +497,13 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.routeLocked}>Locked on free plan</Text>
                     <Text style={styles.flightMeta} numberOfLines={1}>
-                      Upgrade to view this row
+                      Tap to see the full day
                     </Text>
                   </View>
                   <View style={styles.flightTrailing}>
                     <Ionicons name="lock-closed" size={16} color={colors.textSecondary} />
                   </View>
-                </View>
+                </Pressable>
               ))}
             </>
           ) : null}
