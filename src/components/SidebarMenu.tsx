@@ -19,8 +19,18 @@ import { track, trackScreen } from '@/services/analytics';
 import { showConfirm, showDialog } from '@/services/dialog';
 import { restorePurchases } from '@/services/purchases';
 import { getPremiumSource, hasProAccess, showPremiumPaywall, syncPremiumEntitlement } from '@/services/subscription';
+import { getWaitlistTrialEnds } from '@/services/waitlist';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
+
+function waitlistDaysLeft(endsIso: string | null): number | null {
+  if (!endsIso) return null;
+  const end = Date.parse(endsIso);
+  if (!Number.isFinite(end)) return null;
+  const ms = end - Date.now();
+  if (ms <= 0) return 0;
+  return Math.max(1, Math.ceil(ms / (24 * 60 * 60 * 1000)));
+}
 
 const SHEET_WIDTH = Math.round(Dimensions.get('window').width * 0.82);
 const SLIDE_MS = 220;
@@ -84,14 +94,20 @@ export function SidebarMenu({
   const [premiumSource, setPremiumSource] = useState<
     'revenuecat' | 'waitlist' | 'preview' | 'dev_unlock' | 'none'
   >('none');
+  const [waitlistDays, setWaitlistDays] = useState<number | null>(null);
 
   useEffect(() => {
     if (visible) {
       trackScreen('sidebar_menu', { signed_in: signedIn });
       void (async () => {
-        const [pro, source] = await Promise.all([hasProAccess(), getPremiumSource()]);
+        const [pro, source, ends] = await Promise.all([
+          hasProAccess(),
+          getPremiumSource(),
+          getWaitlistTrialEnds(),
+        ]);
         setIsPremium(pro);
         setPremiumSource(source);
+        setWaitlistDays(source === 'waitlist' ? waitlistDaysLeft(ends) : null);
       })();
     }
     Animated.timing(slide, {
@@ -194,7 +210,9 @@ export function SidebarMenu({
     premiumSource === 'revenuecat'
       ? 'Active'
       : premiumSource === 'waitlist'
-        ? 'Waitlist week'
+        ? waitlistDays != null
+          ? `${waitlistDays}d left`
+          : 'Waitlist week'
         : premiumSource === 'preview'
           ? 'Preview'
           : premiumSource === 'dev_unlock'
@@ -211,7 +229,9 @@ export function SidebarMenu({
             premiumSource === 'revenuecat'
               ? 'Full-day flights, all stations, unlimited AI'
               : premiumSource === 'waitlist'
-                ? 'Free waitlist week — subscribe to keep Premium after it ends'
+                ? waitlistDays != null
+                  ? `Welcome — free waitlist week · ${waitlistDays} day${waitlistDays === 1 ? '' : 's'} left`
+                  : 'Welcome — free waitlist week of Premium'
                 : premiumSource === 'preview'
                   ? 'Preview mode is on — turn off EXPO_PUBLIC_PRO_PREVIEW to test purchases'
                   : 'Dev unlock — not a real subscription',
