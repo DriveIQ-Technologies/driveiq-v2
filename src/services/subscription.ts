@@ -15,7 +15,12 @@ import { getItem, setItem } from './storage';
 import { refreshUserTraits, track } from './analytics';
 import { getWaitlistTrialEnds, waitlistTrialActive } from './waitlist';
 import { auth, db, fsApi } from './firebase';
-import { configurePurchases, hasRevenueCatPremium } from './purchases';
+import {
+  configurePurchases,
+  hasRevenueCatPremium,
+  isPurchasesNativeAvailable,
+  purchasesUnavailableMessage,
+} from './purchases';
 
 const UNLOCK_KEY = 'driveiq.pro.unlock';
 
@@ -102,7 +107,20 @@ export function showPremiumPaywall(feature: string, opts?: PaywallOptions): void
   track('paywall_cta_tapped', { feature, source: opts?.source ?? 'dialog' });
 
   void (async () => {
-    await configurePurchases();
+    if (!isPurchasesNativeAvailable()) {
+      showDialog('DriveIQ Premium', purchasesUnavailableMessage(), [{ label: 'OK' }]);
+      return;
+    }
+
+    const ok = await configurePurchases();
+    if (!ok) {
+      showDialog(
+        'DriveIQ Premium',
+        'Could not connect to the store. Check your connection and try again, or use Restore Purchases if you already subscribed.',
+        [{ label: 'OK' }],
+      );
+      return;
+    }
 
     if (paywallListener) {
       paywallListener({ feature, source: opts?.source, inline: opts?.inline });

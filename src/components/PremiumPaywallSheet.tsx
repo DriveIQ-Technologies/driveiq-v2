@@ -22,12 +22,14 @@ import {
   configurePurchases,
   getCachedPremiumPackages,
   getCurrentOffering,
+  isPurchasesNativeAvailable,
   packageDisplayTitle,
   packageHasFreeTrial,
   packagePeriodLabel,
   packagePriceLabel,
   preferredPremiumPackage,
   purchasePackage,
+  purchasesUnavailableMessage,
   restorePurchases,
   sortPremiumPackages,
   PACKAGE_ANNUAL_ID,
@@ -306,8 +308,9 @@ export function PremiumPaywallSheet({
             </View>
           ) : packages.length === 0 ? (
             <Text style={styles.emptyOffer}>
-              Plans could not be loaded. Check your connection, or try Restore if you
-              already subscribed.
+              {!isPurchasesNativeAvailable()
+                ? purchasesUnavailableMessage()
+                : 'Plans could not be loaded. Check your connection, or try Restore if you already subscribed.'}
             </Text>
           ) : (
             <View style={styles.plans}>

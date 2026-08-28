@@ -5,7 +5,8 @@
   },
   "build": {
     "base": {
-      "node": "20.19.4"
+      "node": "20.19.4",
+      "corepack": true
     },
     "development": {
       "extends": "base",

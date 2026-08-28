@@ -45,17 +45,39 @@ type PurchasesOffering = import('react-native-purchases').PurchasesOffering;
 
 let Purchases: PurchasesModule['default'] | null = null;
 let configured = false;
+let nativeUnavailableLogged = false;
 let lastCustomerInfo: CustomerInfo | null = null;
 let cachedOffering: PurchasesOffering | null = null;
 let offeringsPrefetch: Promise<PurchasesOffering | null> | null = null;
 const listeners = new Set<(pro: boolean) => void>();
 
+/** True when the RNPurchases native module is compiled into this binary. */
+export function isPurchasesNativeAvailable(): boolean {
+  try {
+    const { NativeModules } = require('react-native') as typeof import('react-native');
+    return Boolean(NativeModules.RNPurchases);
+  } catch {
+    return false;
+  }
+}
+
+export function purchasesUnavailableMessage(): string {
+  return 'In-app purchases need a development or store build (EAS / TestFlight / Play). They do not work in Expo Go — rebuild the app with native modules included.';
+}
+
 function loadPurchases(): PurchasesModule['default'] | null {
   if (Purchases) return Purchases;
+  if (!isPurchasesNativeAvailable()) {
+    if (!nativeUnavailableLogged) {
+      nativeUnavailableLogged = true;
+      console.warn('[purchases] RNPurchases native module not in this build', purchasesUnavailableMessage());
+    }
+    return null;
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('react-native-purchases') as PurchasesModule;
-    Purchases = mod.default;
+    Purchases = mod.default ?? null;
     return Purchases;
   } catch (e) {
     console.warn('[purchases] SDK unavailable', e);
@@ -104,10 +126,14 @@ export async function configurePurchases(): Promise<boolean> {
   }
 
   try {
-    if (__DEV__) {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { LOG_LEVEL } = require('react-native-purchases') as PurchasesModule;
-      P.setLogLevel(LOG_LEVEL.DEBUG);
+    if (__DEV__ && typeof P.setLogLevel === 'function') {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { LOG_LEVEL } = require('react-native-purchases') as PurchasesModule;
+        P.setLogLevel(LOG_LEVEL.DEBUG);
+      } catch {
+        /* non-fatal in dev */
+      }
     }
     P.configure({ apiKey });
     configured = true;
@@ -124,6 +150,8 @@ export async function configurePurchases(): Promise<boolean> {
     void prefetchOfferings();
     return true;
   } catch (e) {
+    Purchases = null;
+    configured = false;
     console.warn('[purchases] configure failed', e);
     track('purchases_configure_failed');
     return false;
