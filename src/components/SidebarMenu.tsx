@@ -18,7 +18,14 @@ import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { showConfirm, showDialog } from '@/services/dialog';
 import { restorePurchases } from '@/services/purchases';
-import { getPremiumSource, hasProAccess, showPremiumPaywall, syncPremiumEntitlement } from '@/services/subscription';
+import { showPurchaseFailure } from '@/services/premiumPurchaseFlow';
+import {
+  getPremiumSource,
+  hasProAccess,
+  presentPremiumUnlock,
+  showPremiumPaywall,
+  syncPremiumEntitlement,
+} from '@/services/subscription';
 import { getWaitlistTrialEnds } from '@/services/waitlist';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
@@ -145,6 +152,22 @@ export function SidebarMenu({
       },
     });
 
+  const restoreFromSidebar = () => {
+    void (async () => {
+      const result = await restorePurchases();
+      if (result.ok) {
+        await syncPremiumEntitlement();
+        setIsPremium(true);
+        presentPremiumUnlock({ kind: 'restore', trialStarted: false });
+        return;
+      }
+      showPurchaseFailure(
+        { kind: 'restore', cancelled: result.cancelled, message: result.message },
+        { onRetry: restoreFromSidebar },
+      );
+    })();
+  };
+
   const accountRows: MenuRow[] = signedIn
     ? [
         {
@@ -243,18 +266,7 @@ export function SidebarMenu({
           icon: 'refresh',
           label: 'Restore purchases',
           handler: () => {
-            afterClose(() => {
-              void (async () => {
-                const result = await restorePurchases();
-                if (result.ok) {
-                  await syncPremiumEntitlement();
-                  setIsPremium(true);
-                  showDialog('Restored', 'DriveIQ Premium is active on this account.');
-                } else {
-                  showDialog('Restore', result.message);
-                }
-              })();
-            });
+            afterClose(restoreFromSidebar);
           },
         },
       ]
@@ -276,18 +288,7 @@ export function SidebarMenu({
           icon: 'refresh',
           label: 'Restore purchases',
           handler: () => {
-            afterClose(() => {
-              void (async () => {
-                const result = await restorePurchases();
-                if (result.ok) {
-                  await syncPremiumEntitlement();
-                  setIsPremium(true);
-                  showDialog('Restored', 'DriveIQ Premium is active on this account.');
-                } else {
-                  showDialog('Restore', result.message);
-                }
-              })();
-            });
+            afterClose(restoreFromSidebar);
           },
         },
       ];

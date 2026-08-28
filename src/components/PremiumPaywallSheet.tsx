@@ -17,7 +17,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
-import { showDialog } from '@/services/dialog';
 import {
   configurePurchases,
   getCachedPremiumPackages,
@@ -81,6 +80,8 @@ interface Props {
   source?: string;
   onClose: () => void;
   onUnlocked?: () => void;
+  onSuccess?: (outcome: import('@/data/premiumUnlockCopy').PremiumUnlockOutcome) => void;
+  onFailure?: (failure: import('@/services/premiumPurchaseFlow').PurchaseFlowFailure) => void;
 }
 
 function isAnnual(pkg: PurchasesPackage): boolean {
@@ -110,6 +111,8 @@ export function PremiumPaywallSheet({
   source,
   onClose,
   onUnlocked,
+  onSuccess,
+  onFailure,
 }: Props) {
   const insets = useSafeAreaInsets();
   const cached = getCachedPremiumPackages();
@@ -197,15 +200,13 @@ export function PremiumPaywallSheet({
       await syncPremiumEntitlement();
       onUnlocked?.();
       onClose();
-      showDialog(
-        'Welcome to Premium',
-        'Your 7-day trial or subscription is active. Full-day flights, every station, and unlimited AI are unlocked.',
-      );
+      onSuccess?.({
+        kind: 'purchase',
+        trialStarted: selected ? packageHasFreeTrial(selected) : false,
+      });
       return;
     }
-    if (!result.cancelled) {
-      showDialog('Purchase failed', result.message);
-    }
+    onFailure?.({ kind: 'purchase', cancelled: result.cancelled, message: result.message });
   };
 
   const restore = async () => {
@@ -217,10 +218,10 @@ export function PremiumPaywallSheet({
       await syncPremiumEntitlement();
       onUnlocked?.();
       onClose();
-      showDialog('Restored', 'DriveIQ Premium is active on this account.');
+      onSuccess?.({ kind: 'restore', trialStarted: false });
       return;
     }
-    showDialog('Restore', result.message);
+    onFailure?.({ kind: 'restore', cancelled: result.cancelled, message: result.message });
   };
 
   const openUrl = (url: string) => {

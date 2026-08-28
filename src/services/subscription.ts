@@ -11,6 +11,7 @@
  */
 
 import { showDialog } from './dialog';
+import type { PremiumUnlockOutcome } from '@/data/premiumUnlockCopy';
 import { getItem, setItem } from './storage';
 import { refreshUserTraits, track } from './analytics';
 import { getWaitlistTrialEnds, waitlistTrialActive } from './waitlist';
@@ -25,11 +26,31 @@ import {
 const UNLOCK_KEY = 'driveiq.pro.unlock';
 
 type PaywallListener = (req: { feature: string; source?: string; inline?: boolean }) => void;
+type UnlockListener = (outcome: PremiumUnlockOutcome) => void;
 let paywallListener: PaywallListener | null = null;
+let unlockListener: UnlockListener | null = null;
 
 /** PremiumPaywallHost registers here so services can open the sheet. */
 export function registerPaywallHost(listener: PaywallListener | null): void {
   paywallListener = listener;
+}
+
+/** PremiumPaywallHost registers here for the post-purchase walkthrough. */
+export function registerPremiumUnlockHost(listener: UnlockListener | null): void {
+  unlockListener = listener;
+}
+
+/** Show the Premium unlocked walkthrough (purchase, restore, or sidebar restore). */
+export function presentPremiumUnlock(outcome: PremiumUnlockOutcome): void {
+  if (unlockListener) {
+    unlockListener(outcome);
+    return;
+  }
+  showDialog(
+    outcome.kind === 'restore' ? 'Premium restored' : 'Welcome to Premium',
+    'Full-day flights, every station, unlimited AI, and the full events calendar are unlocked.',
+    [{ label: 'OK' }],
+  );
 }
 
 export type PremiumSource =
