@@ -9,9 +9,9 @@ describe('friendlyPurchaseError', () => {
     ).toContain('No active Premium');
   });
 
-  it('maps user cancel without throwing', () => {
-    expect(friendlyPurchaseError('Purchase failed. Please try again.', 'purchase')).toContain(
-      'not go through',
-    );
+  it('maps a hung App Store response', () => {
+    expect(
+      friendlyPurchaseError('The App Store did not respond. You have not been charged.', 'purchase'),
+    ).toContain('did not respond');
   });
 });

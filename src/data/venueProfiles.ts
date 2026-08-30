@@ -115,8 +115,9 @@ export const VENUE_PROFILES: VenueProfile[] = [
   {
     names: ['royal albert hall', 'albert hall'],
     capacity: 5272,
+    // Listed time is curtain, not doors. Proms publish circa end times —
+    // do not clamp every night to 22:30.
     concertStartAfterDoorsMin: 30,
-    concertFinishHhmm: '22:30',
   },
   {
     names: ['london stadium'],

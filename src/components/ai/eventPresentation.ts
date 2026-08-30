@@ -53,9 +53,18 @@ export function categoryMeta(e: AppEvent) {
   return CATEGORY_FILTERS.find((c) => c.key === key) ?? CATEGORY_FILTERS[6];
 }
 
+/** Curtain / kick-off. Never doors. */
+export function eventDisplayStart(e: AppEvent): string {
+  return e.realStartAt || e.startsAt;
+}
+
+export function eventDisplayEnd(e: AppEvent): string | undefined {
+  return e.estimatedFinishAt || e.endsAt || undefined;
+}
+
 export function formatTimeRange(e: AppEvent): string {
-  const start = e.realStartAt || e.startsAt;
-  const end = e.estimatedFinishAt || e.endsAt;
+  const start = eventDisplayStart(e);
+  const end = eventDisplayEnd(e);
   if (end) return `${formatEventDate(start)} – ${formatEventEndTime(start, end)}`;
   return formatEventDate(start);
 }

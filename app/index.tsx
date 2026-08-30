@@ -201,9 +201,7 @@ export default function MapScreen() {
     clearCompletedAction,
   } = useAuth();
   const mapRef = useRef<MapView>(null);
-  // Default to Today so the map opens on ~100 events, not all ~1,100 — far
-  // less congested in central London. "All" is still available as a chip.
-  const [filter, setFilter] = useState<FilterKey>('today');
+  const [filter, setFilter] = useState<FilterKey>('all');
   const [categories, setCategories] = useState<Set<CategoryFilterKey>>(
     () => new Set(),
   );
@@ -1655,7 +1653,8 @@ export default function MapScreen() {
           !isPremium ? (
             <View style={styles.quietEmptyPill}>
               <Text style={styles.quietEmptyText}>
-                Nothing free to show on this day. {lockedEventsInFilter.length} event
+                Nothing free to show on this day.{'\n'}
+                {lockedEventsInFilter.length} event
                 {lockedEventsInFilter.length === 1 ? '' : 's'} need Premium.
               </Text>
             </View>
@@ -1665,7 +1664,7 @@ export default function MapScreen() {
               <PremiumInlineBar
                 feature="Browse events beyond tomorrow"
                 source="map_filter"
-                message={`${lockedEventsInFilter.length} event${lockedEventsInFilter.length === 1 ? '' : 's'} on this day need DriveIQ Premium. Today and tomorrow stay free.`}
+                message={`${lockedEventsInFilter.length} later event${lockedEventsInFilter.length === 1 ? '' : 's'} need Premium. Today and tomorrow stay free.`}
               />
             </View>
           ) : null}
@@ -1679,7 +1678,7 @@ export default function MapScreen() {
 
       {!destination && (
       <MapActionStack
-        bottomOffset={90}
+        bottomOffset={!isPremium && lockedEventsInFilter.length > 0 && !loading ? 168 : 90}
         primaryAction={{
           key: 'recenter',
           label: 'Re-centre map',
@@ -2196,12 +2195,16 @@ const styles = StyleSheet.create({
   },
   upgradeWrap: {
     width: '92%',
+    maxWidth: 420,
     marginBottom: 8,
+    paddingRight: 4,
   },
   quietEmptyPill: {
     width: '92%',
+    maxWidth: 420,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    paddingRight: 20,
     borderRadius: 14,
     backgroundColor: colors.surface,
     marginBottom: 8,

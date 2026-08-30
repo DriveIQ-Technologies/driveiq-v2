@@ -29,6 +29,9 @@ export function friendlyPurchaseError(message: string, kind: PurchaseFlowKind): 
   if (m.includes('already owned') || m.includes('already subscribed')) {
     return 'This account already has Premium. Tap Restore purchases if features have not unlocked yet.';
   }
+  if (m.includes('did not respond') || m.includes('timed out') || m.includes('timeout')) {
+    return 'The App Store did not respond. You have not been charged — try again.';
+  }
   return kind === 'purchase'
     ? 'Payment did not go through. You have not been charged.'
     : 'Could not restore purchases right now. Try again in a moment.';

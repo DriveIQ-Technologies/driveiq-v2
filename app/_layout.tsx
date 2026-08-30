@@ -1,8 +1,10 @@
-import { Stack } from 'expo-router';
+import { SplashScreen, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+void SplashScreen.preventAutoHideAsync();
 
 import { DialogHost } from '@/components/ui/DialogHost';
 import { PremiumPaywallHost } from '@/components/PremiumPaywallHost';

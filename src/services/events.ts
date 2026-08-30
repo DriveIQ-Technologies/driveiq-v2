@@ -10,6 +10,7 @@ import { fetchEspnLondon } from './espn';
 import { fetchFeaturedLondon } from './featuredEvents';
 import { fetchFootballDataLondon } from './footballData';
 import { fetchFotmobLondon } from './fotmobCalendars';
+import { fetchPublishedEvents } from './eventPublish';
 import { fetchSampleEvents } from './sampleEvents';
 import { fetchSportsLondon } from './sportsdb';
 import { fetchTicketmasterLondon } from './ticketmaster';
@@ -38,15 +39,12 @@ export type FetchAllEventsOptions = {
  * merges progressively (so the map can paint before Ticketmaster finishes),
  * de-duplicates by id, and falls back to sample data if none returned anything.
  *
- * Coverage layers (venue-first redundancy — no single feed can blank a sport):
- *   - fotmob        → FREE home football calendars (friendlies + league)
- *   - sportsdb      → optional Premium venue loop (all sports) if key set
- *   - espn          → soccer / rugby / NFL / NBA / boxing / UFC
- *   - cricinfo      → cricket via ESPN web calendar API
- *   - football-data → PL / Championship / cups backup
- *   - venue-sites   → ICS / JSON fallbacks (Oval, RAH, …)
- *   - featured      → curated seasonal safety net
- *   - ticketmaster  → non-sports entertainment
+ * Coverage layers:
+ *   - Firestore catalogue (preferred) includes Ticketmaster, Proms, and
+ *     server-side FotMob/ESPN/cricket sports. The phone only re-fetches
+ *     sports if that catalogue is missing or has almost no fixtures.
+ *   - fotmob / espn / cricinfo / football-data / sportsdb → on-device fallback
+ *   - venue-sites / featured / ticketmaster → entertainment fallback
  */
 export async function fetchAllEvents(
   range: DateRange,
@@ -106,6 +104,43 @@ export async function fetchAllEvents(
     }
     emit();
   };
+
+  const published = await fetchPublishedEvents();
+  if (published) {
+    console.log(
+      `[events] using server catalogue (${published.events.length} rows, age ${Math.round((Date.now() - published.updatedAt) / 60000)}m)`,
+    );
+    track('events_published_loaded', { count: published.events.length });
+    const serverFeatured = published.events.filter((e) => e.source === 'featured');
+    buckets.ticketmaster = published.events.filter((e) => e.source !== 'featured');
+    buckets.featured = serverFeatured;
+    opts.onPartial?.(
+      finalize(buckets, /* allowSample */ false).map((e) =>
+        e.doorsAt || e.realStartAt ? e : normaliseEventLocal(e),
+      ),
+    );
+    // Official Proms / marquee clocks live on-device. Overlay them even when
+    // Firestore is fresh so a stale TM listing cannot shift Albert Hall times.
+    await run('featured', 'featured', async () => {
+      const live = await fetchFeaturedLondon(range);
+      return live.length > 0 ? live : serverFeatured;
+    });
+    const sportsOnServer = published.events.filter((e) => e.category === 'sports').length;
+    if (sportsOnServer < 8) {
+      await Promise.all([
+        run('espn', 'espn', () => fetchEspnLondon(range)),
+        run('cricinfo', 'cricinfo', () => fetchCricinfoLondon(range)),
+        run('footballData', 'football-data', () => fetchFootballDataLondon(range)),
+        run('sports', 'sportsdb', () => fetchSportsLondon(range)),
+        run('fotmob', 'fotmob', () => fetchFotmobLondon(range)),
+      ]);
+    }
+    const merged = (await finalizeAsync(buckets, range)).map((e) =>
+      e.doorsAt || e.realStartAt || e.source === 'featured' ? e : normaliseEventLocal(e),
+    );
+    warnOnEmptyCoverageVenues(merged);
+    return merged;
+  }
 
   await Promise.all([
     run('espn', 'espn', () => fetchEspnLondon(range)),

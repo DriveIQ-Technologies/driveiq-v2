@@ -1,4 +1,4 @@
-import { auth } from './firebase';
+import { auth, authApi } from './firebase';
 
 export interface AgentAnswer {
   ok: boolean;
@@ -32,6 +32,7 @@ export interface AgentEventHint {
   venue: string;
   startsAt: string;
   endsAt?: string;
+  doorsAt?: string;
   kind?: string;
   turnout?: string;
   featured?: boolean;
@@ -52,7 +53,15 @@ export async function askDriveiqAgent(
   history?: AgentTurn[],
   live?: AgentLiveContext,
 ): Promise<AgentAnswer> {
-  const currentUser = auth?.currentUser;
+  let currentUser = auth?.currentUser;
+  if (!currentUser && auth && authApi) {
+    try {
+      const cred = await authApi.signInAnonymously(auth);
+      currentUser = cred.user;
+    } catch (e) {
+      console.warn('[agent] anonymous sign-in failed', e);
+    }
+  }
   if (!currentUser) {
     console.warn('[agent] no currentUser — cannot call backend');
     throw new Error('agent/unavailable');

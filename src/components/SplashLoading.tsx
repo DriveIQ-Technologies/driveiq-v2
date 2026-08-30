@@ -17,11 +17,24 @@ const WHITE_CHARS = 5; // "Drive" white, "IQ" brand blue
 const TAGLINE = 'KNOW YOUR CITY BEFORE IT MOVES';
 const TYPE_START = 400; // ms before first letter appears
 const TYPE_STEP = 90; // ms between letters
-
-/** Brand beat — long enough for the wordmark, short enough not to feel stuck. */
-const MIN_MS = 1400;
+const TAGLINE_MS = 500;
+const HOLD_MS = 850; // keep the finished wordmark on screen before fade
+const BRAND_MS =
+  TYPE_START + WORD_LETTERS.length * TYPE_STEP + TAGLINE_MS + HOLD_MS;
 /** Hard cap so a slow auth never leaves the user staring at splash. */
-const MAX_MS = 3200;
+const MAX_MS = 6500;
+
+function hideNativeSplash(): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const router = require('expo-router') as {
+      SplashScreen?: { hideAsync?: () => Promise<void> };
+    };
+    void router.SplashScreen?.hideAsync?.();
+  } catch {
+    /* Expo Go / older router */
+  }
+}
 
 interface Props {
   /**
@@ -69,10 +82,9 @@ function RadarRing({ delay }: { delay: number }) {
 /**
  * DriveIQ launch screen — "Radar Pulse" concept.
  *
- * Covers the map while auth settles. Touches pass through so the menu button
- * (rendered above this layer) stays clickable from first paint. Dismisses as
- * soon as `ready` is true after a short brand beat, or at MAX_MS whichever
- * comes first.
+ * Covers the map while auth settles. The wordmark + tagline always finish
+ * before home is shown. If auth is still warming, splash stays until ready
+ * (or MAX_MS).
  */
 export function SplashLoading({ ready = true, onDone }: Props) {
   const logo = useRef(new Animated.Value(0)).current;
@@ -85,20 +97,33 @@ export function SplashLoading({ ready = true, onDone }: Props) {
     useRef(new Animated.Value(0.25)).current,
     useRef(new Animated.Value(0.25)).current,
   ];
-  const startedAt = useRef(Date.now());
   const finished = useRef(false);
+  const brandReady = useRef(false);
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
 
   const finish = () => {
     if (finished.current) return;
     finished.current = true;
     Animated.timing(fade, {
       toValue: 0,
-      duration: 280,
+      duration: 420,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start(() => onDone());
+    }).start(({ finished: faded }) => {
+      if (faded) onDone();
+    });
+  };
+
+  const tryFinish = () => {
+    if (finished.current) return;
+    if (!readyRef.current || !brandReady.current) return;
+    finish();
   };
 
   useEffect(() => {
+    hideNativeSplash();
+
     Animated.timing(logo, {
       toValue: 1,
       duration: 700,
@@ -133,9 +158,19 @@ export function SplashLoading({ ready = true, onDone }: Props) {
     const wordSeq = Animated.sequence([
       Animated.delay(TYPE_START),
       typing,
-      Animated.timing(tag, { toValue: 1, duration: 500, useNativeDriver: true }),
+      Animated.timing(tag, { toValue: 1, duration: TAGLINE_MS, useNativeDriver: true }),
+      Animated.delay(HOLD_MS),
     ]);
-    wordSeq.start();
+    wordSeq.start(({ finished: played }) => {
+      if (!played) return;
+      brandReady.current = true;
+      tryFinish();
+    });
+
+    const holdTimer = setTimeout(() => {
+      brandReady.current = true;
+      tryFinish();
+    }, BRAND_MS);
 
     const dotLoops = dots.map((d, idx) =>
       Animated.loop(
@@ -149,10 +184,10 @@ export function SplashLoading({ ready = true, onDone }: Props) {
     );
     dotLoops.forEach((l) => l.start());
 
-    // Never leave the user stuck if auth is slow.
     const maxTimer = setTimeout(finish, MAX_MS);
 
     return () => {
+      clearTimeout(holdTimer);
       clearTimeout(maxTimer);
       glowLoop.stop();
       wordSeq.stop();
@@ -161,13 +196,9 @@ export function SplashLoading({ ready = true, onDone }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Dismiss once auth (or other gate) is ready and the brand beat has played.
   useEffect(() => {
     if (!ready) return;
-    const elapsed = Date.now() - startedAt.current;
-    const wait = Math.max(0, MIN_MS - elapsed);
-    const id = setTimeout(finish, wait);
-    return () => clearTimeout(id);
+    tryFinish();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 

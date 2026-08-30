@@ -19,6 +19,20 @@ import {
   DEFAULT_PREMIUM_ENTITLEMENT_ID,
   hasActivePremiumEntitlement,
 } from './premiumEntitlement';
+import {
+  PACKAGE_ANNUAL_ID,
+  PACKAGE_MONTHLY_ID,
+  catalogueGbpAmount,
+  packageMonthlyEquivalent as formatMonthlyEquivalent,
+  packagePriceLabel as formatPackagePrice,
+} from './premiumPrices';
+
+export {
+  PACKAGE_ANNUAL_ID,
+  PACKAGE_MONTHLY_ID,
+  PREMIUM_GBP,
+  catalogueGbpAmount,
+} from './premiumPrices';
 
 export const PREMIUM_ENTITLEMENT_ID =
   process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID?.trim() ||
@@ -28,8 +42,7 @@ export const PREMIUM_ENTITLEMENT_ID =
 export const PREMIUM_OFFERING_ID =
   process.env.EXPO_PUBLIC_REVENUECAT_OFFERING_ID?.trim() || 'default';
 
-export const PACKAGE_ANNUAL_ID = '$rc_annual';
-export const PACKAGE_MONTHLY_ID = '$rc_monthly';
+let lastStorefront: string | null = null;
 
 const IOS_API_KEY =
   process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY?.trim() ||
@@ -135,7 +148,7 @@ export async function configurePurchases(): Promise<boolean> {
         /* non-fatal in dev */
       }
     }
-    P.configure({ apiKey });
+    P.configure({ apiKey, preferredUILocaleOverride: 'en-GB' });
     configured = true;
     track('purchases_configured', { platform: Platform.OS });
 
@@ -230,9 +243,45 @@ export async function prefetchOfferings(force = false): Promise<PurchasesOfferin
     try {
       const offerings = await P.getOfferings();
       cachedOffering = pickOffering(offerings);
+      const pkgs = cachedOffering?.availablePackages ?? [];
       track('purchases_offerings_prefetched', {
-        packages: cachedOffering?.availablePackages?.length ?? 0,
+        packages: pkgs.length,
       });
+      lastStorefront = await readStorefront(P);
+      for (const pkg of pkgs) {
+        const product = pkg.product as PurchasesPackage['product'] & {
+          pricePerMonth?: number | null;
+          pricePerYear?: number | null;
+          pricePerMonthString?: string | null;
+        };
+        const catalogueGbp = catalogueGbpAmount(pkg);
+        const displayed = packagePriceLabel(pkg, lastStorefront);
+        console.log('[purchases] price compare', {
+          storefront: lastStorefront,
+          package_id: pkg.identifier,
+          product_id: product.identifier,
+          revenuecat: {
+            price: product.price,
+            currencyCode: product.currencyCode,
+            priceString: product.priceString,
+            pricePerMonth: product.pricePerMonth ?? null,
+            pricePerYear: product.pricePerYear ?? null,
+            pricePerMonthString: product.pricePerMonthString ?? null,
+          },
+          catalogue_gbp: catalogueGbp,
+          displayed,
+        });
+        track('purchases_price_compare', {
+          storefront: lastStorefront ?? '',
+          package_id: pkg.identifier,
+          product_id: product.identifier,
+          rc_price: product.price,
+          rc_currency: product.currencyCode ?? '',
+          rc_price_string: product.priceString ?? '',
+          catalogue_gbp: catalogueGbp ?? 0,
+          displayed,
+        });
+      }
       return cachedOffering;
     } catch (e) {
       console.warn('[purchases] prefetchOfferings failed', e);
@@ -299,6 +348,65 @@ export type PurchaseResult =
   | { ok: true; customerInfo: CustomerInfo }
   | { ok: false; cancelled: boolean; message: string };
 
+const PURCHASE_WATCHDOG_MS = 90_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+function isPurchaseCancelled(e: unknown): boolean {
+  const err = e as { userCancelled?: boolean; code?: number | string; message?: string };
+  if (err?.userCancelled) return true;
+  if (err?.code === 1 || err?.code === '1' || err?.code === 'PURCHASE_CANCELLED') return true;
+  const m = (err?.message ?? '').toLowerCase();
+  return m.includes('cancelled') || m.includes('canceled');
+}
+
+function applyCustomerInfo(info: CustomerInfo, pkg?: PurchasesPackage): void {
+  lastCustomerInfo = info;
+  const pro = hasPremiumEntitlement(info);
+  emitPremium(pro);
+  if (pkg && pro) {
+    track('purchase_succeeded', {
+      product_id: pkg.product.identifier,
+      package_id: pkg.identifier,
+      premium: pro,
+    });
+  }
+}
+
+/** Re-fetch offerings then buy — cached packages after logIn can hang StoreKit. */
+export async function purchaseSelectedPackage(identifier: string): Promise<PurchaseResult> {
+  let offering = cachedOffering;
+  try {
+    offering =
+      (await withTimeout(prefetchOfferings(true), 12_000, 'offerings-timeout')) ?? cachedOffering;
+  } catch {
+    offering = cachedOffering;
+  }
+  const pkg = offering?.availablePackages.find((p) => p.identifier === identifier);
+  if (!pkg) {
+    return {
+      ok: false,
+      cancelled: false,
+      message: 'That plan could not be loaded from the App Store. Try again in a moment.',
+    };
+  }
+  return purchasePackage(pkg);
+}
+
 export async function purchasePackage(
   pkg: PurchasesPackage,
 ): Promise<PurchaseResult> {
@@ -306,24 +414,24 @@ export async function purchasePackage(
   if (!P || !configured) {
     return { ok: false, cancelled: false, message: 'Purchases are not available in this build.' };
   }
+  const native = P.purchasePackage(pkg);
   try {
-    const { customerInfo } = await P.purchasePackage(pkg);
-    lastCustomerInfo = customerInfo;
-    const pro = hasPremiumEntitlement(customerInfo);
-    emitPremium(pro);
-    track('purchase_succeeded', {
-      product_id: pkg.product.identifier,
-      package_id: pkg.identifier,
-      premium: pro,
-    });
+    const { customerInfo } = await withTimeout(
+      native,
+      PURCHASE_WATCHDOG_MS,
+      'The App Store did not respond. You have not been charged.',
+    );
+    applyCustomerInfo(customerInfo, pkg);
     return { ok: true, customerInfo };
   } catch (e: unknown) {
-    const err = e as { userCancelled?: boolean; message?: string; code?: number };
-    if (err?.userCancelled) {
+    // Timed-out JS still lets a late StoreKit success unlock Premium.
+    void native.then(({ customerInfo }) => applyCustomerInfo(customerInfo, pkg)).catch(() => undefined);
+    if (isPurchaseCancelled(e)) {
       track('purchase_cancelled');
       return { ok: false, cancelled: true, message: 'Purchase cancelled.' };
     }
-    const message = err?.message ?? 'Purchase failed. Please try again.';
+    const message =
+      e instanceof Error ? e.message : (e as { message?: string })?.message ?? 'Purchase failed. Please try again.';
     track('purchase_failed', { message: message.slice(0, 120) });
     return { ok: false, cancelled: false, message };
   }
@@ -335,7 +443,11 @@ export async function restorePurchases(): Promise<PurchaseResult> {
     return { ok: false, cancelled: false, message: 'Purchases are not available in this build.' };
   }
   try {
-    const customerInfo = await P.restorePurchases();
+    const customerInfo = await withTimeout(
+      P.restorePurchases(),
+      PURCHASE_WATCHDOG_MS,
+      'The App Store did not respond. Try Restore again in a moment.',
+    );
     lastCustomerInfo = customerInfo;
     const pro = hasPremiumEntitlement(customerInfo);
     emitPremium(pro);
@@ -390,8 +502,37 @@ export async function presentRevenueCatPaywall(): Promise<
   }
 }
 
-export function packagePriceLabel(pkg: PurchasesPackage): string {
-  return pkg.product.priceString;
+export function packagePriceLabel(
+  pkg: PurchasesPackage,
+  storefront: string | null = lastStorefront,
+): string {
+  return formatPackagePrice(pkg, storefront);
+}
+
+export function packageMonthlyEquivalent(
+  pkg: PurchasesPackage,
+  storefront: string | null = lastStorefront,
+): string | null {
+  return formatMonthlyEquivalent(pkg, storefront);
+}
+
+async function readStorefront(
+  P: PurchasesModule['default'],
+): Promise<string | null> {
+  try {
+    const api = P as {
+      getStorefront?: () => Promise<string | { countryCode?: string } | null>;
+    };
+    if (typeof api.getStorefront !== 'function') return lastStorefront;
+    const sf = await api.getStorefront();
+    if (typeof sf === 'string' && sf.trim()) return sf.trim().toUpperCase();
+    if (sf && typeof sf === 'object' && sf.countryCode) {
+      return sf.countryCode.trim().toUpperCase();
+    }
+  } catch {
+    /* older SDK */
+  }
+  return lastStorefront;
 }
 
 export function packagePeriodLabel(pkg: PurchasesPackage): string {

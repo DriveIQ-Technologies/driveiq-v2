@@ -16,10 +16,19 @@ import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { showDialog } from '@/services/dialog';
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
+import {
+  claimWaitlistByEmail,
+  claimWaitlistByToken,
+  friendlyWaitlistClaimError,
+  type WaitlistClaimResponse,
+} from '@/services/waitlist';
+import { presentPremiumUnlock } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 
+type WaitlistClaimMode = 'email' | 'token';
+
 /** Which sub-form the account sheet opens to. */
-export type AccountSection = 'profile' | 'email' | 'password';
+export type AccountSection = 'profile' | 'email' | 'password' | 'waitlist';
 
 interface Props {
   visible: boolean;
@@ -39,6 +48,8 @@ export function AccountSheet({ visible, section, onClose }: Props) {
   const [email, setEmail] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [waitlistMode, setWaitlistMode] = useState<WaitlistClaimMode>('email');
+  const [waitlistInput, setWaitlistInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +59,8 @@ export function AccountSheet({ visible, section, onClose }: Props) {
       setEmail(user?.email ?? '');
       setCurrentPassword('');
       setNewPassword('');
+      setWaitlistInput('');
+      setWaitlistMode('email');
       setError(null);
       setBusy(false);
       trackScreen('account_sheet', { section });
@@ -60,6 +73,20 @@ export function AccountSheet({ visible, section, onClose }: Props) {
     profile: 'Edit profile',
     email: 'Change email',
     password: 'Change password',
+    waitlist: 'Claim waitlist week',
+  };
+
+  const finishWaitlistClaim = (result: WaitlistClaimResponse) => {
+    if (result.ok && (result.status === 'granted' || result.status === 'already_active')) {
+      onClose();
+      if (result.status === 'granted') {
+        presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+      } else {
+        showDialog('Waitlist week active', result.message);
+      }
+      return;
+    }
+    setError(result.message);
   };
 
   const submit = async () => {
@@ -74,6 +101,22 @@ export function AccountSheet({ visible, section, onClose }: Props) {
         await updateDisplayName(name);
         track('account_profile_save_succeeded');
         done('Profile updated.');
+      } else if (section === 'waitlist') {
+        if (!waitlistInput.trim()) {
+          setError(
+            waitlistMode === 'email'
+              ? 'Enter the email you used on the waitlist.'
+              : 'Enter your claim code.',
+          );
+          return;
+        }
+        track('waitlist_claim_started', { method: waitlistMode });
+        const result =
+          waitlistMode === 'email'
+            ? await claimWaitlistByEmail(waitlistInput)
+            : await claimWaitlistByToken(waitlistInput);
+        track('waitlist_claim_finished', { status: result.status, ok: result.ok });
+        finishWaitlistClaim(result);
       } else if (section === 'email') {
         if (!email.trim() || !currentPassword) {
           setError('Enter your new email and current password.');
@@ -97,7 +140,9 @@ export function AccountSheet({ visible, section, onClose }: Props) {
       }
     } catch (e) {
       track('account_save_failed', { section });
-      setError(friendlyAuthError(e));
+      setError(
+        section === 'waitlist' ? friendlyWaitlistClaimError(e) : friendlyAuthError(e),
+      );
     } finally {
       setBusy(false);
     }
@@ -122,6 +167,49 @@ export function AccountSheet({ visible, section, onClose }: Props) {
             contentContainerStyle={{ paddingBottom: 24 }}
           >
             <Text style={styles.title}>{titles[section]}</Text>
+
+            {section === 'waitlist' ? (
+              <>
+                <Text style={styles.help}>
+                  Joined the waitlist with a different email than this account? Enter
+                  that waitlist email or the claim code from your invite to unlock
+                  your free Premium week.
+                </Text>
+                <View style={styles.segment}>
+                  {(['email', 'token'] as WaitlistClaimMode[]).map((m) => (
+                    <Pressable
+                      key={m}
+                      onPress={() => {
+                        setWaitlistMode(m);
+                        setError(null);
+                      }}
+                      style={[styles.segmentBtn, waitlistMode === m && styles.segmentBtnActive]}
+                    >
+                      <Text
+                        style={[
+                          styles.segmentText,
+                          waitlistMode === m && styles.segmentTextActive,
+                        ]}
+                      >
+                        {m === 'email' ? 'Waitlist email' : 'Claim code'}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Field
+                  icon={waitlistMode === 'email' ? 'mail-outline' : 'ticket-outline'}
+                  placeholder={
+                    waitlistMode === 'email'
+                      ? 'Waitlist email address'
+                      : 'Claim code'
+                  }
+                  value={waitlistInput}
+                  onChangeText={setWaitlistInput}
+                  keyboardType={waitlistMode === 'email' ? 'email-address' : 'default'}
+                  autoCapitalize={waitlistMode === 'email' ? 'none' : 'characters'}
+                />
+              </>
+            ) : null}
 
             {section === 'profile' ? (
               <Field
@@ -182,7 +270,9 @@ export function AccountSheet({ visible, section, onClose }: Props) {
               {busy ? (
                 <ActivityIndicator color={colors.textOnPrimary} />
               ) : (
-                <Text style={styles.primaryText}>Save changes</Text>
+                <Text style={styles.primaryText}>
+                  {section === 'waitlist' ? 'Claim free week' : 'Save changes'}
+                </Text>
               )}
             </Pressable>
             <Pressable onPress={onClose} style={styles.cancelBtn}>
@@ -238,6 +328,39 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     marginBottom: 16,
   },
+  help: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    lineHeight: 19,
+    marginBottom: 14,
+  },
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 14,
+  },
+  segmentBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 9,
+    alignItems: 'center',
+  },
+  segmentBtnActive: {
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  segmentTextActive: { color: colors.primary },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',

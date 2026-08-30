@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { BrandPulseMark } from '@/components/BrandPulseMark';
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
 import {
@@ -12,9 +13,6 @@ import {
   type PremiumUnlockOutcome,
 } from '@/data/premiumUnlockCopy';
 import { colors } from '@/theme/colors';
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const BRAND_LOGO = require('../../assets/driveiq-logo.png');
 
 interface Props {
   visible: boolean;
@@ -74,9 +72,7 @@ export function PremiumUnlockedSheet({ visible, outcome, onClose }: Props) {
               <Ionicons name="checkmark-circle" size={22} color="#26C281" />
               <Text style={styles.successBadgeText}>Premium active</Text>
             </View>
-            <View style={styles.logoWrap}>
-              <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
-            </View>
+            <BrandPulseMark size={64} />
             <Text style={styles.headline}>{headline}</Text>
             <Text style={styles.lead}>{lead}</Text>
           </Animated.View>

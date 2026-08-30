@@ -21,10 +21,19 @@ import { londonYmd, ukOffset } from '@/utils/ukTime';
 import { templateEventLine } from './copyTemplates';
 import { db, fsApi } from './firebase';
 
-const MUSIC = /music|concert|rock|pop|jazz|festival|dance|electronic/i;
+const MUSIC =
+  /music|concert|rock|pop|jazz|festival|dance|electronic|hip-?hop|\brap\b|r&b|rnb|grime|drill/i;
 const THEATRE = /theatre|theater|musical|comedy|arts|opera|ballet/i;
 const FESTIVAL_DAY =
   /festival|points east|south facing|wireless|hyde park|bowl|park|common/i;
+/** Proms and seated halls publish start (and often end), not doors. */
+const PUBLISHED_START =
+  /bbc proms|\bproms?\b|orchestra|philharmonic|symphony|concerto|chamber orchestra|requiem|oratorio/i;
+const SEATED_HALL =
+  /royal albert hall|\balbert hall\b|barbican hall|wigmore hall|royal festival hall|queen elizabeth hall|cadogan hall/i;
+const O2_ARENA = /(?:^|\b)(?:the )?o2(?: arena)?\b/i;
+/** Minutes after the last note before the hall empties onto the street. */
+const CLASSICAL_CROWD_OUT_MIN = 15;
 
 const isMusic = (e: AppEvent): boolean =>
   MUSIC.test(e.subCategory ?? '') || MUSIC.test(e.title);
@@ -32,13 +41,36 @@ const isMusic = (e: AppEvent): boolean =>
 const isTheatre = (e: AppEvent): boolean =>
   THEATRE.test(e.subCategory ?? '') || THEATRE.test(e.title);
 
-function londonWallHour(iso: string): number {
-  const hour = new Date(iso).toLocaleTimeString('en-GB', {
-    hour: '2-digit',
-    hour12: false,
+function londonWallHourMinute(iso: string): { hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/London',
-  });
-  return Number.parseInt(hour, 10);
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  return {
+    hour: Number.parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10),
+    minute: Number.parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10),
+  };
+}
+
+function listedIsPublishedStart(event: AppEvent): boolean {
+  const hay = `${event.title} ${event.subCategory ?? ''}`;
+  return PUBLISHED_START.test(hay) || SEATED_HALL.test(event.venue ?? '');
+}
+
+function isO2Arena(venue?: string): boolean {
+  return O2_ARENA.test(venue ?? '');
+}
+
+/** True when `endsAt` looks like a real performance length, not a multi-day dump. */
+function publishedFinishLooksReal(startIso: string, endIso?: string): boolean {
+  if (!endIso) return false;
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  const dur = end - start;
+  return dur >= 45 * 60 * 1000 && dur <= 6 * 60 * 60 * 1000;
 }
 
 function finishAtHour(iso: string, hhmm: string): string {
@@ -98,21 +130,44 @@ export function normaliseEventLocal(event: AppEvent): AppEvent {
         : event.endsAt) ??
       defaultEndsAt(realStartAt, event.subCategory);
   } else if (music) {
-    const listedHour = londonWallHour(event.startsAt);
-    const listedLooksLikeDoors = listedHour >= 17 && listedHour <= 19;
-    if (listedLooksLikeDoors) {
+    const { hour: listedHour, minute: listedMinute } = londonWallHourMinute(
+      event.startsAt,
+    );
+    const publishedStart = listedIsPublishedStart(event);
+    // 17:00 at arenas is usually doors. 18:30 is Ticketmaster's "event time"
+    // (O2 Rocky). 19:00/19:30 are concert starts — Proms were shifted +30
+    // because this used to treat every 17–19 listing as doors.
+    const listedLooksLikeDoors =
+      !publishedStart &&
+      (listedHour === 17 ||
+        (listedHour === 18 && listedMinute === 0 && !isO2Arena(event.venue)));
+    if (publishedStart) {
+      realStartAt = realStartAt ?? event.startsAt;
+      doorsAt = doorsAt ?? addMinutesIso(realStartAt, -30);
+    } else if (listedLooksLikeDoors) {
       doorsAt = doorsAt ?? event.startsAt;
       const offset = profile?.concertStartAfterDoorsMin ?? 60;
       realStartAt = realStartAt ?? addMinutesIso(doorsAt, offset);
     } else {
       realStartAt = realStartAt ?? event.startsAt;
-      doorsAt = doorsAt ?? addMinutesIso(realStartAt, -60);
+      if (isO2Arena(event.venue) && listedHour >= 18 && listedHour < 21) {
+        const six = finishAtHour(event.startsAt, '18:00');
+        doorsAt =
+          doorsAt ??
+          (Date.parse(six) < Date.parse(realStartAt)
+            ? six
+            : addMinutesIso(realStartAt, -30));
+      } else {
+        doorsAt = doorsAt ?? addMinutesIso(realStartAt, -60);
+      }
     }
     const festivalDay =
       FESTIVAL_DAY.test(`${event.title} ${event.venue} ${event.subCategory ?? ''}`) ||
       listedHour < 17;
     if (!estimatedFinishAt) {
-      if (profile?.concertFinishHhmm) {
+      if (publishedStart && publishedFinishLooksReal(realStartAt, event.endsAt)) {
+        estimatedFinishAt = addMinutesIso(event.endsAt!, CLASSICAL_CROWD_OUT_MIN);
+      } else if (profile?.concertFinishHhmm && !publishedStart) {
         estimatedFinishAt = finishAtHour(event.startsAt, profile.concertFinishHhmm);
       } else if (festivalDay) {
         estimatedFinishAt = finishAtHour(event.startsAt, '22:30');

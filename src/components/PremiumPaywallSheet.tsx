@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
-  Image,
   Linking,
   Pressable,
   ScrollView,
@@ -15,7 +14,8 @@ import {
 import type { PurchasesPackage } from 'react-native-purchases';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { SheetOverlay } from '@/components/ui/SheetOverlay';
+import { BrandPulseMark } from '@/components/BrandPulseMark';
+import { SheetOverlay, resetSheetPointers } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
 import {
   configurePurchases,
@@ -24,10 +24,11 @@ import {
   isPurchasesNativeAvailable,
   packageDisplayTitle,
   packageHasFreeTrial,
+  packageMonthlyEquivalent,
   packagePeriodLabel,
   packagePriceLabel,
   preferredPremiumPackage,
-  purchasePackage,
+  purchaseSelectedPackage,
   purchasesUnavailableMessage,
   restorePurchases,
   sortPremiumPackages,
@@ -35,9 +36,6 @@ import {
 } from '@/services/purchases';
 import { syncPremiumEntitlement } from '@/services/subscription';
 import { colors } from '@/theme/colors';
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const BRAND_LOGO = require('../../assets/driveiq-logo.png');
 
 const TERMS_URL = 'https://driveiq.app/terms';
 const PRIVACY_URL = 'https://driveiq.app/privacy';
@@ -88,23 +86,6 @@ function isAnnual(pkg: PurchasesPackage): boolean {
   return pkg.identifier === PACKAGE_ANNUAL_ID || pkg.packageType === 'ANNUAL';
 }
 
-function monthlyEquivalent(pkg: PurchasesPackage): string | null {
-  if (!isAnnual(pkg)) return null;
-  const price = pkg.product.price;
-  if (typeof price !== 'number' || !(price > 0)) return null;
-  const perMonth = price / 12;
-  const currency = pkg.product.currencyCode ?? 'GBP';
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency,
-      maximumFractionDigits: 2,
-    }).format(perMonth);
-  } catch {
-    return `£${perMonth.toFixed(2)}`;
-  }
-}
-
 export function PremiumPaywallSheet({
   visible,
   feature,
@@ -123,6 +104,13 @@ export function PremiumPaywallSheet({
   const [loading, setLoading] = useState(cached.length === 0);
   const [busy, setBusy] = useState(false);
   const enter = useRef(new Animated.Value(0)).current;
+  const inFlight = useRef(false);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+
+  useEffect(() => {
+    if (!visible) setBusy(false);
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -187,41 +175,74 @@ export function PremiumPaywallSheet({
   })();
 
   const buy = async () => {
-    if (!selected || busy) return;
+    if (!selected) return;
+    if (inFlight.current) {
+      setBusy(true);
+      return;
+    }
+    inFlight.current = true;
     setBusy(true);
     track('paywall_purchase_tapped', {
       package_id: selected.identifier,
       product_id: selected.product.identifier,
       source,
     });
-    const result = await purchasePackage(selected);
-    setBusy(false);
-    if (result.ok) {
-      await syncPremiumEntitlement();
-      onUnlocked?.();
-      onClose();
-      onSuccess?.({
-        kind: 'purchase',
-        trialStarted: selected ? packageHasFreeTrial(selected) : false,
-      });
-      return;
+    try {
+      const result = await purchaseSelectedPackage(selected.identifier);
+      if (result.ok) {
+        await syncPremiumEntitlement();
+        onUnlocked?.();
+        onClose();
+        onSuccess?.({
+          kind: 'purchase',
+          trialStarted: packageHasFreeTrial(selected),
+        });
+        return;
+      }
+      if (visibleRef.current) {
+        onFailure?.({ kind: 'purchase', cancelled: result.cancelled, message: result.message });
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Purchase failed. Please try again.';
+      if (visibleRef.current) {
+        onFailure?.({ kind: 'purchase', cancelled: false, message });
+      }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+      resetSheetPointers();
     }
-    onFailure?.({ kind: 'purchase', cancelled: result.cancelled, message: result.message });
   };
 
   const restore = async () => {
-    if (busy) return;
-    setBusy(true);
-    const result = await restorePurchases();
-    setBusy(false);
-    if (result.ok) {
-      await syncPremiumEntitlement();
-      onUnlocked?.();
-      onClose();
-      onSuccess?.({ kind: 'restore', trialStarted: false });
+    if (inFlight.current) {
+      setBusy(true);
       return;
     }
-    onFailure?.({ kind: 'restore', cancelled: result.cancelled, message: result.message });
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      const result = await restorePurchases();
+      if (result.ok) {
+        await syncPremiumEntitlement();
+        onUnlocked?.();
+        onClose();
+        onSuccess?.({ kind: 'restore', trialStarted: false });
+        return;
+      }
+      if (visibleRef.current) {
+        onFailure?.({ kind: 'restore', cancelled: result.cancelled, message: result.message });
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not restore purchases. Please try again.';
+      if (visibleRef.current) {
+        onFailure?.({ kind: 'restore', cancelled: false, message });
+      }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+      resetSheetPointers();
+    }
   };
 
   const openUrl = (url: string) => {
@@ -252,7 +273,7 @@ export function PremiumPaywallSheet({
           styles.sheet,
           {
             paddingTop: Math.max(insets.top, 12),
-            paddingBottom: Math.max(insets.bottom, 14),
+            paddingBottom: Math.max(insets.bottom, 20) + 8,
           },
         ]}
       >
@@ -273,10 +294,7 @@ export function PremiumPaywallSheet({
           style={styles.scrollFlex}
         >
           <Animated.View style={{ opacity: heroOpacity, transform: [{ translateY: heroY }] }}>
-            <View style={styles.heroGlow} />
-            <View style={styles.logoWrap}>
-              <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
-            </View>
+            <BrandPulseMark size={78} />
             <Text style={styles.kicker}>DriveIQ Premium</Text>
             <Text style={styles.headline}>
               Start your shift{'\n'}knowing how it ends
@@ -318,7 +336,7 @@ export function PremiumPaywallSheet({
               {packages.map((pkg) => {
                 const active = pkg.identifier === selected?.identifier;
                 const annual = isAnnual(pkg);
-                const perMonth = monthlyEquivalent(pkg);
+                const perMonth = packageMonthlyEquivalent(pkg);
                 return (
                   <Pressable
                     key={pkg.identifier}
@@ -594,7 +612,8 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingHorizontal: 22,
-    paddingTop: 10,
+    paddingTop: 12,
+    paddingBottom: 6,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: LINE,
     backgroundColor: NIGHT,

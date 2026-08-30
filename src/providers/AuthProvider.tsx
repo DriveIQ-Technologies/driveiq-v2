@@ -97,7 +97,7 @@ const ACTION_REASON_BY_ACTION: Record<AccountAction, string> = {
   save: 'Sign up to save events and access them anytime. It is free.',
   notify: 'Sign up to turn on personalised alerts and notifications. It is free.',
   watched_flight: 'Sign up to watch flights for delays and cancellations. It is free.',
-  ai_question: 'Sign up to use DriveIQ AI Event Guide. It is free.',
+  ai_question: 'Sign up to keep AI answers on this account. It is free.',
   add_to_calendar: 'Sign up to add events to your calendar. It is free.',
 };
 
@@ -191,6 +191,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         void syncPremiumEntitlement();
         void registerPushToken();
+        void (async () => {
+          const { refreshWaitlistForCurrentUser } = await import('@/services/waitlist');
+          await refreshWaitlistForCurrentUser();
+        })();
         void (async () => {
           const { loadPrefs, loadLineSubscriptions } = await import('@/services/notifications');
           const { loadSavedFlights } = await import('@/services/savedFlights');
@@ -328,7 +332,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await identifyFirebaseUser(cred.user);
         track('auth_sign_in_succeeded');
         if (cred.user.email) {
-          await applyWaitlistPremium(cred.user.email);
+          const granted = await applyWaitlistPremium(cred.user.email);
+          if (granted) {
+            const { presentPremiumUnlock } = await import('@/services/subscription');
+            presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+          }
         }
         await syncPremiumEntitlement();
       },
@@ -387,7 +395,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
         track('signup_completed', { has_name: Boolean(trimmed) });
         if (nextUser.email) {
-          await applyWaitlistPremium(nextUser.email);
+          const granted = await applyWaitlistPremium(nextUser.email);
+          if (granted) {
+            const { presentPremiumUnlock } = await import('@/services/subscription');
+            presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+          }
         }
         await syncPremiumEntitlement();
 
@@ -407,6 +419,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout: async () => {
         const { a, api } = requireAuth();
         await clearPushTokenOnLogout();
+        const { clearWaitlistCache } = await import('@/services/waitlist');
+        await clearWaitlistCache();
         await api.signOut(a);
         track('auth_sign_out');
         // Return to anonymous browse mode.

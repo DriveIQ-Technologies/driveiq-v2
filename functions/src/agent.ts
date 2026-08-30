@@ -146,13 +146,25 @@ function parseClientEvents(raw: unknown): string[] {
     const venue = typeof x.venue === 'string' ? x.venue.trim() : 'London';
     const start = typeof x.startsAt === 'string' ? x.startsAt : '';
     const finish = typeof x.endsAt === 'string' ? x.endsAt : '';
+    const doors = typeof x.doorsAt === 'string' ? x.doorsAt : '';
     const kind = typeof x.kind === 'string' && x.kind.trim() ? x.kind.trim() : '';
     const turnout = typeof x.turnout === 'string' && x.turnout.trim() ? `turnout ${x.turnout.trim()}` : '';
     const featured = x.featured === true ? 'FEATURED' : '';
     const copy = typeof x.copy === 'string' && x.copy.trim() ? x.copy.trim() : '';
     const status = typeof x.status === 'string' && x.status.trim() ? x.status.trim() : '';
     lines.push(
-      [featured, title, venue, kind, status, `start ${start || 'n/a'}`, `finish ${finish || 'n/a'}`, turnout, copy]
+      [
+        featured,
+        title,
+        venue,
+        kind,
+        status,
+        doors ? `doors ${doors}` : '',
+        `start ${start || 'n/a'}`,
+        `finish ${finish || 'n/a'}`,
+        turnout,
+        copy,
+      ]
         .filter(Boolean)
         .join(' | '),
     );
@@ -196,41 +208,49 @@ async function buildContextBlock(opts: {
   const clock = londonClock(now);
   const tomorrowEnd = new Date(nowMs + 36 * 60 * 60 * 1000);
   const weekEnd = new Date(nowMs + 7 * 24 * 60 * 60 * 1000);
-
-  const eventsSnap = await opts.db
-    .collection('eventRecords')
-    .orderBy('listedStart', 'asc')
-    .limit(opts.premium ? 120 : 60)
-    .get()
-    .catch((err) => {
-      logger.warn('agent.events_query_fail', {
-        error: err instanceof Error ? err.message : 'error',
+  const liveMap = opts.clientEvents ?? [];
+  // Live map already has doors/start/finish after on-device normalisation.
+  // Firestore eventRecords is a nightly copy and will contradict (Proms +30,
+  // RAH 22:30 clamp). Only use it when the phone sent nothing.
+  let events: string[] = [];
+  if (liveMap.length === 0) {
+    const eventsSnap = await opts.db
+      .collection('eventsPublished')
+      .orderBy('startsAt', 'asc')
+      .limit(opts.premium ? 120 : 60)
+      .get()
+      .catch((err) => {
+        logger.warn('agent.events_query_fail', {
+          error: err instanceof Error ? err.message : 'error',
+        });
+        return null;
       });
-      return null;
-    });
 
-  const events = (eventsSnap?.docs ?? [])
-    .map((d) => d.data() as Record<string, unknown>)
-    .filter((e) => {
-      const t = Date.parse(toIsoOrEmpty(e.listedStart) || toIsoOrEmpty(e.realStartAt));
-      if (!Number.isFinite(t)) return false;
-      if (opts.premium) return t >= Date.parse(nowIso) && t <= weekEnd.getTime();
-      return t >= Date.parse(nowIso) && t <= tomorrowEnd.getTime();
-    })
-    .slice(0, opts.premium ? 80 : 35)
-    .map((e) => {
-      const title = String(e.title ?? 'Event');
-      const venue = String(e.venue ?? 'London');
-      const start = toIsoOrEmpty(e.realStartAt) || toIsoOrEmpty(e.listedStart);
-      const finish = toIsoOrEmpty(e.estimatedFinishAt) || toIsoOrEmpty(e.listedEnd);
-      const turnoutMin = Number(e.turnoutMin);
-      const turnoutMax = Number(e.turnoutMax);
-      const turnout =
-        Number.isFinite(turnoutMin) && Number.isFinite(turnoutMax)
-          ? `${Math.floor(turnoutMin)}-${Math.floor(turnoutMax)}`
-          : 'n/a';
-      return `${title} | ${venue} | start ${start || 'n/a'} | finish ${finish || 'n/a'} | turnout ${turnout}`;
-    });
+    events = (eventsSnap?.docs ?? [])
+      .map((d) => d.data() as Record<string, unknown>)
+      .filter((e) => {
+        const t = Date.parse(
+          toIsoOrEmpty(e.startsAt) || toIsoOrEmpty(e.listedStart) || toIsoOrEmpty(e.realStartAt),
+        );
+        if (!Number.isFinite(t)) return false;
+        if (opts.premium) return t >= Date.parse(nowIso) && t <= weekEnd.getTime();
+        return t >= Date.parse(nowIso) && t <= tomorrowEnd.getTime();
+      })
+      .slice(0, opts.premium ? 80 : 35)
+      .map((e) => {
+        const title = String(e.title ?? 'Event');
+        const venue = String(e.venue ?? 'London');
+        const start = toIsoOrEmpty(e.realStartAt) || toIsoOrEmpty(e.listedStart);
+        const finish = toIsoOrEmpty(e.estimatedFinishAt) || toIsoOrEmpty(e.listedEnd);
+        const turnoutMin = Number(e.turnoutMin);
+        const turnoutMax = Number(e.turnoutMax);
+        const turnout =
+          Number.isFinite(turnoutMin) && Number.isFinite(turnoutMax)
+            ? `${Math.floor(turnoutMin)}-${Math.floor(turnoutMax)}`
+            : 'n/a';
+        return `${title} | ${venue} | start ${start || 'n/a'} | finish ${finish || 'n/a'} | turnout ${turnout}`;
+      });
+  }
 
   const roadSnap = await opts.db
     .collection('copy')
@@ -301,10 +321,14 @@ async function buildContextBlock(opts: {
     `tier_data_window: ${opts.premium ? 'premium_full_context' : 'free_tonight_tomorrow_plus_3h_flights'}`,
     '',
     'LIVE MAP EVENTS (authoritative — use these when present):',
-    ...(opts.clientEvents?.length ? opts.clientEvents : ['none from live map']),
+    ...(liveMap.length ? liveMap : ['none from live map']),
     '',
     'FIRESTORE EVENTS:',
-    ...(events.length ? events : ['none in firestore']),
+    ...(liveMap.length
+      ? ['skipped — live map is the source of truth']
+      : events.length
+        ? events
+        : ['none in firestore']),
     '',
     'RAIL STATUS LINES:',
     ...(rails.length ? rails : opts.clientRails?.length ? opts.clientRails : ['none in context']),
@@ -378,8 +402,11 @@ export async function handleAskAgent(opts: {
 
   let user: Record<string, unknown> = {};
   try {
-    const userSnap = await opts.db.doc(`users/${uid}`).get();
-    user = userSnap.data() ?? {};
+    const [userSnap, waitlistEntSnap] = await Promise.all([
+      opts.db.doc(`users/${uid}`).get(),
+      opts.db.doc(`users/${uid}/entitlements/waitlist`).get(),
+    ]);
+    user = { ...(userSnap.data() ?? {}), ...(waitlistEntSnap.data() ?? {}) };
   } catch (e) {
     logger.warn('agent.user_fail', { error: e instanceof Error ? e.message : 'error', uid });
   }

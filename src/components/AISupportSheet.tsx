@@ -18,7 +18,6 @@ import {
   type AiQuota,
 } from '@/services/aiQuota';
 import { track, trackScreen } from '@/services/analytics';
-import { useAuth } from '@/providers/AuthProvider';
 import { askDriveiqAgent } from '@/services/agent';
 import { hasProAccess, showProPaywall, syncPremiumEntitlement } from '@/services/subscription';
 import { colors } from '@/theme/colors';
@@ -33,6 +32,7 @@ import {
   rangeFor,
   type DateRange,
 } from '@/utils/dateFilters';
+import { addDaysYmd, londonDayBounds, londonYmd } from '@/utils/ukTime';
 import { turnoutRange, venueProfileFor } from '@/data/venueProfiles';
 import { reminderConfirmationCopy } from '@/services/eventReminders';
 import { showDialog } from '@/services/dialog';
@@ -41,6 +41,8 @@ import { EmptyHero, type PromptCard } from '@/components/ai/EmptyHero';
 import { EventSectionBlock } from '@/components/ai/EventSectionBlock';
 import {
   buildEventSummary,
+  eventDisplayEnd,
+  eventDisplayStart,
   groupEventsByDay,
   type EventDaySection,
 } from '@/components/ai/eventPresentation';
@@ -128,23 +130,15 @@ const PROMPT_CARDS: PromptCard[] = [
 // The assistant can answer natural date questions ("what's on tomorrow",
 // "anything this weekend", "events on Saturday") from the cached events list.
 
-const startOfDay = (d: Date): Date => {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-};
-const endOfDay = (d: Date): Date => {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
-};
-const addDays = (d: Date, n: number): Date => {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-};
-
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function londonDow(now: Date): number {
+  const name = now
+    .toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'Europe/London' })
+    .toLowerCase();
+  const i = WEEKDAYS.indexOf(name);
+  return i >= 0 ? i : 0;
+}
 
 /** Map a free-text question to a date window + label, or null if none found. */
 function resolveWindow(q: string, now: Date = new Date()): { label: string; range: DateRange } | null {
@@ -155,13 +149,14 @@ function resolveWindow(q: string, now: Date = new Date()): { label: string; rang
     return { label: q.includes('tonight') ? 'tonight' : 'today', range: rangeFor('today', now) };
   }
   if (q.includes('weekend')) {
-    // Upcoming Saturday + Sunday (or the current one if it's already the weekend).
-    const today = startOfDay(now);
-    const dow = today.getDay();
-    const satOffset = dow === 0 ? -1 : 6 - dow; // Sunday counts as part of this weekend
-    const sat = addDays(today, Math.max(satOffset, dow === 6 ? 0 : satOffset));
-    const start = dow === 0 ? addDays(today, -1) : sat;
-    return { label: 'this weekend', range: { start: startOfDay(start), end: endOfDay(addDays(start, 1)) } };
+    const ymd = londonYmd(now);
+    const dow = londonDow(now);
+    const satYmd = dow === 0 ? addDaysYmd(ymd, -1) : dow === 6 ? ymd : addDaysYmd(ymd, 6 - dow);
+    const sunYmd = addDaysYmd(satYmd, 1);
+    return {
+      label: 'this weekend',
+      range: { start: londonDayBounds(satYmd).start, end: londonDayBounds(sunYmd).end },
+    };
   }
   if (q.includes('this week') || (/\bweek\b/.test(q) && !q.includes('weekend'))) {
     return {
@@ -177,11 +172,13 @@ function resolveWindow(q: string, now: Date = new Date()): { label: string; rang
   }
   for (let i = 0; i < WEEKDAYS.length; i++) {
     if (q.includes(WEEKDAYS[i])) {
-      const today = startOfDay(now);
-      let delta = (i - today.getDay() + 7) % 7;
-      if (delta === 0) delta = 7; // "on Monday" means the next one, not today
-      const d = addDays(today, delta);
-      return { label: `on ${WEEKDAYS[i][0].toUpperCase()}${WEEKDAYS[i].slice(1)}`, range: { start: d, end: endOfDay(d) } };
+      const delta = (i - londonDow(now) + 7) % 7;
+      const ymd = addDaysYmd(londonYmd(now), delta);
+      const bounds = londonDayBounds(ymd);
+      return {
+        label: `on ${WEEKDAYS[i][0].toUpperCase()}${WEEKDAYS[i].slice(1)}`,
+        range: { start: bounds.start, end: bounds.end },
+      };
     }
   }
   return null;
@@ -296,13 +293,12 @@ function answerNamedTimeQuery(
   if (scored.length === 0) return null;
 
   const top = scored.slice(0, 3).map((x) => x.e);
-  const lines = top.map(
-    (e) =>
-      `• ${e.title} · starts ${formatEventDate(e.startsAt)}, ends ${formatEventEndTime(
-        e.startsAt,
-        e.endsAt,
-      )} · ${e.venue}`,
-  );
+  const lines = top.map((e) => {
+    const start = eventDisplayStart(e);
+    const end = eventDisplayEnd(e);
+    const finish = end ? `, ends ${formatEventEndTime(start, end)}` : '';
+    return `• ${e.title} · starts ${formatEventDate(start)}${finish} · ${e.venue}`;
+  });
   const head = top.length === 1 ? 'Here are the times:' : 'Closest matches:';
   return {
     text: `${head}\n${lines.join('\n')}\n\nWant a reminder or a calendar entry? Tap a button below.`,
@@ -361,7 +357,7 @@ function formatAnswer(
   const shown = sorted.slice(0, biggestFirst ? 8 : 6);
   const lines = shown.map((e) => {
     const crowd = turnoutLabel(e);
-    return `• ${e.title} · ${typeOf(e)} · ${formatEventDate(e.startsAt)} · ${e.venue}${
+    return `• ${e.title} · ${typeOf(e)} · ${formatEventDate(eventDisplayStart(e))} · ${e.venue}${
       crowd ? ` · ~${crowd}` : ''
     }`;
   });
@@ -527,7 +523,6 @@ export function AISupportSheet({
   onSaveEvent,
   onAddToCalendar,
 }: Props) {
-  const { requireAccount } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -538,11 +533,17 @@ export function AISupportSheet({
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setMessages([]);
+      setInput('');
+      setSending(false);
+      return;
+    }
     trackScreen('ai_support_sheet');
     getAiQuota().then(setQuota);
     void syncPremiumEntitlement();
   }, [visible]);
+
   // SafeAreaView's top edge doesn't apply reliably inside a Modal, which left
   // the header (and the close button) jammed under the status bar. Read the
   // inset directly and pad the header so the X is always reachable.
@@ -590,9 +591,8 @@ export function AISupportSheet({
     const trimmed = text.trim();
     if (!trimmed || sending) return;
 
-    requireAccount('ai_question', () => {
-      const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
-      const thinkingId = `b-${Date.now()}-think`;
+    const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: trimmed };
+    const thinkingId = `b-${Date.now()}-think`;
       track('ai_question_asked', {
         tier: quota?.pro ? 'premium' : 'free',
         remaining_before: quota?.remaining,
@@ -646,8 +646,9 @@ export function AISupportSheet({
             title: e.title,
             venue: e.venue,
             kind: typeOf(e),
-            startsAt: londonStamp(e.realStartAt || e.startsAt),
-            endsAt: londonStamp(e.estimatedFinishAt || e.endsAt),
+            startsAt: londonStamp(eventDisplayStart(e)),
+            endsAt: londonStamp(eventDisplayEnd(e)),
+            doorsAt: e.doorsAt ? londonStamp(e.doorsAt) : undefined,
             turnout: turnoutLabel(e),
             featured: e.source === 'featured',
             copy: e.copyLine?.slice(0, 140),
@@ -692,19 +693,15 @@ export function AISupportSheet({
             premium: pro,
             clockLondon: londonStamp(new Date().toISOString()),
           });
-          const serverLimit = res.limit;
-          const serverRemaining = res.remaining;
-          if (serverLimit != null) {
-            setQuota((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    limit: serverLimit,
-                    remaining: serverRemaining ?? prev.remaining,
-                    used: serverLimit - (serverRemaining ?? prev.remaining),
-                  }
-                : prev,
-            );
+          if (!pro && res.limit != null && res.remaining != null) {
+            setQuota({
+              pro: false,
+              limit: res.limit,
+              remaining: res.remaining,
+              used: res.limit - res.remaining,
+            });
+          } else if (pro) {
+            setQuota({ pro: true, used: 0, limit: Infinity, remaining: Infinity });
           }
 
           if (res.capped) {
@@ -744,7 +741,7 @@ export function AISupportSheet({
               const extra = leaders
                 .map((e) => {
                   const crowd = turnoutLabel(e);
-                  return `${e.title} at ${e.venue}, ${formatEventDate(e.realStartAt || e.startsAt)}${
+                  return `${e.title} at ${e.venue}, ${formatEventDate(eventDisplayStart(e))}${
                     crowd ? `, around ${crowd}` : ''
                   }`;
                 })
@@ -793,7 +790,7 @@ export function AISupportSheet({
               text:
                 message.toLowerCase().includes('unauth') || message.includes('Sign in required')
                   ? 'Your session expired for AI requests. Please sign out and sign back in, then ask again.'
-                  : 'I could not reach the live DriveIQ assistant just now. Make sure you are signed in and online, then try again.',
+                  : 'I could not reach the live DriveIQ assistant just now. Check you are online and try again.',
             });
           }
         } finally {
@@ -801,7 +798,6 @@ export function AISupportSheet({
           setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
         }
       })();
-    });
   };
 
   const handleRemind = (event: AppEvent) => {
@@ -844,9 +840,27 @@ export function AISupportSheet({
               </Text>
             </View>
           </View>
-          <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
-            <Ionicons name="close" size={22} color={colors.textSecondary} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            {!isEmpty ? (
+              <Pressable
+                onPress={() => {
+                  setMessages([]);
+                  setInput('');
+                  setSending(false);
+                  track('ai_chat_reset');
+                }}
+                hitSlop={10}
+                style={styles.closeBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Start a new chat"
+              >
+                <Ionicons name="create-outline" size={20} color={colors.textSecondary} />
+              </Pressable>
+            ) : null}
+            <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
+              <Ionicons name="close" size={22} color={colors.textSecondary} />
+            </Pressable>
+          </View>
         </View>
 
         <KeyboardAvoidingView
@@ -998,6 +1012,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
     marginTop: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   closeBtn: {
     width: 36,

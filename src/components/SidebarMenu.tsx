@@ -123,7 +123,7 @@ export function SidebarMenu({
       easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [visible, signedIn, slide]);
+  }, [visible, signedIn, user?.uid, slide]);
 
   // Defer a navigation/sheet action until the sidebar has slid out, so the
   // next sheet animates cleanly.
@@ -188,6 +188,17 @@ export function SidebarMenu({
           label: 'Change password',
           handler: () => afterClose(() => onOpenAccount('password')),
         },
+        ...(!isPremium
+          ? [
+              {
+                key: 'waitlist',
+                icon: 'gift',
+                label: 'Claim waitlist week',
+                body: 'Free Premium week for waitlisters',
+                handler: () => afterClose(() => onOpenAccount('waitlist')),
+              } as MenuRow,
+            ]
+          : []),
         {
           key: 'signout',
           icon: 'log-out',

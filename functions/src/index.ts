@@ -20,7 +20,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { logger } from 'firebase-functions';
 import { phraseAndStore, loadSystemPrompt } from './copy.js';
 import { ingestLiveFeeds } from './ingest.js';
-import { normaliseTomorrow, type RawEvent } from './events.js';
+import { publishLondonEvents } from './events.js';
 import { ensureAgentRuntimeDefaults, handleAskAgent } from './agent.js';
 import { ingestAirports } from './airports.js';
 import { ingestEventsRaw } from './eventsIngest.js';
@@ -30,6 +30,7 @@ import {
   loadFlightsByAirport,
   parseLineStatuses,
 } from './dispatch.js';
+import { claimWaitlistPremiumCallable } from './waitlistClaim.js';
 
 initializeApp();
 const db = getFirestore();
@@ -165,17 +166,23 @@ export const ingestRegionalAirports = onSchedule(
   },
 );
 
-/** Ticketmaster → eventsRaw, nightly before normalisation. */
+/** Ticketmaster + Proms + FotMob/ESPN sports → eventsRaw, then eventsPublished. */
 export const ingestEventsNightly = onSchedule(
   {
-    schedule: '0 1 * * *',
-    timeoutSeconds: 300,
+    schedule: '20 1,13 * * *',
+    timeoutSeconds: 540,
+    memory: '512MiB',
     ...london,
-    secrets: [ticketmasterKey],
+    secrets: [ticketmasterKey, anthropicKey],
   },
   async () => {
     try {
-      await ingestEventsRaw(db, await keyOrEmpty(ticketmasterKey));
+      const events = await ingestEventsRaw(db, await keyOrEmpty(ticketmasterKey));
+      await publishLondonEvents({
+        db,
+        apiKey: await keyOrEmpty(anthropicKey),
+        events,
+      });
     } catch (e) {
       logger.warn('events.ingest_fail', { error: e instanceof Error ? e.message : 'error' });
     }
@@ -183,29 +190,46 @@ export const ingestEventsNightly = onSchedule(
 );
 
 /**
- * Nightly pass over tomorrow's events in `eventsRaw`.
- * Ingest should write that collection once per night before 02:00 London.
+ * Second pass if ingest wrote eventsRaw but publish failed.
+ * Safe to run on its own: reads eventsRaw and republishes.
  */
 export const normaliseEventsNightly = onSchedule(
-  { schedule: '0 2 * * *', timeoutSeconds: 300, ...london, secrets: [anthropicKey] },
+  {
+    schedule: '40 1,13 * * *',
+    timeoutSeconds: 540,
+    memory: '512MiB',
+    ...london,
+    secrets: [anthropicKey],
+  },
   async () => {
-    const apiKey = await keyOrEmpty(anthropicKey);
-    const snap = await db.collection('eventsRaw').limit(80).get();
-    const events: RawEvent[] = snap.docs
-      .map((d) => {
-        const x = d.data();
-        return {
-          id: String(x.id ?? d.id),
+    try {
+      const snap = await db.collection('eventsRaw').limit(1500).get();
+      const events = snap.docs
+        .map((d) => d.data() as Record<string, unknown>)
+        .filter((x) => typeof x.id === 'string' && typeof x.startsAt === 'string')
+        .map((x) => ({
+          id: String(x.id),
+          source: String(x.source ?? 'ticketmaster'),
+          category: x.category === 'sports' ? ('sports' as const) : ('other' as const),
           title: String(x.title ?? 'Event'),
+          startsAt: String(x.startsAt),
+          endsAt: String(x.endsAt ?? x.startsAt),
           venue: String(x.venue ?? 'London'),
+          latitude: Number(x.latitude),
+          longitude: Number(x.longitude),
+          description: typeof x.description === 'string' ? x.description : undefined,
           subCategory: typeof x.subCategory === 'string' ? x.subCategory : undefined,
-          category: typeof x.category === 'string' ? x.category : undefined,
-          startsAt: String(x.startsAt ?? ''),
-          endsAt: typeof x.endsAt === 'string' ? x.endsAt : undefined,
-        };
-      })
-      .filter((e) => e.startsAt);
-    await normaliseTomorrow({ db, apiKey, events });
+          url: typeof x.url === 'string' ? x.url : undefined,
+        }))
+        .filter((e) => Number.isFinite(e.latitude) && Number.isFinite(e.longitude));
+      await publishLondonEvents({
+        db,
+        apiKey: await keyOrEmpty(anthropicKey),
+        events,
+      });
+    } catch (e) {
+      logger.warn('events.publish_fail', { error: e instanceof Error ? e.message : 'error' });
+    }
   },
 );
 
@@ -432,3 +456,151 @@ export const askDriveiqAgentV1 = v1
     });
     return result;
   });
+
+/**
+ * Grant the one-time waitlist free week. Callable only — clients cannot
+ * write tier / premiumUntil on `users/{uid}` (see firestore.rules).
+ */
+export const claimWaitlistPremium = onCall(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 30,
+    enforceAppCheck: false,
+    invoker: 'public',
+    serviceAccount: '327546397871-compute@developer.gserviceaccount.com',
+  },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError('unauthenticated', 'Sign in to claim your waitlist week.');
+    }
+    const data = (request.data ?? {}) as {
+      mode?: 'auto' | 'manual';
+      waitlistEmail?: unknown;
+      claimToken?: unknown;
+    };
+    const mode = data.mode === 'manual' ? 'manual' : 'auto';
+    const waitlistEmail =
+      typeof data.waitlistEmail === 'string' ? data.waitlistEmail : undefined;
+    const claimToken = typeof data.claimToken === 'string' ? data.claimToken : undefined;
+    const auth = request.auth!;
+    const accountEmail = typeof auth.token.email === 'string' ? auth.token.email : null;
+
+    const result = await claimWaitlistPremiumCallable({
+      db,
+      uid,
+      accountEmail,
+      mode,
+      waitlistEmail,
+      claimToken,
+    });
+
+    logger.info('waitlist.claim', {
+      uid,
+      mode,
+      status: result.status,
+      ok: result.ok,
+      waitlistEmail: result.waitlistEmail,
+    });
+
+    return result;
+  },
+);
+
+/**
+ * Primary waitlist claim endpoint for the app. Same pattern as askDriveiqAgentHttp —
+ * public invoker with Firebase ID token verified in code.
+ */
+export const claimWaitlistPremiumHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 30,
+    cors: true,
+    invoker: 'public',
+    serviceAccount: '327546397871-compute@developer.gserviceaccount.com',
+  },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { message: 'POST required', status: 'INVALID_ARGUMENT' } });
+      return;
+    }
+
+    const authHeader = String(req.get('authorization') ?? '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    if (!token) {
+      res.status(401).json({
+        error: { message: 'Sign in to claim your waitlist week.', status: 'UNAUTHENTICATED' },
+      });
+      return;
+    }
+
+    let uid = '';
+    let accountEmail: string | null = null;
+    try {
+      const decoded = await getAuth().verifyIdToken(token);
+      uid = decoded.uid;
+      accountEmail = decoded.email ?? null;
+    } catch (e) {
+      logger.warn('waitlist.http_auth_fail', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(401).json({
+        error: { message: 'Sign in again to claim your waitlist week.', status: 'UNAUTHENTICATED' },
+      });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      data?: {
+        mode?: unknown;
+        waitlistEmail?: unknown;
+        claimToken?: unknown;
+      };
+      mode?: unknown;
+      waitlistEmail?: unknown;
+      claimToken?: unknown;
+    };
+    const data = body.data ?? body;
+    const mode = data.mode === 'manual' ? 'manual' : 'auto';
+    const waitlistEmail =
+      typeof data.waitlistEmail === 'string' ? data.waitlistEmail : undefined;
+    const claimToken = typeof data.claimToken === 'string' ? data.claimToken : undefined;
+
+    try {
+      const result = await claimWaitlistPremiumCallable({
+        db,
+        uid,
+        accountEmail,
+        mode,
+        waitlistEmail,
+        claimToken,
+      });
+      logger.info('waitlist.http_claim', {
+        uid,
+        mode,
+        status: result.status,
+        ok: result.ok,
+        waitlistEmail: result.waitlistEmail,
+      });
+      res.status(200).json({ result });
+    } catch (e) {
+      logger.error('waitlist.http_fail', {
+        uid,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      res.status(500).json({
+        error: {
+          message: e instanceof Error ? e.message : 'Claim failed',
+          status: 'INTERNAL',
+        },
+      });
+    }
+  },
+);

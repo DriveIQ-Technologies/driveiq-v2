@@ -45,6 +45,17 @@ export async function setItem(key: string, value: string): Promise<void> {
   }
 }
 
+export async function removeItem(key: string): Promise<void> {
+  memory.delete(key);
+  const s = getStorage();
+  if (!s) return;
+  try {
+    await s.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function getJSON<T>(key: string, fallback: T): Promise<T> {
   const raw = await getItem(key);
   if (!raw) return fallback;

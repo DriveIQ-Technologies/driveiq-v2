@@ -16,6 +16,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /eventsPublished/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /eventsPublishedMeta/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /eventOverrides/{id} {
       allow read: if true;
       allow write: if false;
@@ -46,6 +56,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /users/{uid}/entitlements/{doc} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /waitlistClaims/{email} {
+      allow read, write: if false;
+    }
+
     // Emails are doc ids. Get is allowed so sign-in can match a waitlister.
     // List is denied so the cohort cannot be dumped.
     match /waitlist/{email} {
@@ -54,7 +73,25 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read, write: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && !request.resource.data.keys().hasAny([
+          'tier',
+          'entitlement',
+          'premiumUntil',
+          'waitlistEmail',
+          'waitlistClaimedAt',
+        ]);
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'tier',
+          'entitlement',
+          'premiumUntil',
+          'waitlistEmail',
+          'waitlistClaimedAt',
+        ]);
     }
 
     match /{document=**} {

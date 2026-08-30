@@ -36,12 +36,13 @@ export const PREMIUM_UNLOCK_ITEMS: PremiumUnlockItem[] = [
 ];
 
 export type PremiumUnlockOutcome = {
-  kind: 'purchase' | 'restore';
+  kind: 'purchase' | 'restore' | 'waitlist';
   trialStarted: boolean;
 };
 
 export function premiumUnlockHeadline(outcome: PremiumUnlockOutcome): string {
   if (outcome.kind === 'restore') return 'Premium restored';
+  if (outcome.kind === 'waitlist') return 'Your waitlist week starts now';
   if (outcome.trialStarted) return 'Your free week starts now';
   return 'Welcome to Premium';
 }
@@ -50,7 +51,7 @@ export function premiumUnlockLead(outcome: PremiumUnlockOutcome): string {
   if (outcome.kind === 'restore') {
     return 'Your subscription is active again. Everything below is unlocked on this device.';
   }
-  if (outcome.trialStarted) {
+  if (outcome.kind === 'waitlist' || outcome.trialStarted) {
     return 'Nothing to pay for 7 days. Here is what you can use straight away:';
   }
   return 'Your subscription is active. Here is what you can use straight away:';

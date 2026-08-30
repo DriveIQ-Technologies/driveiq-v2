@@ -87,23 +87,14 @@ export async function setProAccessForTesting(on: boolean): Promise<void> {
 }
 
 /**
- * Write the current entitlement to Firestore so Cloud Functions use the
- * same Free/Premium window as the app.
+ * Write non-entitlement profile fields to Firestore.
+ * Premium / waitlist entitlement is server-only (`claimWaitlistPremium`).
  */
 export async function syncPremiumEntitlement(): Promise<void> {
   const uid = auth?.currentUser?.uid;
   if (!uid || !db || !fsApi) return;
   try {
     const pro = await hasProAccess();
-    const trialEnds = await getWaitlistTrialEnds();
-    const patch: Record<string, unknown> = {
-      tier: pro ? 'premium' : 'free',
-      entitlement: pro ? 'premium' : 'free',
-      updatedAt: new Date().toISOString(),
-    };
-    if (pro && trialEnds) patch.premiumUntil = trialEnds;
-    else if (!pro) patch.premiumUntil = null;
-    await fsApi.setDoc(fsApi.doc(db, 'users', uid), patch, { merge: true });
     await refreshUserTraits({ tier: pro ? 'premium' : 'free' });
   } catch (e) {
     console.warn('[subscription] entitlement sync failed', e);

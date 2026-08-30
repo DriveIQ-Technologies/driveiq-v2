@@ -32,8 +32,10 @@ export function PremiumInlineBar({ message, feature, source }: Props) {
       accessibilityLabel={message}
     >
       <Ionicons name="lock-closed" size={16} color={colors.primaryDark} />
-      <Text style={styles.text}>{message}</Text>
-      <Text style={styles.cta}>Premium</Text>
+      <Text style={styles.text} numberOfLines={2}>
+        {message}
+      </Text>
+      <Text style={styles.cta}>Upgrade</Text>
     </Pressable>
   );
 }
@@ -53,14 +55,16 @@ const styles = StyleSheet.create({
   },
   text: {
     flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
+    flexShrink: 1,
+    fontSize: 13,
+    lineHeight: 18,
     color: colors.textPrimary,
     fontWeight: '500',
   },
   cta: {
+    flexShrink: 0,
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '800',
     color: colors.primaryDark,
   },
 });
