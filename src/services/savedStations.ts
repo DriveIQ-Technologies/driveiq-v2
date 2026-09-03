@@ -8,6 +8,7 @@
 
 import { track } from '@/services/analytics';
 import { resetSheetPointers } from '@/components/ui/SheetOverlay';
+import { incrementUsageCounter } from '@/services/usageCounters';
 import {
   ensurePermission,
   loadLineSubscriptions,
@@ -90,6 +91,7 @@ export async function toggleSaveStation(
     },
   };
   await persistSavedStations(next);
+  void incrementUsageCounter('stationsWatched');
   track('station_saved', {
     station_id: station.id,
     tier: isPremium ? 'premium' : 'free',
@@ -128,6 +130,7 @@ async function ensureStationSaved(
     },
   };
   await persistSavedStations(next);
+  void incrementUsageCounter('stationsWatched');
   track('station_saved', {
     station_id: station.id,
     tier: isPremium ? 'premium' : 'free',

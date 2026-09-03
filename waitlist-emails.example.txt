@@ -1,0 +1,8 @@
+# One email per line (or CSV with email in first column).
+# Lines starting with # are ignored.
+#
+# Example:
+# someone@gmail.com
+# other@example.com
+
+waiswadonnie@gmail.com

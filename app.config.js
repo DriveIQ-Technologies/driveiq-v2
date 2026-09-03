@@ -18,19 +18,29 @@
 
 module.exports = ({ config }) => {
   const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY ?? '';
+  const googleIosUrlScheme = process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME ?? '';
+
+  const plugins = [
+    ...(config.plugins ?? []),
+    [
+      'react-native-maps',
+      {
+        iosGoogleMapsApiKey: googleMapsApiKey,
+        androidGoogleMapsApiKey: googleMapsApiKey,
+      },
+    ],
+  ];
+
+  if (googleIosUrlScheme) {
+    plugins.push([
+      '@react-native-google-signin/google-signin',
+      { iosUrlScheme: googleIosUrlScheme },
+    ]);
+  }
 
   return {
     ...config,
-    plugins: [
-      ...(config.plugins ?? []),
-      [
-        'react-native-maps',
-        {
-          iosGoogleMapsApiKey: googleMapsApiKey,
-          androidGoogleMapsApiKey: googleMapsApiKey,
-        },
-      ],
-    ],
+    plugins,
     android: {
       ...(config.android ?? {}),
       config: {

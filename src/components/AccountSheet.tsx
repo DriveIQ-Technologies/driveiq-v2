@@ -17,15 +17,15 @@ import { showDialog } from '@/services/dialog';
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import {
-  claimWaitlistByEmail,
   claimWaitlistByToken,
+  friendlyWaitlistCodeRequestError,
+  requestWaitlistCodeByEmail,
   friendlyWaitlistClaimError,
   type WaitlistClaimResponse,
 } from '@/services/waitlist';
 import { presentPremiumUnlock } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 
-type WaitlistClaimMode = 'email' | 'token';
 
 /** Which sub-form the account sheet opens to. */
 export type AccountSection = 'profile' | 'email' | 'password' | 'waitlist';
@@ -48,10 +48,11 @@ export function AccountSheet({ visible, section, onClose }: Props) {
   const [email, setEmail] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [waitlistMode, setWaitlistMode] = useState<WaitlistClaimMode>('email');
   const [waitlistInput, setWaitlistInput] = useState('');
+  const [waitlistEmail, setWaitlistEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (visible) {
@@ -60,8 +61,9 @@ export function AccountSheet({ visible, section, onClose }: Props) {
       setCurrentPassword('');
       setNewPassword('');
       setWaitlistInput('');
-      setWaitlistMode('email');
+      setWaitlistEmail(user?.email ?? '');
       setError(null);
+      setNotice(null);
       setBusy(false);
       trackScreen('account_sheet', { section });
     }
@@ -91,6 +93,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
 
   const submit = async () => {
     setError(null);
+    setNotice(null);
     try {
       setBusy(true);
       if (section === 'profile') {
@@ -103,18 +106,11 @@ export function AccountSheet({ visible, section, onClose }: Props) {
         done('Profile updated.');
       } else if (section === 'waitlist') {
         if (!waitlistInput.trim()) {
-          setError(
-            waitlistMode === 'email'
-              ? 'Enter the email you used on the waitlist.'
-              : 'Enter your claim code.',
-          );
+          setError('Enter your claim code.');
           return;
         }
-        track('waitlist_claim_started', { method: waitlistMode });
-        const result =
-          waitlistMode === 'email'
-            ? await claimWaitlistByEmail(waitlistInput)
-            : await claimWaitlistByToken(waitlistInput);
+        track('waitlist_claim_started', { method: 'token' });
+        const result = await claimWaitlistByToken(waitlistInput);
         track('waitlist_claim_finished', { status: result.status, ok: result.ok });
         finishWaitlistClaim(result);
       } else if (section === 'email') {
@@ -130,8 +126,8 @@ export function AccountSheet({ visible, section, onClose }: Props) {
           setError('Enter your current and new password.');
           return;
         }
-        if (newPassword.length < 6) {
-          setError('New password should be at least 6 characters.');
+        if (newPassword.length < 8) {
+          setError('New password should be at least 8 characters.');
           return;
         }
         await changePassword(currentPassword, newPassword);
@@ -143,6 +139,31 @@ export function AccountSheet({ visible, section, onClose }: Props) {
       setError(
         section === 'waitlist' ? friendlyWaitlistClaimError(e) : friendlyAuthError(e),
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requestCode = async () => {
+    setError(null);
+    setNotice(null);
+    if (!waitlistEmail.trim()) {
+      setError('Enter your waitlist email first.');
+      return;
+    }
+    try {
+      setBusy(true);
+      track('waitlist_code_request_started');
+      const result = await requestWaitlistCodeByEmail(waitlistEmail);
+      track('waitlist_code_request_finished', { ok: result.ok, status: result.status });
+      if (!result.ok && result.status === 'invalid_email') {
+        setError(result.message);
+        return;
+      }
+      setNotice(result.message);
+    } catch (e) {
+      track('waitlist_code_request_failed');
+      setError(friendlyWaitlistCodeRequestError(e));
     } finally {
       setBusy(false);
     }
@@ -171,42 +192,32 @@ export function AccountSheet({ visible, section, onClose }: Props) {
             {section === 'waitlist' ? (
               <>
                 <Text style={styles.help}>
-                  Joined the waitlist with a different email than this account? Enter
-                  that waitlist email or the claim code from your invite to unlock
-                  your free Premium week.
+                  Enter the claim code from your launch email to unlock your free
+                  Premium week. The code can be claimed on any account and is bound
+                  to the first account that redeems it.
                 </Text>
-                <View style={styles.segment}>
-                  {(['email', 'token'] as WaitlistClaimMode[]).map((m) => (
-                    <Pressable
-                      key={m}
-                      onPress={() => {
-                        setWaitlistMode(m);
-                        setError(null);
-                      }}
-                      style={[styles.segmentBtn, waitlistMode === m && styles.segmentBtnActive]}
-                    >
-                      <Text
-                        style={[
-                          styles.segmentText,
-                          waitlistMode === m && styles.segmentTextActive,
-                        ]}
-                      >
-                        {m === 'email' ? 'Waitlist email' : 'Claim code'}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
                 <Field
-                  icon={waitlistMode === 'email' ? 'mail-outline' : 'ticket-outline'}
-                  placeholder={
-                    waitlistMode === 'email'
-                      ? 'Waitlist email address'
-                      : 'Claim code'
-                  }
+                  icon="mail-outline"
+                  placeholder="Waitlist email"
+                  value={waitlistEmail}
+                  onChangeText={setWaitlistEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+                <Pressable
+                  onPress={requestCode}
+                  disabled={busy}
+                  style={[styles.secondaryBtn, busy && styles.btnDisabled]}
+                >
+                  <Text style={styles.secondaryText}>Send claim code to this email</Text>
+                </Pressable>
+                <Field
+                  icon="ticket-outline"
+                  placeholder="Claim code"
                   value={waitlistInput}
                   onChangeText={setWaitlistInput}
-                  keyboardType={waitlistMode === 'email' ? 'email-address' : 'default'}
-                  autoCapitalize={waitlistMode === 'email' ? 'none' : 'characters'}
+                  keyboardType="default"
+                  autoCapitalize="characters"
                 />
               </>
             ) : null}
@@ -252,7 +263,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
                 />
                 <Field
                   icon="key-outline"
-                  placeholder="New password (min 6 characters)"
+                  placeholder="New password (min 8 characters)"
                   value={newPassword}
                   onChangeText={setNewPassword}
                   secureTextEntry
@@ -261,6 +272,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
             ) : null}
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
+            {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
             <Pressable
               onPress={submit}
@@ -334,33 +346,6 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginBottom: 14,
   },
-  segment: {
-    flexDirection: 'row',
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 14,
-  },
-  segmentBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 9,
-    alignItems: 'center',
-  },
-  segmentBtnActive: {
-    backgroundColor: colors.surface,
-    shadowColor: colors.shadow,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  segmentText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.textSecondary,
-  },
-  segmentTextActive: { color: colors.primary },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -384,6 +369,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginBottom: 10,
+  },
+  notice: {
+    color: colors.family,
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  secondaryBtn: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginBottom: 12,
+  },
+  secondaryText: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
   },
   primaryBtn: {
     backgroundColor: colors.primary,

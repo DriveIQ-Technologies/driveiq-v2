@@ -16,6 +16,8 @@ import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { showDialog } from '@/services/dialog';
+import { auth } from '@/services/firebase';
+import { friendlyGoogleSignInError } from '@/services/googleSignIn';
 import { colors } from '@/theme/colors';
 
 type Mode = 'signin' | 'signup';
@@ -53,7 +55,7 @@ export function AuthSheet({
   quietSkip = false,
   onSkip,
 }: Props) {
-  const { login, signup, sendReset } = useAuth();
+  const { login, loginWithApple, loginWithGoogle, signup, sendReset } = useAuth();
   const [mode, setMode] = useState<Mode>(initialMode);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -94,8 +96,8 @@ export function AuthSheet({
       setError('Please enter your name.');
       return;
     }
-    if (isSignup && password.length < 6) {
-      setError('Password should be at least 6 characters.');
+    if (isSignup && password.length < 8) {
+      setError('Password should be at least 8 characters.');
       return;
     }
     try {
@@ -117,6 +119,45 @@ export function AuthSheet({
     } catch (e) {
       track('auth_submit_failed', { mode });
       setError(friendlyAuthError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitApple = async () => {
+    setError(null);
+    setNotice(null);
+    try {
+      setBusy(true);
+      track('auth_submit_started', { mode, provider: 'apple' });
+      await loginWithApple();
+      onClose();
+      const signedEmail = auth?.currentUser?.email ?? '';
+      if (signedEmail.toLowerCase().includes('privaterelay.appleid.com')) {
+        showDialog(
+          'Claim your waitlist week',
+          'You signed in with Apple Hide My Email. To unlock your waitlist week, open Menu > Claim waitlist week, then enter your claim code or your waitlist email.',
+        );
+      }
+    } catch (e) {
+      track('auth_submit_failed', { mode, provider: 'apple' });
+      setError(friendlyAuthError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitGoogle = async () => {
+    setError(null);
+    setNotice(null);
+    try {
+      setBusy(true);
+      track('auth_submit_started', { mode, provider: 'google' });
+      await loginWithGoogle();
+      onClose();
+    } catch (e) {
+      track('auth_submit_failed', { mode, provider: 'google' });
+      setError(friendlyGoogleSignInError(e));
     } finally {
       setBusy(false);
     }
@@ -192,6 +233,32 @@ export function AuthSheet({
               </View>
             ) : null}
 
+            {Platform.OS === 'ios' ? (
+              <Pressable
+                onPress={submitApple}
+                disabled={busy}
+                style={[styles.socialBtn, styles.appleBtn, busy && styles.btnDisabled]}
+              >
+                <Ionicons name="logo-apple" size={18} color={colors.textPrimary} />
+                <Text style={styles.socialText}>Continue with Apple</Text>
+              </Pressable>
+            ) : null}
+
+            <Pressable
+              onPress={submitGoogle}
+              disabled={busy}
+              style={[styles.socialBtn, styles.googleBtn, busy && styles.btnDisabled]}
+            >
+              <Ionicons name="logo-google" size={18} color={colors.textPrimary} />
+              <Text style={styles.socialText}>Continue with Google</Text>
+            </Pressable>
+
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or continue with email</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
             {/* Segmented toggle */}
             <View style={styles.segment}>
               {(['signin', 'signup'] as Mode[]).map((m) => (
@@ -246,7 +313,7 @@ export function AuthSheet({
               <TextInput
                 value={password}
                 onChangeText={setPassword}
-                placeholder={isSignup ? 'Password (min 6 characters)' : 'Password'}
+                placeholder={isSignup ? 'Password (min 8 characters)' : 'Password'}
                 secureTextEntry={!showPassword}
                 placeholderTextColor={colors.textSecondary}
                 style={styles.input}
@@ -459,6 +526,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 4,
+  },
+  appleBtn: {
+    marginBottom: 10,
+  },
+  googleBtn: {
+    marginBottom: 14,
+  },
+  socialBtn: {
+    flexDirection: 'row',
+    gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+  },
+  socialText: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 16,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  dividerText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
   },
   btnDisabled: { opacity: 0.7 },
   primaryText: {

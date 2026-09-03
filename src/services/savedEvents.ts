@@ -1,5 +1,6 @@
 import type { AppEvent } from '@/types/event';
 import { getJSON, setJSON } from './storage';
+import { incrementUsageCounter } from './usageCounters';
 
 /**
  * Saved / followed events.
@@ -19,8 +20,12 @@ export async function loadSavedEvents(): Promise<SavedEventMap> {
 
 export async function saveEvent(event: AppEvent): Promise<SavedEventMap> {
   const map = await loadSavedEvents();
+  const isNew = !(event.id in map);
   map[event.id] = event;
   await setJSON(STORAGE_KEY, map);
+  if (isNew) {
+    void incrementUsageCounter('eventsSaved');
+  }
   return map;
 }
 

@@ -9,7 +9,13 @@
     "build": "tsc",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
-    "test": "vitest run"
+    "test": "vitest run",
+    "waitlist:generate": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs generate",
+    "waitlist:seed": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs seed",
+    "waitlist:bulk": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs bulk",
+    "waitlist:self-test": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs self-test",
+    "waitlist:auth": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs auth",
+    "waitlist:verify": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs verify"
   },
   "dependencies": {
     "firebase-admin": "^13.4.0",

@@ -19,6 +19,7 @@ import {
 } from '@/services/aiQuota';
 import { track, trackScreen } from '@/services/analytics';
 import { askDriveiqAgent } from '@/services/agent';
+import { incrementUsageCounter } from '@/services/usageCounters';
 import { hasProAccess, showProPaywall, syncPremiumEntitlement } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 import type { AppEvent } from '@/types/event';
@@ -693,6 +694,9 @@ export function AISupportSheet({
             premium: pro,
             clockLondon: londonStamp(new Date().toISOString()),
           });
+          if (!res.capped) {
+            void incrementUsageCounter('aiQuestions');
+          }
           if (!pro && res.limit != null && res.remaining != null) {
             setQuota({
               pro: false,

@@ -30,14 +30,22 @@ import {
   loadFlightsByAirport,
   parseLineStatuses,
 } from './dispatch.js';
-import { claimWaitlistPremiumCallable } from './waitlistClaim.js';
+import {
+  claimWaitlistPremiumCallable,
+  requestWaitlistCodeByEmail,
+} from './waitlistClaim.js';
+import { buildWaitlistClaimCodeEmail } from './waitlistEmail.js';
 
 initializeApp();
 const db = getFirestore();
 const anthropicKey = defineSecret('Anthropic-API-key-Production');
 const aerodataboxKey = defineSecret('AERODATABOX_RAPIDAPI_KEY');
 const ticketmasterKey = defineSecret('TICKETMASTER_API_KEY');
+const brevoApiKey = defineSecret('BREVO_API_KEY');
+const brevoSenderEmail = defineSecret('BREVO_SENDER_EMAIL');
+const brevoSenderName = defineSecret('BREVO_SENDER_NAME');
 
+const WAITLIST_FN_SA = 'firebase-adminsdk-fbsvc@driveiq-app.iam.gserviceaccount.com';
 const london = { timeZone: 'Europe/London' };
 
 async function keyOrEmpty(secret: ReturnType<typeof defineSecret>): Promise<string | undefined> {
@@ -46,6 +54,38 @@ async function keyOrEmpty(secret: ReturnType<typeof defineSecret>): Promise<stri
     return v && v.trim() ? v.trim() : undefined;
   } catch {
     return undefined;
+  }
+}
+
+async function sendWaitlistCodeByBrevo(opts: {
+  apiKey: string;
+  toEmail: string;
+  claimToken: string;
+  senderEmail: string;
+  senderName?: string;
+}): Promise<void> {
+  const email = buildWaitlistClaimCodeEmail({ claimToken: opts.claimToken });
+
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': opts.apiKey,
+    },
+    body: JSON.stringify({
+      sender: {
+        email: opts.senderEmail,
+        name: opts.senderName || 'DriveIQ',
+      },
+      to: [{ email: opts.toEmail }],
+      subject: email.subject,
+      htmlContent: email.html,
+      textContent: email.text,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`brevo/http/${res.status}: ${body.slice(0, 220)}`);
   }
 }
 
@@ -467,7 +507,7 @@ export const claimWaitlistPremium = onCall(
     timeoutSeconds: 30,
     enforceAppCheck: false,
     invoker: 'public',
-    serviceAccount: '327546397871-compute@developer.gserviceaccount.com',
+    serviceAccount: WAITLIST_FN_SA,
   },
   async (request) => {
     const uid = request.auth?.uid;
@@ -475,31 +515,26 @@ export const claimWaitlistPremium = onCall(
       throw new HttpsError('unauthenticated', 'Sign in to claim your waitlist week.');
     }
     const data = (request.data ?? {}) as {
-      mode?: 'auto' | 'manual';
       waitlistEmail?: unknown;
       claimToken?: unknown;
     };
-    const mode = data.mode === 'manual' ? 'manual' : 'auto';
     const waitlistEmail =
       typeof data.waitlistEmail === 'string' ? data.waitlistEmail : undefined;
     const claimToken = typeof data.claimToken === 'string' ? data.claimToken : undefined;
-    const auth = request.auth!;
-    const accountEmail = typeof auth.token.email === 'string' ? auth.token.email : null;
 
     const result = await claimWaitlistPremiumCallable({
       db,
       uid,
-      accountEmail,
-      mode,
       waitlistEmail,
       claimToken,
     });
 
     logger.info('waitlist.claim', {
       uid,
-      mode,
+      mode: 'token',
       status: result.status,
       ok: result.ok,
+      token: result.token,
       waitlistEmail: result.waitlistEmail,
     });
 
@@ -517,7 +552,7 @@ export const claimWaitlistPremiumHttp = onRequest(
     timeoutSeconds: 30,
     cors: true,
     invoker: 'public',
-    serviceAccount: '327546397871-compute@developer.gserviceaccount.com',
+    serviceAccount: WAITLIST_FN_SA,
   },
   async (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
@@ -542,11 +577,9 @@ export const claimWaitlistPremiumHttp = onRequest(
     }
 
     let uid = '';
-    let accountEmail: string | null = null;
     try {
       const decoded = await getAuth().verifyIdToken(token);
       uid = decoded.uid;
-      accountEmail = decoded.email ?? null;
     } catch (e) {
       logger.warn('waitlist.http_auth_fail', {
         error: e instanceof Error ? e.message : String(e),
@@ -559,16 +592,13 @@ export const claimWaitlistPremiumHttp = onRequest(
 
     const body = (req.body ?? {}) as {
       data?: {
-        mode?: unknown;
         waitlistEmail?: unknown;
         claimToken?: unknown;
       };
-      mode?: unknown;
       waitlistEmail?: unknown;
       claimToken?: unknown;
     };
     const data = body.data ?? body;
-    const mode = data.mode === 'manual' ? 'manual' : 'auto';
     const waitlistEmail =
       typeof data.waitlistEmail === 'string' ? data.waitlistEmail : undefined;
     const claimToken = typeof data.claimToken === 'string' ? data.claimToken : undefined;
@@ -577,16 +607,15 @@ export const claimWaitlistPremiumHttp = onRequest(
       const result = await claimWaitlistPremiumCallable({
         db,
         uid,
-        accountEmail,
-        mode,
         waitlistEmail,
         claimToken,
       });
       logger.info('waitlist.http_claim', {
         uid,
-        mode,
+        mode: 'token',
         status: result.status,
         ok: result.ok,
+        token: result.token,
         waitlistEmail: result.waitlistEmail,
       });
       res.status(200).json({ result });
@@ -601,6 +630,84 @@ export const claimWaitlistPremiumHttp = onRequest(
           status: 'INTERNAL',
         },
       });
+    }
+  },
+);
+
+/**
+ * Waitlist fallback: user enters waitlist email, we resend their one-time code.
+ * Response is privacy-safe and does not reveal whether the email is listed.
+ */
+export const requestWaitlistCodeHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 30,
+    cors: true,
+    invoker: 'public',
+    secrets: [brevoApiKey, brevoSenderEmail, brevoSenderName],
+    serviceAccount: WAITLIST_FN_SA,
+  },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { message: 'POST required', status: 'INVALID_ARGUMENT' } });
+      return;
+    }
+
+    const generic = {
+      ok: true,
+      status: 'sent' as const,
+      message: 'If your waitlist email is registered, we have sent your claim code.',
+    };
+
+    try {
+      const body = (req.body ?? {}) as {
+        data?: { waitlistEmail?: unknown };
+        waitlistEmail?: unknown;
+      };
+      const data = body.data ?? body;
+      const waitlistEmail =
+        typeof data.waitlistEmail === 'string' ? data.waitlistEmail : undefined;
+      const lookup = await requestWaitlistCodeByEmail({ db, waitlistEmail });
+
+      if (lookup.status === 'invalid_email') {
+        res.status(200).json({ result: lookup });
+        return;
+      }
+
+      const apiKey = await keyOrEmpty(brevoApiKey);
+      const senderEmail = await keyOrEmpty(brevoSenderEmail);
+      const senderName = await keyOrEmpty(brevoSenderName);
+      if (!apiKey || !senderEmail || !lookup.token || !lookup.waitlistEmail) {
+        logger.warn('waitlist.code_request_skipped', {
+          reason: !apiKey || !senderEmail ? 'missing_brevo_secrets' : 'missing_token',
+          status: lookup.status,
+          email: lookup.waitlistEmail,
+        });
+        res.status(200).json({ result: generic });
+        return;
+      }
+      await sendWaitlistCodeByBrevo({
+        apiKey,
+        senderEmail,
+        senderName,
+        toEmail: lookup.waitlistEmail,
+        claimToken: lookup.token,
+      });
+      logger.info('waitlist.code_request_sent', { email: lookup.waitlistEmail });
+      res.status(200).json({ result: generic });
+    } catch (e) {
+      logger.error('waitlist.code_request_fail', {
+        error: e instanceof Error ? e.message : String(e),
+        stack: e instanceof Error ? e.stack : null,
+      });
+      res.status(200).json({ result: generic });
     }
   },
 );

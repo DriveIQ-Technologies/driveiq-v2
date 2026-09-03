@@ -61,7 +61,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /users/{uid}/usageDaily/{day} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
     match /waitlistClaims/{email} {
+      allow read, write: if false;
+    }
+
+    match /waitlistTokens/{token} {
       allow read, write: if false;
     }
 

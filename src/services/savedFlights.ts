@@ -7,6 +7,7 @@
 
 import type { AirportFlight } from './aerodatabox';
 import { getJSON, setJSON } from './storage';
+import { incrementUsageCounter } from './usageCounters';
 
 const STORAGE_KEY = 'driveiq.savedFlights.v1';
 
@@ -28,8 +29,12 @@ export async function saveFlight(
   flight: AirportFlight,
 ): Promise<SavedFlightMap> {
   const map = await loadSavedFlights();
+  const isNew = !(flight.id in map);
   map[flight.id] = { ...flight, airportId, savedAt: Date.now() };
   await setJSON(STORAGE_KEY, map);
+  if (isNew) {
+    void incrementUsageCounter('flightsTracked');
+  }
   void syncFlightsProfile(map);
   return map;
 }

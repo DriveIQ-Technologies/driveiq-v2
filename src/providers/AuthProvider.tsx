@@ -17,7 +17,9 @@ import React, {
   useState,
   type ReactNode,
 } from 'react';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import type { User } from 'firebase/auth';
 
 import {
@@ -27,7 +29,8 @@ import {
   track,
 } from '@/services/analytics';
 import { auth, authApi } from '@/services/firebase';
-import { applyWaitlistPremium } from '@/services/waitlist';
+import { configureGoogleSignIn, getGoogleSignInIdToken } from '@/services/googleSignIn';
+import { claimWaitlistByEmail } from '@/services/waitlist';
 import { syncPremiumEntitlement } from '@/services/subscription';
 import { identifyPurchasesUser } from '@/services/purchases';
 import { registerPushToken, clearPushTokenOnLogout } from '@/services/pushTokens';
@@ -78,6 +81,8 @@ export interface AuthContextValue {
   completedAction: AccountAction | null;
   clearCompletedAction: () => void;
   login: (email: string, password: string) => Promise<void>;
+  loginWithApple: () => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   sendReset: (email: string) => Promise<void>;
@@ -145,6 +150,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  useEffect(() => {
+    configureGoogleSignIn();
+  }, []);
 
   useEffect(() => {
     if (!auth || !authApi) {
@@ -332,10 +341,152 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await identifyFirebaseUser(cred.user);
         track('auth_sign_in_succeeded');
         if (cred.user.email) {
-          const granted = await applyWaitlistPremium(cred.user.email);
-          if (granted) {
-            const { presentPremiumUnlock } = await import('@/services/subscription');
-            presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+          try {
+            const result = await claimWaitlistByEmail(cred.user.email);
+            track('waitlist_auto_claim_checked', {
+              source: 'email_signin',
+              status: result.status,
+              ok: result.ok,
+            });
+            if (result.ok && result.status === 'granted') {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          } catch (e) {
+            console.warn('[auth] waitlist auto-claim (signin) failed', e);
+          }
+        }
+        await syncPremiumEntitlement();
+      },
+      loginWithApple: async () => {
+        const { a, api } = requireAuth();
+        if (Platform.OS !== 'ios') {
+          throw new Error('Sign in with Apple is available on iPhone only.');
+        }
+        const isAvailable = await AppleAuthentication.isAvailableAsync();
+        if (!isAvailable) {
+          throw new Error(
+            'Sign in with Apple needs a TestFlight or dev build. It is not available in Expo Go.',
+          );
+        }
+        const appleCred = await AppleAuthentication.signInAsync({
+          requestedScopes: [
+            AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+            AppleAuthentication.AppleAuthenticationScope.EMAIL,
+          ],
+        });
+        const identityToken = appleCred.identityToken;
+        if (!identityToken) {
+          throw new Error('Apple sign-in token missing. Please try again.');
+        }
+        const provider = new api.OAuthProvider('apple.com');
+        const firebaseCredential = provider.credential({ idToken: identityToken });
+
+        let nextUser: User;
+        if (a.currentUser?.isAnonymous) {
+          try {
+            const linked = await api.linkWithCredential(a.currentUser, firebaseCredential);
+            nextUser = linked.user;
+            track('auth_anonymous_upgraded', { provider: 'apple' });
+          } catch (e) {
+            const code =
+              typeof e === 'object' && e !== null && 'code' in e
+                ? String((e as { code: unknown }).code)
+                : '';
+            if (
+              code === 'auth/credential-already-in-use' ||
+              code === 'auth/email-already-in-use'
+            ) {
+              await api.signOut(a);
+              const signed = await api.signInWithCredential(a, firebaseCredential);
+              nextUser = signed.user;
+            } else {
+              throw e;
+            }
+          }
+        } else {
+          const signed = await api.signInWithCredential(a, firebaseCredential);
+          nextUser = signed.user;
+        }
+
+        const fullName = [appleCred.fullName?.givenName, appleCred.fullName?.familyName]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        if (fullName && !nextUser.displayName) {
+          await api.updateProfile(nextUser, { displayName: fullName });
+        }
+        await identifyFirebaseUser({
+          ...nextUser,
+          displayName: fullName || nextUser.displayName,
+        });
+        track('auth_sign_in_succeeded', { provider: 'apple' });
+        if (nextUser.email) {
+          try {
+            const result = await claimWaitlistByEmail(nextUser.email);
+            track('waitlist_auto_claim_checked', {
+              source: 'apple_signin',
+              status: result.status,
+              ok: result.ok,
+            });
+            if (result.ok && result.status === 'granted') {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          } catch (e) {
+            console.warn('[auth] waitlist auto-claim (apple) failed', e);
+          }
+        }
+        await syncPremiumEntitlement();
+      },
+      loginWithGoogle: async () => {
+        const { a, api } = requireAuth();
+        const idToken = await getGoogleSignInIdToken();
+        const firebaseCredential = api.GoogleAuthProvider.credential(idToken);
+
+        let nextUser: User;
+        if (a.currentUser?.isAnonymous) {
+          try {
+            const linked = await api.linkWithCredential(a.currentUser, firebaseCredential);
+            nextUser = linked.user;
+            track('auth_anonymous_upgraded', { provider: 'google' });
+          } catch (e) {
+            const code =
+              typeof e === 'object' && e !== null && 'code' in e
+                ? String((e as { code: unknown }).code)
+                : '';
+            if (
+              code === 'auth/credential-already-in-use' ||
+              code === 'auth/email-already-in-use'
+            ) {
+              await api.signOut(a);
+              const signed = await api.signInWithCredential(a, firebaseCredential);
+              nextUser = signed.user;
+            } else {
+              throw e;
+            }
+          }
+        } else {
+          const signed = await api.signInWithCredential(a, firebaseCredential);
+          nextUser = signed.user;
+        }
+
+        await identifyFirebaseUser(nextUser);
+        track('auth_sign_in_succeeded', { provider: 'google' });
+        if (nextUser.email) {
+          try {
+            const result = await claimWaitlistByEmail(nextUser.email);
+            track('waitlist_auto_claim_checked', {
+              source: 'google_signin',
+              status: result.status,
+              ok: result.ok,
+            });
+            if (result.ok && result.status === 'granted') {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          } catch (e) {
+            console.warn('[auth] waitlist auto-claim (google) failed', e);
           }
         }
         await syncPremiumEntitlement();
@@ -395,10 +546,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
         track('signup_completed', { has_name: Boolean(trimmed) });
         if (nextUser.email) {
-          const granted = await applyWaitlistPremium(nextUser.email);
-          if (granted) {
-            const { presentPremiumUnlock } = await import('@/services/subscription');
-            presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+          try {
+            const result = await claimWaitlistByEmail(nextUser.email);
+            track('waitlist_auto_claim_checked', {
+              source: 'email_signup',
+              status: result.status,
+              ok: result.ok,
+            });
+            if (result.ok && result.status === 'granted') {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          } catch (e) {
+            console.warn('[auth] waitlist auto-claim (signup) failed', e);
           }
         }
         await syncPremiumEntitlement();
@@ -492,6 +652,15 @@ export function friendlyAuthError(e: unknown): string {
     typeof e === 'object' && e !== null && 'message' in e
       ? String((e as { message: unknown }).message)
       : '';
+  if (
+    code === 'ERR_REQUEST_CANCELED' ||
+    message.includes('ERR_REQUEST_CANCELED')
+  ) {
+    return 'Sign-in was cancelled.';
+  }
+  if (message.includes('Expo Go')) {
+    return message;
+  }
   if (code === 'auth/unavailable' || message === 'auth/unavailable') {
     return 'Sign-in is temporarily unavailable. Please try again later.';
   }
@@ -508,7 +677,7 @@ export function friendlyAuthError(e: unknown): string {
     case 'auth/credential-already-in-use':
       return 'An account with this email already exists.';
     case 'auth/weak-password':
-      return 'Password should be at least 6 characters.';
+      return 'Password should be at least 8 characters.';
     case 'auth/too-many-requests':
       return 'Too many attempts. Please try again in a little while.';
     case 'auth/requires-recent-login':

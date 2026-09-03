@@ -20,6 +20,15 @@ bun.lockb
 *.log
 functions/node_modules/
 functions/lib/
+functions/serviceAccountKey.json
+serviceAccountKey.json
+waitlist-brevo-*.csv
+waitlist-codes.csv
+waitlist-emails.txt
+waitlist-emails-stress.txt
+waitlist-email-claim-preview.html
+waitlist-email-launch-preview.html
+waitlist-brevo-test.csv
 
 # Local Claude settings
 .claude/

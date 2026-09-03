@@ -14,6 +14,7 @@ import {
   AppState,
   Image,
   InteractionManager,
+  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -116,6 +117,7 @@ import {
   shouldShowWaitlistTrialEnd,
   WaitlistTrialEndSheet,
 } from '@/components/WaitlistTrialEndSheet';
+import { claimPendingWaitlistToken, setPendingWaitlistToken } from '@/services/waitlist';
 import { NotificationSettingsPanel } from '@/components/NotificationSettingsPanel';
 import { SidebarMenu } from '@/components/SidebarMenu';
 import { HelpSheet } from '@/components/HelpSheet';
@@ -188,6 +190,14 @@ const MAP_PROVIDER =
 // DriveIQ brand mark for the top pill + sidebar header.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const BRAND_LOGO = require('../assets/driveiq-logo.png');
+
+function claimTokenFromUrl(url: string): string | null {
+  const queryMatch = url.match(/[?&](?:t|token)=([^&#]+)/i);
+  if (queryMatch?.[1]) return decodeURIComponent(queryMatch[1]);
+  const pathMatch = url.match(/\/claim\/([A-Za-z0-9_-]+)/i);
+  if (pathMatch?.[1]) return decodeURIComponent(pathMatch[1]);
+  return null;
+}
 
 export default function MapScreen() {
   const {
@@ -283,6 +293,7 @@ export default function MapScreen() {
     open: false,
     section: 'profile',
   });
+  const claimingTokenRef = useRef(false);
 
   // Notification preferences — read once on mount, kept in state so the
   // poll loop sees the latest opt-ins/outs. `hasAccountRef` mirrors the auth
@@ -330,6 +341,51 @@ export default function MapScreen() {
   useEffect(() => {
     trackScreen('map_home');
   }, []);
+
+  const tryClaimPendingToken = useCallback(() => {
+    if (!hasAccount || claimingTokenRef.current) return;
+    claimingTokenRef.current = true;
+    void (async () => {
+      try {
+        const result = await claimPendingWaitlistToken();
+        if (!result) return;
+        if (result.ok && (result.status === 'granted' || result.status === 'already_active')) {
+          showDialog('Free week unlocked', result.message);
+        } else {
+          showDialog('Could not claim code', result.message);
+        }
+      } finally {
+        claimingTokenRef.current = false;
+      }
+    })();
+  }, [hasAccount]);
+
+  useEffect(() => {
+    tryClaimPendingToken();
+  }, [tryClaimPendingToken]);
+
+  useEffect(() => {
+    const processUrl = (url: string | null) => {
+      if (!url) return;
+      const token = claimTokenFromUrl(url);
+      if (!token) return;
+      void setPendingWaitlistToken(token).then(() => {
+        if (hasAccount) {
+          tryClaimPendingToken();
+          return;
+        }
+        setAuthSheet({ open: true, mode: 'signup' });
+        showDialog(
+          'Sign in to claim',
+          'Create or sign in to your DriveIQ account, then your free-week code will be claimed automatically.',
+        );
+      });
+    };
+
+    void Linking.getInitialURL().then(processUrl).catch(() => undefined);
+    const sub = Linking.addEventListener('url', ({ url }) => processUrl(url));
+    return () => sub.remove();
+  }, [hasAccount, tryClaimPendingToken]);
 
   // Close every presented sheet *except* the sidebar. The menu must stay
   // reachable from first paint; gated actions only need other RN Modals

@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  TOKEN_WINDOW_MS,
   WAITLIST_WEEK_MS,
   buildGrantEnds,
   evaluateExistingClaim,
   isPremiumUntilActive,
   normalizeClaimToken,
   normalizeEmail,
-  resolveClaimTarget,
+  userMessageForCodeRequest,
   userMessageForStatus,
 } from './waitlistClaim.js';
 
@@ -15,17 +16,6 @@ describe('waitlistClaim helpers', () => {
   it('normalizes emails and claim tokens', () => {
     expect(normalizeEmail('  Zak@Example.COM ')).toBe('zak@example.com');
     expect(normalizeClaimToken(' ab-12 cd ')).toBe('AB12CD');
-  });
-
-  it('resolves auto mode from account email', () => {
-    expect(resolveClaimTarget('auto', 'me@test.com')).toEqual({ email: 'me@test.com' });
-    expect(resolveClaimTarget('auto', '  ').status).toBe('invalid_email');
-  });
-
-  it('prefers claim token over email in manual mode', () => {
-    expect(
-      resolveClaimTarget('manual', null, 'other@test.com', 'week-01'),
-    ).toEqual({ token: 'WEEK01' });
   });
 
   it('detects active premium windows', () => {
@@ -37,6 +27,13 @@ describe('waitlistClaim helpers', () => {
   it('builds a seven-day grant', () => {
     const now = Date.parse('2026-08-30T12:00:00.000Z');
     expect(buildGrantEnds(now)).toBe(new Date(now + WAITLIST_WEEK_MS).toISOString());
+  });
+
+  it('supports custom premium window', () => {
+    const now = Date.parse('2026-08-30T12:00:00.000Z');
+    expect(buildGrantEnds(now, 3)).toBe(
+      new Date(now + 3 * 24 * 60 * 60 * 1000).toISOString(),
+    );
   });
 
   it('returns already_active for same uid with active week', () => {
@@ -57,7 +54,7 @@ describe('waitlistClaim helpers', () => {
       },
       'uid-a',
     );
-    expect(result?.status).toBe('already_claimed');
+    expect(result?.status).toBe('already_used');
     expect(result?.ok).toBe(false);
   });
 
@@ -77,5 +74,18 @@ describe('waitlistClaim helpers', () => {
   it('maps user-facing messages', () => {
     expect(userMessageForStatus('granted')).toMatch(/free waitlist week/i);
     expect(userMessageForStatus('invalid_token')).toMatch(/claim code/i);
+    expect(userMessageForStatus('expired')).toMatch(/expired/i);
+    expect(userMessageForStatus('already_used')).toMatch(/already used/i);
+    expect(userMessageForStatus('already_subscribed')).toMatch(/already has premium/i);
+  });
+
+  it('maps code-request messages', () => {
+    expect(userMessageForCodeRequest('sent')).toMatch(/sent your claim code/i);
+    expect(userMessageForCodeRequest('invalid_email')).toMatch(/valid waitlist email/i);
+    expect(userMessageForCodeRequest('not_found')).toMatch(/if your waitlist email is registered/i);
+  });
+
+  it('uses 14-day token window constant', () => {
+    expect(TOKEN_WINDOW_MS).toBe(14 * 24 * 60 * 60 * 1000);
   });
 });
