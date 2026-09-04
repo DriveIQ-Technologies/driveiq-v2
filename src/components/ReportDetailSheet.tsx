@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { auth } from '@/services/firebase';
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export function ReportDetailSheet({ report, onClose, onConfirm, onRemove }: Props) {
+  const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
   if (!report) return null;
 
@@ -37,83 +39,92 @@ export function ReportDetailSheet({ report, onClose, onConfirm, onRemove }: Prop
 
   return (
     <SheetOverlay onRequestClose={onClose}>
-      <View style={styles.sheet}>
-        <View style={styles.handle} />
-        <View style={styles.titleRow}>
-          <View style={[styles.icon, { backgroundColor: meta.color }]}>
-            <Ionicons
-              name={meta.icon as React.ComponentProps<typeof Ionicons>['name']}
-              size={18}
-              color={colors.textOnPrimary}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>{meta.label}</Text>
-            <Text style={styles.sub}>
-              {report.placeLabel ? `${report.placeLabel} · ` : ''}Reported {when}
-            </Text>
-          </View>
-          <Pressable onPress={onClose} hitSlop={12}>
-            <Ionicons name="close" size={22} color={colors.textSecondary} />
-          </Pressable>
-        </View>
-
-        {report.note ? <Text style={styles.note}>{report.note}</Text> : null}
-
-        <Pressable
-          style={[
-            styles.confirmBtn,
-            (report.confirmedByMe || mine) && styles.confirmBtnDone,
-          ]}
-          onPress={() => void thumbs()}
-          disabled={busy || report.confirmedByMe || mine}
-          accessibilityRole="button"
-        >
-          {busy ? (
-            <ActivityIndicator color={colors.primary} />
-          ) : (
-            <>
+      <View style={styles.flex}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
+          <View style={styles.handle} />
+          <View style={styles.titleRow}>
+            <View style={[styles.icon, { backgroundColor: meta.color }]}>
               <Ionicons
-                name={report.confirmedByMe ? 'thumbs-up' : 'thumbs-up-outline'}
+                name={meta.icon as React.ComponentProps<typeof Ionicons>['name']}
                 size={18}
-                color={report.confirmedByMe || mine ? colors.success : colors.textPrimary}
+                color={colors.textOnPrimary}
               />
-              <Text
-                style={[
-                  styles.confirmText,
-                  (report.confirmedByMe || mine) && styles.confirmTextDone,
-                ]}
-              >
-                {mine
-                  ? 'Your report'
-                  : report.confirmedByMe
-                    ? 'You confirmed this'
-                    : 'I can see this too'}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title}>{meta.label}</Text>
+              <Text style={styles.sub}>
+                {report.placeLabel ? `${report.placeLabel} · ` : ''}Reported {when}
               </Text>
-              <View style={styles.countPill}>
-                <Text style={styles.countText}>{report.confirmCount}</Text>
-              </View>
-            </>
-          )}
-        </Pressable>
+            </View>
+            <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
+              <Ionicons name="close" size={22} color={colors.textSecondary} />
+            </Pressable>
+          </View>
 
-        {mine && onRemove ? (
-          <Pressable style={styles.remove} onPress={() => onRemove(report)}>
-            <Text style={styles.removeText}>Remove my report</Text>
+          {report.note ? <Text style={styles.note}>{report.note}</Text> : null}
+
+          <Pressable
+            style={[
+              styles.confirmBtn,
+              (report.confirmedByMe || mine) && styles.confirmBtnDone,
+            ]}
+            onPress={() => void thumbs()}
+            disabled={busy || report.confirmedByMe || mine}
+            accessibilityRole="button"
+          >
+            {busy ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : (
+              <>
+                <Ionicons
+                  name={report.confirmedByMe ? 'thumbs-up' : 'thumbs-up-outline'}
+                  size={18}
+                  color={report.confirmedByMe || mine ? colors.success : colors.textPrimary}
+                />
+                <Text
+                  style={[
+                    styles.confirmText,
+                    (report.confirmedByMe || mine) && styles.confirmTextDone,
+                  ]}
+                >
+                  {mine
+                    ? 'Your report'
+                    : report.confirmedByMe
+                      ? 'You confirmed this'
+                      : 'I can see this too'}
+                </Text>
+                <View style={styles.countPill}>
+                  <Text style={styles.countText}>{report.confirmCount}</Text>
+                </View>
+              </>
+            )}
           </Pressable>
-        ) : null}
+
+          {mine && onRemove ? (
+            <Pressable
+              style={styles.removeBtn}
+              onPress={() => onRemove(report)}
+              accessibilityRole="button"
+              accessibilityLabel="Remove my report"
+            >
+              <Ionicons name="trash-outline" size={16} color="#DC2626" />
+              <Text style={styles.removeText}>Remove my report</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
     </SheetOverlay>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 20,
-    paddingBottom: 28,
+    paddingHorizontal: 20,
+    paddingTop: 10,
   },
   handle: {
     alignSelf: 'center',
@@ -135,6 +146,14 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  closeBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
   },
   title: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
   sub: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
@@ -174,6 +193,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   countText: { fontSize: 14, fontWeight: '800', color: colors.textPrimary },
-  remove: { alignSelf: 'center', marginTop: 14, padding: 8 },
-  removeText: { fontSize: 14, fontWeight: '600', color: '#DC2626' },
+  removeBtn: {
+    marginTop: 12,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(220, 38, 38, 0.28)',
+    backgroundColor: 'rgba(220, 38, 38, 0.06)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  removeText: { fontSize: 15, fontWeight: '700', color: '#DC2626' },
 });

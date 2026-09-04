@@ -508,6 +508,7 @@ export async function handleAskAgent(opts: {
   const combinedPrompt = `${tierLine}
 LONDON_CLOCK: ${clockLondon} Europe/London. The driver's phone may show a different time zone. Always say "London HH:mm". Today and tonight mean the London calendar day, not the phone's day.
 DATA RULE: LIVE MAP EVENTS has ${liveCount} row(s) from the driver's open map. If ${liveCount} > 0 AND the question is about events / what's on / tonight, lead with those and mark finished events as already done. If ${liveCount} is 0, do not invent or dump events. For trains, tube, roads, traffic, travel or flights, answer from RAIL STATUS / ROAD STATUS (and flights if present). Never open with "I found N events" unless they asked what's on.
+PRODUCT: Waitlist Premium is a free 7-day week (full-day flights, every station hub, weeks-ahead calendar by demand, unlimited AI). Disruption alerts on every plan. After day 7 it ends unless they subscribe.
 
 CONTEXT BLOCK:
 ${contextBlock}${historyBlock}

@@ -190,6 +190,24 @@ export async function addReport(
     const current = await loadReports();
     const next = prune([report, ...current.filter((r) => r.id !== report.id)]);
     await setJSON(STORAGE_KEY, next);
+    // Reporter is excluded from the FCM broadcast by design — ping them locally
+    // so they know it landed, and refresh their push token for future reports.
+    try {
+      const { ensurePermission, notifyNow } = await import('./notifications');
+      const { registerPushToken } = await import('./pushTokens');
+      if (await ensurePermission()) {
+        const label = REPORT_META[report.category]?.label ?? 'Report';
+        const place = report.placeLabel ? ` at ${report.placeLabel}` : '';
+        await notifyNow(
+          `${label} shared with drivers`,
+          `Other drivers nearby will see your report${place}. Tap to open the map.`,
+          { kind: 'community-report', reportId: report.id },
+        );
+        void registerPushToken();
+      }
+    } catch {
+      /* local ping is best-effort */
+    }
     return next;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

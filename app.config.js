@@ -18,7 +18,22 @@
 
 module.exports = ({ config }) => {
   const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY ?? '';
-  const googleIosUrlScheme = process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME ?? '';
+  // OAuth client IDs are public by design (shipped in the binary). Keep a
+  // project fallback so EAS/TestFlight still gets Google Sign-In when .env
+  // secrets were not copied into the build environment.
+  const googleWebClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+    '327546397871-6f48ag5kq5jq1gfh4dvhbe5fdv0ik9l2.apps.googleusercontent.com';
+  const googleIosClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || googleWebClientId;
+  const googleIosUrlScheme =
+    process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME ||
+    (googleIosClientId
+      ? `com.googleusercontent.apps.${googleIosClientId.replace(
+          '.apps.googleusercontent.com',
+          '',
+        )}`
+      : '');
 
   const plugins = [
     ...(config.plugins ?? []),
@@ -41,6 +56,12 @@ module.exports = ({ config }) => {
   return {
     ...config,
     plugins,
+    extra: {
+      ...(config.extra ?? {}),
+      googleWebClientId,
+      googleIosClientId,
+      googleIosUrlScheme,
+    },
     android: {
       ...(config.android ?? {}),
       config: {

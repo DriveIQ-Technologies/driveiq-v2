@@ -42,12 +42,19 @@ import { EmptyHero, type PromptCard } from '@/components/ai/EmptyHero';
 import { EventSectionBlock } from '@/components/ai/EventSectionBlock';
 import {
   buildEventSummary,
+  cardLimitForQuestion,
+  dedupeEvents,
+  demandScore as presentationDemandScore,
   eventDisplayEnd,
   eventDisplayStart,
+  eventMatchesPlaceHints,
   groupEventsByDay,
+  placeHintsFromQuestion,
   type EventDaySection,
 } from '@/components/ai/eventPresentation';
 import { SearchStatus } from '@/components/ai/SearchStatus';
+import { showDialog } from '@/services/dialog';
+import { reminderChatDialogMessage } from '@/services/eventReminders';
 import { SuggestionChips } from '@/components/ai/SuggestionChips';
 
 interface Props {
@@ -190,6 +197,19 @@ const EVENT_WORDS = ['event', 'events', 'happening', 'on tonight', 'on today',
   'on tomorrow', 'whats on', "what's on", 'what is on', 'show', 'shows', 'gig', 'gigs',
   'concert', 'concerts', 'match', 'matches', 'fixture', 'fixtures', 'anything on', 'look out for'];
 
+const WAITLIST_WEEK_ANSWER =
+  'Waitlist Premium is a free 7-day week — nothing to pay during those 7 days. You get full-day flight boards at all five airports, every station hub saved, the full calendar weeks ahead ranked by demand, and unlimited AI questions. Disruption alerts stay on every plan. After day 7 it ends unless you subscribe in the app. Open Menu → DriveIQ Premium anytime to see the full list.';
+
+function looksLikeWaitlistWeekQuestion(q: string): boolean {
+  const lower = q.toLowerCase();
+  return (
+    /\b(waitlist|free week|trial week|premium week)\b/.test(lower) ||
+    (/\b(what|whats|what's)\b/.test(lower) &&
+      /\b(premium|free|waitlist)\b/.test(lower) &&
+      /\b(include|get|unlock|cover|last|long|week|days?)\b/.test(lower))
+  );
+}
+
 const BIG_WORDS = [
   'big',
   'biggest',
@@ -219,12 +239,7 @@ function turnoutLabel(e: AppEvent): string | undefined {
 
 /** Featured pins and stadium-scale venues first. Small clubs last. */
 function demandScore(e: AppEvent): number {
-  const crowd = Math.max(
-    e.turnoutMax ?? 0,
-    e.turnoutMin ?? 0,
-    venueProfileFor(e.venue)?.capacity ?? 0,
-  );
-  return (e.source === 'featured' ? 1_000_000 : 0) + crowd;
+  return presentationDemandScore(e);
 }
 
 const typeOf = (e: AppEvent): string =>
@@ -436,6 +451,7 @@ function byFreshThenDemand(a: AppEvent, b: AppEvent): number {
 
 /**
  * Prefer stadium / featured events in the asked window only.
+ * Venue / place names in the question hard-filter the pool.
  * For non-event questions returns empty so we never pollute the agent context.
  */
 function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
@@ -443,6 +459,11 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
   // Hard stop: don't send events for travel / non-event questions
   if (looksLikeTravelQuestion(q) || looksLikeEventRefusal(q)) return [];
   if (!looksLikeEventQuestion(question)) return [];
+
+  const places = placeHintsFromQuestion(q);
+  const placeFiltered = places.length
+    ? all.filter((e) => eventMatchesPlaceHints(e, places))
+    : all;
 
   const tonightAsk = /\b(today|tonight|now|going on)\b/.test(q);
   const win = resolveWindow(q);
@@ -453,7 +474,7 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
       ? { start: rangeFor('today').start, end: rangeFor('day:6').end }
       : { start: rangeFor('today').start, end: rangeFor('tomorrow').end });
 
-  const inWindow = all.filter(
+  const inWindow = placeFiltered.filter(
     (e) =>
       isInRange(e.startsAt, range) ||
       (e.realStartAt ? isInRange(e.realStartAt, range) : false),
@@ -468,11 +489,12 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
     : inWindow;
   const windowIds = new Set(useful.map((e) => e.id));
   const rankedWindow = [...useful].sort(tonightAsk ? byFreshThenDemand : byDemandThenTime);
-  // After 21:00 London, also peek tomorrow for "tonight" queries
+  // After 21:00 London, also peek tomorrow for "tonight" queries — but not when
+  // the user named specific venues (keep the answer tight).
   let nextUp: AppEvent[] = [];
-  if (tonightAsk && londonHour() >= 21) {
+  if (tonightAsk && londonHour() >= 21 && places.length === 0) {
     const tomorrow = rangeFor('tomorrow');
-    nextUp = all
+    nextUp = placeFiltered
       .filter(
         (e) =>
           !windowIds.has(e.id) &&
@@ -484,11 +506,11 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
   }
   const seen = new Set<string>();
   const out: AppEvent[] = [];
-  for (const e of [...rankedWindow, ...nextUp]) {
+  for (const e of dedupeEvents([...rankedWindow, ...nextUp])) {
     if (seen.has(e.id)) continue;
     seen.add(e.id);
     out.push(e);
-    if (out.length >= 40) break;
+    if (out.length >= 24) break;
   }
   return out;
 }
@@ -517,15 +539,45 @@ function looksLikeEventQuestion(q: string): boolean {
   return (
     EVENT_WORDS.some((w) => lower.includes(w)) ||
     looksLikeBigQuery(lower) ||
-    resolveWindow(lower) !== null
+    resolveWindow(lower) !== null ||
+    placeHintsFromQuestion(lower).length > 0
   );
 }
 
 function summaryForCards(answer: string, sections: EventDaySection[]): string {
-  if (!sections.length) return answer;
-  const first = answer.split(/\n\n/)[0]?.trim() ?? '';
-  if (first && first.length <= 220 && !first.startsWith('•')) return first;
+  const cleaned = answer.trim();
+  if (!sections.length) return cleaned;
+  // Prefer the live agent answer. Only fall back to a catalogue blurb when the
+  // model returned nothing useful.
+  if (cleaned && !looksLikeEmptyAgentReply(cleaned) && cleaned.length >= 12) {
+    return cleaned;
+  }
   return buildEventSummary(sections);
+}
+
+/** Pick the few cards that belong under this reply — never the whole map. */
+function cardsForReply(
+  question: string,
+  source: AppEvent[],
+  answer: string,
+): AppEvent[] {
+  const places = placeHintsFromQuestion(question);
+  const limit = cardLimitForQuestion(question);
+  let pool = dedupeEvents(source.filter((e) => eventStatus(e) !== 'finished'));
+  if (places.length) {
+    const matched = pool.filter((e) => eventMatchesPlaceHints(e, places));
+    pool = matched.length ? matched : pool;
+  }
+  const named = pool.filter((e) => mentionsEvent(answer, e));
+  if (named.length > 0) {
+    return named
+      .sort(byDemandThenTime)
+      .slice(0, limit);
+  }
+  if (looksLikeBigQuery(question.toLowerCase()) || places.length > 0) {
+    return [...pool].sort(byDemandThenTime).slice(0, limit);
+  }
+  return [...pool].sort(byFreshThenDemand).slice(0, limit);
 }
 
 function mentionsEvent(text: string, e: AppEvent): boolean {
@@ -624,7 +676,10 @@ export function AISupportSheet({
   const confirmRemind = async (event: AppEvent, source: 'chat' | 'card'): Promise<boolean> => {
     if (!onSaveEvent) return false;
     const ok = await onSaveEvent(event);
-    if (ok) track('ai_event_action_tapped', { action: 'remind', source });
+    if (ok) {
+      track('ai_event_action_tapped', { action: 'remind', source });
+      showDialog('Event saved', reminderChatDialogMessage(event));
+    }
     return ok;
   };
 
@@ -671,6 +726,9 @@ export function AISupportSheet({
         events && events.length > 0
           ? answerNamedTimeQuery(trimmed, events) ?? answerEventQuery(trimmed, events)
           : null;
+      const waitlistAnswer = looksLikeWaitlistWeekQuestion(trimmed)
+        ? WAITLIST_WEEK_ANSWER
+        : null;
 
       setSending(true);
       setMessages((prev) => [
@@ -686,6 +744,19 @@ export function AISupportSheet({
           setMessages((prev) => prev.filter((m) => m.id !== thinkingId).concat(msg));
         };
         try {
+          if (waitlistAnswer) {
+            replaceThinking({
+              id: `b-${Date.now()}-waitlist`,
+              role: 'bot',
+              text: waitlistAnswer,
+            });
+            const pro = await hasProAccess();
+            if (!pro) {
+              const next = await consumeAiQuestion();
+              setQuota(next);
+            }
+            return;
+          }
           const history = messages
             .filter((m) => !m.id.endsWith('-think') && !m.isLoading)
             .slice(-8)
@@ -708,11 +779,7 @@ export function AISupportSheet({
           // Never send events for travel/non-event questions.
           const picked = wantEvents ? eventsForAgent(trimmed, events ?? []) : [];
           const source = picked; // No global fallback — window is authoritative
-          const cardEvents = source.filter((e) => eventStatus(e) !== 'finished').slice(0, 24);
-          const eventSections =
-            wantEvents && cardEvents.length > 0
-              ? groupEventsByDay(cardEvents)
-              : undefined;
+          const places = placeHintsFromQuestion(trimmed);
           const clientEvents = source.map((e) => ({
             title: e.title,
             venue: e.venue,
@@ -751,6 +818,7 @@ export function AISupportSheet({
             question: trimmed,
             mapEventCount: events?.length ?? 0,
             pickedCount: picked.length,
+            placeHints: places,
             sendingCount: clientEvents.length,
             titles: clientEvents.slice(0, 8).map((e) => e.title),
             featuredCount: source.filter((e) => e.source === 'featured').length,
@@ -799,9 +867,6 @@ export function AISupportSheet({
             });
           } else {
             let answer = res.answer;
-            const leaders = source.filter(
-              (e) => e.source === 'featured' || demandScore(e) >= 15000,
-            ).slice(0, 3);
             if (
               eventResult &&
               eventResult.offer.length > 0 &&
@@ -812,40 +877,55 @@ export function AISupportSheet({
                 answerPreview: answer.slice(0, 160),
               });
               answer = eventResult.text;
-            } else if (
-              wantEvents &&
-              leaders.length > 0 &&
-              !leaders.some((e) => mentionsEvent(answer, e))
-            ) {
-              const extra = leaders
-                .map((e) => {
-                  const crowd = turnoutLabel(e);
-                  return `${e.title} at ${e.venue}, ${formatEventDate(eventDisplayStart(e))}${
-                    crowd ? `, around ${crowd}` : ''
-                  }`;
-                })
-                .join('. ');
-              console.warn('[agent] prepending missed big events', {
-                titles: leaders.map((e) => e.title),
-              });
-              answer = `Biggest on the map: ${extra}.\n\n${answer}`;
             }
+            // Only nudge missed big events for broad "what's on" scans — never
+            // when the user named venues or asked for a short top-N list.
+            const broadScan =
+              wantEvents &&
+              places.length === 0 &&
+              !/\b\d{1,2}\b/.test(trimmed) &&
+              !looksLikeBigQuery(trimmed.toLowerCase());
+            if (broadScan) {
+              const leaders = source
+                .filter((e) => e.source === 'featured' || demandScore(e) >= 15000)
+                .slice(0, 3);
+              if (leaders.length > 0 && !leaders.some((e) => mentionsEvent(answer, e))) {
+                const extra = leaders
+                  .map((e) => {
+                    const crowd = turnoutLabel(e);
+                    return `${e.title} at ${e.venue}, ${formatEventDate(eventDisplayStart(e))}${
+                      crowd ? `, around ${crowd}` : ''
+                    }`;
+                  })
+                  .join('. ');
+                answer = `Biggest on the map: ${extra}.\n\n${answer}`;
+              }
+            }
+
+            const cardEvents = wantEvents ? cardsForReply(trimmed, source, answer) : [];
+            const eventSections =
+              cardEvents.length > 0
+                ? groupEventsByDay(cardEvents, cardLimitForQuestion(trimmed))
+                : undefined;
+
             replaceThinking({
               id: `b-${Date.now()}-live`,
               role: 'bot',
               text: summaryForCards(answer, eventSections ?? []),
               model: res.model,
               eventSections,
-              actions: eventSections?.length ? undefined : (() => {
-                const named = source.filter(
-                  (e) => mentionsEvent(answer, e) && eventStatus(e) !== 'finished',
-                );
-                const fallback = (eventResult?.offer ?? []).filter(
-                  (e) => eventStatus(e) !== 'finished',
-                );
-                const offer = (named.length ? named : fallback).slice(0, 3);
-                return offer.length ? buildActions(offer) : undefined;
-              })(),
+              actions: eventSections?.length
+                ? undefined
+                : (() => {
+                    const named = source.filter(
+                      (e) => mentionsEvent(answer, e) && eventStatus(e) !== 'finished',
+                    );
+                    const fallback = (eventResult?.offer ?? []).filter(
+                      (e) => eventStatus(e) !== 'finished',
+                    );
+                    const offer = (named.length ? named : fallback).slice(0, 3);
+                    return offer.length ? buildActions(offer) : undefined;
+                  })(),
             });
           }
         } catch (err) {
@@ -853,7 +933,12 @@ export function AISupportSheet({
           console.warn('[agent] askDriveiqAgent failed', message, err);
           if (eventResult && eventResult.offer.length > 0) {
             const localSections = groupEventsByDay(
-              eventResult.offer.filter((e) => eventStatus(e) !== 'finished'),
+              cardsForReply(
+                trimmed,
+                eventResult.offer.filter((e) => eventStatus(e) !== 'finished'),
+                eventResult.text,
+              ),
+              cardLimitForQuestion(trimmed),
             );
             replaceThinking({
               id: `b-${Date.now()}-local`,

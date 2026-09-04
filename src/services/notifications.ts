@@ -120,6 +120,16 @@ const getNotifications = (): any => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     _Notifications = require('expo-notifications');
+    // Required in SDK 50+ or scheduled/received notifications stay silent.
+    _Notifications.setNotificationHandler?.({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowAlert: true,
+      }),
+    });
   } catch {
     _Notifications = false;
   }
@@ -329,6 +339,15 @@ const fire = async (
   }
 };
 
+/** Fire a one-shot local notification now (used after submitting a community report). */
+export async function notifyNow(
+  title: string,
+  body: string,
+  data: Record<string, unknown> = {},
+): Promise<void> {
+  await fire(title, body, data);
+}
+
 const alertTypeFromKind = (kind: string): string => {
   if (kind === 'road-accident') return 'road';
   if (kind === 'line-closure') return 'rail';
@@ -528,10 +547,19 @@ export async function scheduleEventReminder(
   prefs: NotificationPrefs,
 ): Promise<void> {
   if (!prefs['saved-events']) return;
+  const granted = await ensurePermission();
+  if (!granted) {
+    console.warn('[notif] event reminder skipped — permission not granted');
+    return;
+  }
   const N = getNotifications();
   if (!N) return;
 
   const plan = eventReminderPlan(event);
+  // expo-notifications 55+ requires an explicit `type` on the trigger.
+  // `{ date }` alone is rejected and the schedule fails silently.
+  const dateType =
+    N.SchedulableTriggerInputTypes?.DATE ?? 'date';
 
   if (plan.preStartAtMs != null) {
     try {
@@ -544,7 +572,10 @@ export async function scheduleEventReminder(
           data: { kind: 'saved-event', eventId: event.id },
           sound: 'default',
         },
-        trigger: { date: new Date(plan.preStartAtMs) },
+        trigger: {
+          type: dateType,
+          date: new Date(plan.preStartAtMs),
+        },
       });
       track('event_reminder_scheduled', { phase: 'pre_start', event_id: event.id });
     } catch (e) {
@@ -564,7 +595,10 @@ export async function scheduleEventReminder(
           data: { kind: 'saved-event-end', eventId: event.id },
           sound: 'default',
         },
-        trigger: { date: new Date(plan.preEndAtMs) },
+        trigger: {
+          type: dateType,
+          date: new Date(plan.preEndAtMs),
+        },
       });
       track('event_reminder_scheduled', { phase: 'pre_end', event_id: event.id });
     } catch (e) {

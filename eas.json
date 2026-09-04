@@ -6,7 +6,12 @@
   "build": {
     "base": {
       "node": "20.19.4",
-      "corepack": true
+      "corepack": true,
+      "env": {
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "327546397871-6f48ag5kq5jq1gfh4dvhbe5fdv0ik9l2.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "327546397871-6f48ag5kq5jq1gfh4dvhbe5fdv0ik9l2.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME": "com.googleusercontent.apps.327546397871-6f48ag5kq5jq1gfh4dvhbe5fdv0ik9l2"
+      }
     },
     "development": {
       "extends": "base",

@@ -86,3 +86,16 @@ export function reminderConfirmationCopy(
 export function reminderDialogMessage(event: AppEvent): string {
   return reminderConfirmationCopy(event);
 }
+
+/** Short in-chat confirm after Remind (keeps the map dialog longer). */
+export function reminderChatDialogMessage(event: AppEvent): string {
+  const plan = eventReminderPlan(event);
+  if (plan.preStartAtMs == null && plan.preEndAtMs == null) {
+    return `Event saved. It is too close to ping beforehand — keep an eye on the map.`;
+  }
+  const when =
+    plan.preStartAtMs != null
+      ? `1 hour before it starts`
+      : `25 minutes before crowds leave`;
+  return `Event saved. You’ll be reminded of this event ${when}.`;
+}

@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -11,12 +12,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { auth } from '@/services/firebase';
-import { friendlyGoogleSignInError } from '@/services/googleSignIn';
+import {
+  friendlyGoogleSignInError,
+  isGoogleSignInConfigured,
+} from '@/services/googleSignIn';
 import { colors } from '@/theme/colors';
 
 type Step = 'email' | 'password' | 'signup';
@@ -39,6 +44,10 @@ export function AuthSheet({
   onSkip,
 }: Props) {
   const { login, loginWithApple, loginWithGoogle, signup, sendReset } = useAuth();
+  const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ScrollView>(null);
+  const passwordRef = useRef<TextInput>(null);
+  const nameRef = useRef<TextInput>(null);
 
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
@@ -51,11 +60,9 @@ export function AuthSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
-  const passwordRef = useRef<TextInput>(null);
-  const nameRef = useRef<TextInput>(null);
-
-  React.useEffect(() => {
+  useEffect(() => {
     if (visible) {
       setStep('email');
       setEmail('');
@@ -71,6 +78,21 @@ export function AuthSheet({
     }
   }, [visible, initialMode]);
 
+  useEffect(() => {
+    const show = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setKeyboardOpen(true),
+    );
+    const hide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardOpen(false),
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
   if (!visible) return null;
 
   const handleSkip = () => {
@@ -82,6 +104,12 @@ export function AuthSheet({
     waitlistEmail: undefined,
     claimToken: waitlistCode.trim() || undefined,
   });
+
+  const scrollToActions = () => {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    });
+  };
 
   const continueWithEmail = () => {
     setError(null);
@@ -146,16 +174,13 @@ export function AuthSheet({
 
   const submitApple = async () => {
     setError(null);
+    Keyboard.dismiss();
     try {
       setBusy(true);
       track('auth_submit_started', { provider: 'apple' });
       await loginWithApple(waitlistHints());
       onClose();
-      // If Hide My Email, surface a subtle in-app notice instead of a dialog
-      const signedEmail = auth?.currentUser?.email ?? '';
-      if (signedEmail.toLowerCase().includes('privaterelay.appleid.com')) {
-        // handled silently — user can claim via Menu → Claim waitlist week
-      }
+      void (auth?.currentUser?.email ?? '');
     } catch (e) {
       track('auth_submit_failed', { provider: 'apple' });
       setError(friendlyAuthError(e));
@@ -166,6 +191,11 @@ export function AuthSheet({
 
   const submitGoogle = async () => {
     setError(null);
+    Keyboard.dismiss();
+    if (!isGoogleSignInConfigured()) {
+      setError('Google sign-in needs the next app update. Use email for now.');
+      return;
+    }
     try {
       setBusy(true);
       track('auth_submit_started', { provider: 'google' });
@@ -204,23 +234,41 @@ export function AuthSheet({
     setError(null);
     setNotice(null);
     setPassword('');
+    Keyboard.dismiss();
   };
+
+  const primaryLabel =
+    step === 'email' ? 'Continue' : step === 'signup' ? 'Create free account' : 'Sign in';
+
+  const onPrimary = () => {
+    if (step === 'email') continueWithEmail();
+    else if (step === 'signup') void submitSignUp();
+    else void submitSignIn();
+  };
+
+  const footerPad = Math.max(insets.bottom, 12) + (keyboardOpen ? 8 : 4);
 
   return (
     <SheetOverlay onRequestClose={quietSkip ? handleSkip : onClose} level={8}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         pointerEvents="box-none"
       >
         <View style={styles.sheet}>
           <View style={styles.handle} />
+
           <ScrollView
+            ref={scrollRef}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 28 }}
+            contentContainerStyle={styles.scrollContent}
+            onContentSizeChange={() => {
+              if (keyboardOpen) scrollToActions();
+            }}
           >
-            {/* Header row */}
             <View style={styles.topRow}>
               {step !== 'email' ? (
                 <Pressable onPress={goBack} hitSlop={12} style={styles.backBtn}>
@@ -228,7 +276,7 @@ export function AuthSheet({
                 </Pressable>
               ) : (
                 <View style={styles.brandBadge}>
-                  <Ionicons name="navigate" size={22} color={colors.textOnPrimary} />
+                  <Ionicons name="navigate" size={20} color={colors.textOnPrimary} />
                 </View>
               )}
               <Pressable
@@ -242,15 +290,14 @@ export function AuthSheet({
               </Pressable>
             </View>
 
-            {/* Title */}
             <Text style={styles.title}>
               {step === 'email'
                 ? isNewUser
                   ? 'Create a free account'
                   : 'Welcome back'
                 : step === 'signup'
-                  ? 'Create a free account'
-                  : 'Sign in'}
+                  ? 'Almost there'
+                  : 'Enter password'}
             </Text>
             <Text style={styles.subtitle}>
               {reason
@@ -258,21 +305,12 @@ export function AuthSheet({
                 : step === 'email'
                   ? isNewUser
                     ? 'Saves, alerts and 10 AI questions a day. No card needed.'
-                    : 'Sign in to keep your saves, alerts and AI on this phone.'
+                    : 'Keep your saves, alerts and AI on this phone.'
                   : step === 'signup'
-                    ? `Creating a free account for ${email.trim()}`
+                    ? `Creating an account for ${email.trim()}`
                     : `Signing in as ${email.trim()}`}
             </Text>
 
-            <View style={styles.gateNote}>
-              <Ionicons name="checkmark-circle" size={14} color={colors.primary} />
-              <Text style={styles.gateNoteText}>
-                Free covers the live map, saves, disruption alerts and 10 AI questions a day.
-                Premium adds unlimited AI, all-day flights and every saved station.
-              </Text>
-            </View>
-
-            {/* ── STEP 1: email + social ── */}
             {step === 'email' ? (
               <>
                 {Platform.OS === 'ios' ? (
@@ -295,7 +333,11 @@ export function AuthSheet({
                 <Pressable
                   onPress={submitGoogle}
                   disabled={busy}
-                  style={[styles.socialBtn, styles.socialBtnSpaced, busy && styles.btnDisabled]}
+                  style={[
+                    styles.socialBtn,
+                    Platform.OS === 'ios' && styles.socialBtnSpaced,
+                    busy && styles.btnDisabled,
+                  ]}
                 >
                   {busy ? (
                     <ActivityIndicator color={colors.textPrimary} size="small" />
@@ -309,7 +351,7 @@ export function AuthSheet({
 
                 <View style={styles.dividerRow}>
                   <View style={styles.dividerLine} />
-                  <Text style={styles.dividerText}>or use email</Text>
+                  <Text style={styles.dividerText}>or email</Text>
                   <View style={styles.dividerLine} />
                 </View>
 
@@ -317,63 +359,27 @@ export function AuthSheet({
                   icon="mail-outline"
                   placeholder="Email address"
                   value={email}
-                  onChangeText={(t) => { setEmail(t); setError(null); }}
+                  onChangeText={(t) => {
+                    setEmail(t);
+                    setError(null);
+                  }}
                   keyboardType="email-address"
                   autoCapitalize="none"
-                  autoFocus
-                  returnKeyType="next"
+                  autoCorrect={false}
+                  returnKeyType="go"
+                  onFocus={scrollToActions}
                   onSubmitEditing={continueWithEmail}
                 />
-
-                <View style={styles.modeRow}>
-                  <Pressable
-                    onPress={() => { setIsNewUser(false); setError(null); }}
-                    style={[styles.modeBtn, !isNewUser && styles.modeBtnActive]}
-                  >
-                    <Text style={[styles.modeBtnText, !isNewUser && styles.modeBtnTextActive]}>
-                      Sign in
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => { setIsNewUser(true); setError(null); }}
-                    style={[styles.modeBtn, isNewUser && styles.modeBtnActive]}
-                  >
-                    <Text style={[styles.modeBtnText, isNewUser && styles.modeBtnTextActive]}>
-                      Create free account
-                    </Text>
-                  </Pressable>
-                </View>
-
-                {error ? <Text style={styles.error}>{error}</Text> : null}
-
-                <Pressable
-                  onPress={continueWithEmail}
-                  disabled={busy}
-                  style={[styles.primaryBtn, busy && styles.btnDisabled]}
-                >
-                  <Text style={styles.primaryText}>Continue</Text>
-                  <Ionicons
-                    name="arrow-forward"
-                    size={18}
-                    color={colors.textOnPrimary}
-                    style={{ marginLeft: 6 }}
-                  />
-                </Pressable>
-
-                {quietSkip ? (
-                  <Pressable onPress={handleSkip} hitSlop={8} style={styles.quietSkip}>
-                    <Text style={styles.quietSkipText}>Have a look around first</Text>
-                  </Pressable>
-                ) : null}
               </>
             ) : null}
 
-            {/* ── STEP 2: sign in ── */}
             {step === 'password' ? (
               <>
                 <Pressable onPress={goBack} style={styles.emailChip}>
                   <Ionicons name="mail-outline" size={15} color={colors.primary} />
-                  <Text style={styles.emailChipText}>{email.trim()}</Text>
+                  <Text style={styles.emailChipText} numberOfLines={1}>
+                    {email.trim()}
+                  </Text>
                   <Ionicons name="pencil-outline" size={13} color={colors.textSecondary} />
                 </Pressable>
 
@@ -381,9 +387,13 @@ export function AuthSheet({
                   ref={passwordRef}
                   placeholder="Password"
                   value={password}
-                  onChangeText={(t) => { setPassword(t); setError(null); }}
+                  onChangeText={(t) => {
+                    setPassword(t);
+                    setError(null);
+                  }}
                   show={showPassword}
                   onToggle={() => setShowPassword((s) => !s)}
+                  onFocus={scrollToActions}
                   onSubmitEditing={submitSignIn}
                 />
 
@@ -403,38 +413,24 @@ export function AuthSheet({
                     icon="ticket-outline"
                     placeholder="Claim code"
                     value={waitlistCode}
-                    onChangeText={(t) => { setWaitlistCode(t); setError(null); }}
+                    onChangeText={(t) => {
+                      setWaitlistCode(t);
+                      setError(null);
+                    }}
                     autoCapitalize="characters"
+                    onFocus={scrollToActions}
                   />
                 ) : null}
-
-                {error ? <Text style={styles.error}>{error}</Text> : null}
-                {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-
-                <Pressable
-                  onPress={submitSignIn}
-                  disabled={busy}
-                  style={[styles.primaryBtn, busy && styles.btnDisabled]}
-                >
-                  {busy ? (
-                    <ActivityIndicator color={colors.textOnPrimary} />
-                  ) : (
-                    <Text style={styles.primaryText}>Sign in</Text>
-                  )}
-                </Pressable>
-
-                <Pressable onPress={onForgot} disabled={busy} style={styles.forgotBtn}>
-                  <Text style={styles.forgotText}>Forgot password?</Text>
-                </Pressable>
               </>
             ) : null}
 
-            {/* ── STEP 3: sign up ── */}
             {step === 'signup' ? (
               <>
                 <Pressable onPress={goBack} style={styles.emailChip}>
                   <Ionicons name="mail-outline" size={15} color={colors.primary} />
-                  <Text style={styles.emailChipText}>{email.trim()}</Text>
+                  <Text style={styles.emailChipText} numberOfLines={1}>
+                    {email.trim()}
+                  </Text>
                   <Ionicons name="pencil-outline" size={13} color={colors.textSecondary} />
                 </Pressable>
 
@@ -443,9 +439,13 @@ export function AuthSheet({
                   icon="person-outline"
                   placeholder="Full name"
                   value={name}
-                  onChangeText={(t) => { setName(t); setError(null); }}
+                  onChangeText={(t) => {
+                    setName(t);
+                    setError(null);
+                  }}
                   autoCapitalize="words"
                   returnKeyType="next"
+                  onFocus={scrollToActions}
                   onSubmitEditing={() => passwordRef.current?.focus()}
                 />
 
@@ -453,9 +453,13 @@ export function AuthSheet({
                   ref={passwordRef}
                   placeholder="Password (min 8 characters)"
                   value={password}
-                  onChangeText={(t) => { setPassword(t); setError(null); }}
+                  onChangeText={(t) => {
+                    setPassword(t);
+                    setError(null);
+                  }}
                   show={showPassword}
                   onToggle={() => setShowPassword((s) => !s)}
+                  onFocus={scrollToActions}
                   onSubmitEditing={submitSignUp}
                 />
 
@@ -475,50 +479,97 @@ export function AuthSheet({
                     icon="ticket-outline"
                     placeholder="Claim code"
                     value={waitlistCode}
-                    onChangeText={(t) => { setWaitlistCode(t); setError(null); }}
+                    onChangeText={(t) => {
+                      setWaitlistCode(t);
+                      setError(null);
+                    }}
                     autoCapitalize="characters"
+                    onFocus={scrollToActions}
                   />
                 ) : null}
-
-                {error ? <Text style={styles.error}>{error}</Text> : null}
-                {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-
-                <Pressable
-                  onPress={submitSignUp}
-                  disabled={busy}
-                  style={[styles.primaryBtn, busy && styles.btnDisabled]}
-                >
-                  {busy ? (
-                    <ActivityIndicator color={colors.textOnPrimary} />
-                  ) : (
-                    <Text style={styles.primaryText}>Create free account</Text>
-                  )}
-                </Pressable>
 
                 <Text style={styles.termsText}>
                   By creating an account you agree to our terms and privacy policy.
                 </Text>
               </>
             ) : null}
+
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+            {step === 'password' ? (
+              <Pressable onPress={onForgot} disabled={busy} style={styles.forgotBtn}>
+                <Text style={styles.forgotText}>Forgot password?</Text>
+              </Pressable>
+            ) : null}
           </ScrollView>
+
+          <View style={[styles.footer, { paddingBottom: footerPad }]}>
+            <Pressable
+              onPress={onPrimary}
+              disabled={busy}
+              style={[styles.primaryBtn, busy && styles.btnDisabled]}
+            >
+              {busy && step !== 'email' ? (
+                <ActivityIndicator color={colors.textOnPrimary} />
+              ) : (
+                <>
+                  <Text style={styles.primaryText}>{primaryLabel}</Text>
+                  {step === 'email' ? (
+                    <Ionicons
+                      name="arrow-forward"
+                      size={18}
+                      color={colors.textOnPrimary}
+                      style={{ marginLeft: 6 }}
+                    />
+                  ) : null}
+                </>
+              )}
+            </Pressable>
+
+            {step === 'email' ? (
+              <Pressable
+                onPress={() => {
+                  setIsNewUser((v) => !v);
+                  setError(null);
+                }}
+                hitSlop={8}
+                style={styles.switchMode}
+              >
+                <Text style={styles.switchModeText}>
+                  {isNewUser ? 'Already have an account? ' : 'New here? '}
+                  <Text style={styles.switchModeLink}>
+                    {isNewUser ? 'Sign in' : 'Create free account'}
+                  </Text>
+                </Text>
+              </Pressable>
+            ) : null}
+
+            {quietSkip && step === 'email' ? (
+              <Pressable onPress={handleSkip} hitSlop={8} style={styles.quietSkip}>
+                <Text style={styles.quietSkipText}>Have a look around first</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SheetOverlay>
   );
 }
 
-/* ─── Sub-components ─── */
-
 const InputField = React.forwardRef<
   TextInput,
-  { icon: React.ComponentProps<typeof Ionicons>['name'] } & React.ComponentProps<typeof TextInput>
->(({ icon, ...props }, ref) => (
+  {
+    icon: React.ComponentProps<typeof Ionicons>['name'];
+    onFocus?: () => void;
+  } & React.ComponentProps<typeof TextInput>
+>(({ icon, onFocus, ...props }, ref) => (
   <View style={styles.inputWrapper}>
     <Ionicons name={icon} size={18} color={colors.primary} style={styles.inputIcon} />
     <TextInput
       ref={ref}
       placeholderTextColor={colors.textSecondary}
       style={styles.input}
+      onFocus={onFocus}
       {...props}
     />
   </View>
@@ -533,9 +584,10 @@ const PasswordField = React.forwardRef<
     onChangeText: (t: string) => void;
     show: boolean;
     onToggle: () => void;
+    onFocus?: () => void;
     onSubmitEditing?: () => void;
   }
->(({ placeholder, value, onChangeText, show, onToggle, onSubmitEditing }, ref) => (
+>(({ placeholder, value, onChangeText, show, onToggle, onFocus, onSubmitEditing }, ref) => (
   <View style={styles.inputWrapper}>
     <Ionicons
       name="lock-closed-outline"
@@ -551,6 +603,7 @@ const PasswordField = React.forwardRef<
       secureTextEntry={!show}
       placeholderTextColor={colors.textSecondary}
       style={styles.input}
+      onFocus={onFocus}
       onSubmitEditing={onSubmitEditing}
       returnKeyType="done"
     />
@@ -565,17 +618,14 @@ const PasswordField = React.forwardRef<
 ));
 PasswordField.displayName = 'PasswordField';
 
-/* ─── Styles ─── */
 const styles = StyleSheet.create({
   flex: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: 26,
     borderTopRightRadius: 26,
-    paddingHorizontal: 22,
-    paddingTop: 10,
-    paddingBottom: 8,
-    maxHeight: '90%',
+    maxHeight: '92%',
+    overflow: 'hidden',
   },
   handle: {
     alignSelf: 'center',
@@ -583,18 +633,23 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
     backgroundColor: colors.border,
-    marginBottom: 16,
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  scrollContent: {
+    paddingHorizontal: 22,
+    paddingBottom: 12,
   },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   brandBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -618,33 +673,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
   },
   title: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: '800',
     color: colors.textPrimary,
-    marginBottom: 5,
-    letterSpacing: -0.4,
+    marginBottom: 4,
+    letterSpacing: -0.3,
   },
   subtitle: {
     fontSize: 14,
     color: colors.textSecondary,
     lineHeight: 20,
-    marginBottom: 20,
-  },
-  gateNote: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: colors.primarySoft,
     marginBottom: 18,
-  },
-  gateNoteText: {
-    flex: 1,
-    fontSize: 12,
-    color: colors.textSecondary,
-    lineHeight: 17,
-    fontWeight: '500',
   },
   socialBtn: {
     flexDirection: 'row',
@@ -655,8 +694,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 15,
-    minHeight: 52,
+    paddingVertical: 14,
+    minHeight: 50,
   },
   socialBtnSpaced: {
     marginTop: 10,
@@ -670,7 +709,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginVertical: 18,
+    marginVertical: 16,
   },
   dividerLine: {
     flex: 1,
@@ -682,36 +721,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  modeRow: {
-    flexDirection: 'row',
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: 12,
-    padding: 4,
-    marginTop: 12,
-    marginBottom: 18,
-  },
-  modeBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 9,
-    alignItems: 'center',
-  },
-  modeBtnActive: {
-    backgroundColor: colors.surface,
-    shadowColor: colors.shadow,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.18,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  modeBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.textSecondary,
-  },
-  modeBtnTextActive: {
-    color: colors.primary,
-  },
   emailChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -720,9 +729,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    marginBottom: 16,
-    alignSelf: 'flex-start',
-    maxWidth: '100%',
+    marginBottom: 14,
+    alignSelf: 'stretch',
   },
   emailChipText: {
     flex: 1,
@@ -743,7 +751,7 @@ const styles = StyleSheet.create({
   inputIcon: { marginRight: 10 },
   input: {
     flex: 1,
-    paddingVertical: 15,
+    paddingVertical: 14,
     fontSize: 15,
     color: colors.textPrimary,
     fontWeight: '500',
@@ -754,7 +762,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     marginBottom: 10,
-    marginTop: -4,
+    marginTop: -2,
     alignSelf: 'flex-start',
     paddingVertical: 4,
   },
@@ -767,22 +775,43 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: 13,
     fontWeight: '600',
-    marginBottom: 10,
+    marginTop: 4,
+    marginBottom: 4,
   },
   notice: {
     color: colors.family,
     fontSize: 13,
     fontWeight: '600',
-    marginBottom: 10,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  forgotBtn: { alignSelf: 'flex-start', paddingVertical: 8 },
+  forgotText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  termsText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  footer: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingHorizontal: 22,
+    paddingTop: 12,
+    backgroundColor: colors.surface,
   },
   primaryBtn: {
     backgroundColor: colors.primary,
     borderRadius: 14,
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    marginTop: 4,
+    minHeight: 52,
   },
   btnDisabled: { opacity: 0.65 },
   primaryText: {
@@ -790,22 +819,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
-  forgotBtn: { alignItems: 'center', paddingVertical: 14 },
-  forgotText: {
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: '700',
+  switchMode: {
+    alignItems: 'center',
+    paddingTop: 14,
   },
-  termsText: {
-    textAlign: 'center',
-    fontSize: 11,
+  switchModeText: {
+    fontSize: 14,
     color: colors.textSecondary,
-    marginTop: 14,
-    lineHeight: 16,
+    fontWeight: '500',
+  },
+  switchModeLink: {
+    color: colors.primary,
+    fontWeight: '700',
   },
   quietSkip: {
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingTop: 10,
   },
   quietSkipText: {
     color: colors.textSecondary,

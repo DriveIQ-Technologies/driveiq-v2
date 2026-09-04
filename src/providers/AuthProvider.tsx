@@ -378,7 +378,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const isAvailable = await AppleAuthentication.isAvailableAsync();
         if (!isAvailable) {
           throw new Error(
-            'Sign in with Apple needs a TestFlight or dev build. It is not available in Expo Go.',
+            'Apple sign-in is not available on this install. Use email, or open the TestFlight build.',
           );
         }
         const appleCred = await AppleAuthentication.signInAsync({
@@ -656,7 +656,11 @@ export function friendlyAuthError(e: unknown): string {
   ) {
     return 'Sign-in was cancelled.';
   }
-  if (message.includes('Expo Go')) {
+  if (
+    message.includes('Expo Go') ||
+    message.includes('Apple sign-in is not available') ||
+    message.includes('TestFlight build')
+  ) {
     return message;
   }
   if (code === 'auth/unavailable' || message === 'auth/unavailable') {

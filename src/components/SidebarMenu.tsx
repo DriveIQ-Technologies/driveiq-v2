@@ -270,7 +270,15 @@ export function SidebarMenu({
                   ? 'Preview mode is on — turn off EXPO_PUBLIC_PRO_PREVIEW to test purchases'
                   : 'Dev unlock — not a real subscription',
           badge: premiumBadge,
-          static: true,
+          handler: () => {
+            afterClose(() => {
+              presentPremiumUnlock({
+                kind: premiumSource === 'waitlist' ? 'waitlist' : 'purchase',
+                trialStarted:
+                  premiumSource === 'waitlist' || premiumSource === 'preview',
+              });
+            });
+          },
         },
         {
           key: 'restore',
