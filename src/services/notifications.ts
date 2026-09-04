@@ -35,13 +35,15 @@ export type NotificationChannel =
   | 'road-accidents'
   | 'line-closures'
   | 'saved-events'
-  | 'saved-flights';
+  | 'saved-flights'
+  | 'community-reports';
 
 export interface NotificationPrefs {
   'road-accidents': boolean;
   'line-closures': boolean;
   'saved-events': boolean;
   'saved-flights': boolean;
+  'community-reports': boolean;
 }
 
 export const DEFAULT_PREFS: NotificationPrefs = {
@@ -49,6 +51,7 @@ export const DEFAULT_PREFS: NotificationPrefs = {
   'line-closures': true,
   'saved-events': true,
   'saved-flights': true,
+  'community-reports': true,
 };
 
 /**
@@ -61,6 +64,7 @@ export const PREFS_ALL_OFF: NotificationPrefs = {
   'line-closures': false,
   'saved-events': false,
   'saved-flights': false,
+  'community-reports': false,
 };
 
 /** Stored prefs for account holders; all-off for everyone else. */
@@ -330,8 +334,16 @@ const alertTypeFromKind = (kind: string): string => {
   if (kind === 'line-closure') return 'rail';
   if (kind === 'saved-flight') return 'airport';
   if (kind === 'saved-event' || kind === 'saved-event-end') return 'event';
+  if (kind === 'community-report') return 'community-report';
   return kind || 'unknown';
 };
+
+type NotificationOpenHandler = (data: Record<string, unknown>) => void;
+let _openHandler: NotificationOpenHandler | null = null;
+
+export function setNotificationOpenHandler(fn: NotificationOpenHandler | null): void {
+  _openHandler = fn;
+}
 
 /**
  * Track alert-open events from OS notification taps.
@@ -356,6 +368,7 @@ export function startNotificationOpenTracking(): void {
         type: alertTypeFromKind(kind),
         minutes_since_sent: minutesSinceSent,
       });
+      _openHandler?.(data);
     });
   } catch (e) {
     console.warn('[notif] response listener setup failed', e);

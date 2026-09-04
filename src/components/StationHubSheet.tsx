@@ -15,9 +15,13 @@ import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { showDialog } from '@/services/dialog';
 import {
+  formatStationLockUntil,
+  isSlotActive,
+  loadFreeStationSlot,
   loadSavedStations,
   setStationNotify,
   toggleSaveStation,
+  type FreeStationSlot,
   type SavedStationMap,
 } from '@/services/savedStations';
 import {
@@ -62,6 +66,7 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
   const [error, setError] = useState<string | null>(null);
   const [openLine, setOpenLine] = useState<StationLineStatus | null>(null);
   const [savedStations, setSavedStations] = useState<SavedStationMap>({});
+  const [freeSlot, setFreeSlot] = useState<FreeStationSlot | null>(null);
   const [isPremium, setIsPremium] = useState(false);
   // Guards double taps: two overlapping writes to the same key used to leave
   // the toggles out of sync with storage.
@@ -88,6 +93,9 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
     loadSavedStations().then((m) => {
       if (!cancelled) setSavedStations(m);
     });
+    loadFreeStationSlot().then((s) => {
+      if (!cancelled) setFreeSlot(s);
+    });
     fetchStationLineStatuses(station)
       .then((l) => {
         if (!cancelled) setLines(l);
@@ -109,7 +117,32 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
   const saved = Boolean(savedStations[station.id]);
   const notify = Boolean(savedStations[station.id]?.notify);
   const savedCount = Object.keys(savedStations).length;
-  const stationBoundaryLocked = !isPremium && !saved && savedCount >= 1;
+  const slotActive = isSlotActive(freeSlot);
+  const thisIsLockedHub = slotActive && freeSlot!.stationId === station.id;
+  const otherHubLocked = slotActive && freeSlot!.stationId !== station.id;
+  const stationBoundaryLocked = !isPremium && !saved && (savedCount >= 1 || otherHubLocked);
+
+  const lockedHubName =
+    MAJOR_STATIONS.find((s) => s.id === freeSlot?.stationId)?.name ?? 'your saved hub';
+  const lockUntilLabel =
+    slotActive && freeSlot ? formatStationLockUntil(freeSlot.lockedUntil) : null;
+
+  const explainStationLock = (slot: FreeStationSlot | null = freeSlot) => {
+    const until =
+      isSlotActive(slot) && slot ? formatStationLockUntil(slot.lockedUntil) : null;
+    const name =
+      MAJOR_STATIONS.find((s) => s.id === slot?.stationId)?.name ?? 'your saved hub';
+    const message = until
+      ? `You picked ${name}. That free slot is locked until ${until}. You can unsave it and turn alerts off, but you cannot switch to another hub until then — unless you upgrade.`
+      : 'Free includes one saved station. Upgrade to save all seven hubs.';
+    showDialog('Free hub is locked', message, [
+      { label: 'OK', style: 'cancel' },
+      {
+        label: 'See Premium',
+        onPress: () => showProPaywall('Saving more than one station', { source: 'station_hub' }),
+      },
+    ]);
+  };
 
   const runSave = async () => {
     if (busy) return;
@@ -118,8 +151,9 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
       const res = await toggleSaveStation(station);
       if (!mountedRef.current) return;
       setSavedStations(res.map);
-      if (res.result === 'blocked-limit') {
-        showProPaywall('Saving more than one station', { source: 'station_hub' });
+      setFreeSlot(res.slot);
+      if (res.result === 'blocked-limit' || res.result === 'blocked-cooldown') {
+        explainStationLock(res.slot);
       } else if (res.result === 'saved' && Object.keys(res.map).length === 1) {
         onFirstStationSaved?.();
       }
@@ -140,8 +174,9 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
       const res = await setStationNotify(station, next);
       if (!mountedRef.current) return;
       setSavedStations(res.map);
-      if (res.result === 'blocked-limit') {
-        showProPaywall('Alerts for more than one station');
+      setFreeSlot(res.slot);
+      if (res.result === 'blocked-limit' || res.result === 'blocked-cooldown') {
+        explainStationLock(res.slot);
       } else if (res.result === 'permission-denied') {
         showDialog(
           'Notifications are off',
@@ -160,7 +195,7 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
 
   const onToggleSave = () => {
     if (stationBoundaryLocked) {
-      showProPaywall('Saving more than one station');
+      explainStationLock();
       return;
     }
     requireAccount('save', () => {
@@ -171,13 +206,21 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
   const onToggleNotify = () => {
     const next = !notify;
     if (stationBoundaryLocked && next) {
-      showProPaywall('Alerts for more than one station');
+      explainStationLock();
       return;
     }
     requireAccount('notify', () => {
       void runNotify(next);
     });
   };
+
+  const controlsHint = isPremium
+    ? 'Premium includes every hub.'
+    : thisIsLockedHub && lockUntilLabel
+      ? `This is your free hub until ${lockUntilLabel}. You can turn alerts off. Switching hub needs Premium, or wait until then.`
+      : otherHubLocked && lockUntilLabel
+        ? `Your free hub is ${lockedHubName} until ${lockUntilLabel}.`
+        : 'Free: one hub, locked for 7 days once you pick it. Premium includes every hub.';
 
   return (
     <SheetOverlay onRequestClose={onClose} level={2}>
@@ -200,14 +243,14 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
           {stationBoundaryLocked ? (
             <Pressable
               style={styles.inlineUpgradeBar}
-              onPress={() =>
-                showProPaywall('Save more than one station', { source: 'station_hub', inline: true })
-              }
+              onPress={explainStationLock}
               accessibilityRole="button"
             >
               <Ionicons name="lock-closed" size={15} color={colors.primaryDark} />
               <Text style={styles.inlineUpgradeText}>
-                Free saves one station. Upgrade to save all seven hubs and turn on alerts for each.
+                {lockUntilLabel
+                  ? `Free hub is locked until ${lockUntilLabel}. Upgrade to switch hubs anytime.`
+                  : 'Free saves one station. Upgrade to save all seven hubs and turn on alerts for each.'}
               </Text>
             </Pressable>
           ) : null}
@@ -269,9 +312,7 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
               </Text>
             </Pressable>
           </View>
-          <Text style={styles.controlsHint}>
-            Free includes one saved station. Premium includes unlimited saved stations.
-          </Text>
+          <Text style={styles.controlsHint}>{controlsHint}</Text>
           {onNavigate ? (
             <Pressable
               onPress={() => {

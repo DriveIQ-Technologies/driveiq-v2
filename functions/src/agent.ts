@@ -4,7 +4,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { askAgent, type AgentModel } from './anthropic.js';
 import { AGENT_SYSTEM_ADDENDUM, AGENT_SYSTEM_PROMPT_VERBATIM } from './agentPrompt.js';
 
-const CHAT_PROMPT_VERSION = 2;
+const CHAT_PROMPT_VERSION = 3;
 
 interface AskInput {
   question?: unknown;
@@ -507,7 +507,7 @@ export async function handleAskAgent(opts: {
   const liveCount = clientEvents.length;
   const combinedPrompt = `${tierLine}
 LONDON_CLOCK: ${clockLondon} Europe/London. The driver's phone may show a different time zone. Always say "London HH:mm". Today and tonight mean the London calendar day, not the phone's day.
-DATA RULE: LIVE MAP EVENTS has ${liveCount} row(s) from the driver's open map, ranked live and upcoming first, then featured and highest turnout. If ${liveCount} > 0, lead with those. Mark finished events as already done. Do not call a finished small fixture a big night. Never say you have no events. Never say tomorrow is Premium-only.
+DATA RULE: LIVE MAP EVENTS has ${liveCount} row(s) from the driver's open map. If ${liveCount} > 0 AND the question is about events / what's on / tonight, lead with those and mark finished events as already done. If ${liveCount} is 0, do not invent or dump events. For trains, tube, roads, traffic, travel or flights, answer from RAIL STATUS / ROAD STATUS (and flights if present). Never open with "I found N events" unless they asked what's on.
 
 CONTEXT BLOCK:
 ${contextBlock}${historyBlock}

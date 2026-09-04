@@ -15,7 +15,8 @@
     "waitlist:bulk": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs bulk",
     "waitlist:self-test": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs self-test",
     "waitlist:auth": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs auth",
-    "waitlist:verify": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs verify"
+    "waitlist:verify": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs verify",
+    "waitlist:reset": "NODE_PATH=./node_modules node ../scripts/reset-waitlist-claim.mjs"
   },
   "dependencies": {
     "firebase-admin": "^13.4.0",

@@ -16,6 +16,8 @@ import {
 
 const QUOTA_KEY = 'driveiq.aiQuota.v1';
 
+let sessionUsed: { day: string; used: number } | null = null;
+
 /** Fallback when Remote Config has not loaded yet. Prefer getAiQuota().limit. */
 export const FREE_DAILY_LIMIT = DEFAULT_AI_FREE_DAILY_LIMIT;
 
@@ -34,17 +36,17 @@ export interface AiQuota {
   remaining: number;
 }
 
+/** Always use the London calendar day to stay in sync with the server quota. */
 const todayKey = (): string => {
-  const d = new Date();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${mm}-${dd}`;
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
 };
 
 async function loadUsedToday(): Promise<number> {
+  const day = todayKey();
   const stored = await getJSON<StoredQuota | null>(QUOTA_KEY, null);
-  if (!stored || stored.day !== todayKey()) return 0;
-  return stored.used;
+  const storedUsed = stored && stored.day === day ? stored.used : 0;
+  const session = sessionUsed && sessionUsed.day === day ? sessionUsed.used : 0;
+  return Math.max(storedUsed, session);
 }
 
 export async function getAiQuota(): Promise<AiQuota> {
@@ -62,13 +64,22 @@ export async function getAiQuota(): Promise<AiQuota> {
   };
 }
 
+export async function applyServerAiQuota(limit: number, remaining: number): Promise<void> {
+  const day = todayKey();
+  const used = Math.max(0, limit - remaining);
+  sessionUsed = { day, used: Math.max(used, sessionUsed?.day === day ? sessionUsed.used : 0) };
+  await setJSON(QUOTA_KEY, { day, used: sessionUsed.used } satisfies StoredQuota);
+}
+
 /**
  * Record one question. Returns the quota state AFTER consumption. Callers
  * should check `remaining` on getAiQuota() BEFORE answering; this just
  * persists the tick (Premium usage is tracked but never blocks).
  */
 export async function consumeAiQuestion(): Promise<AiQuota> {
+  const day = todayKey();
   const used = (await loadUsedToday()) + 1;
-  await setJSON(QUOTA_KEY, { day: todayKey(), used } satisfies StoredQuota);
+  sessionUsed = { day, used };
+  await setJSON(QUOTA_KEY, { day, used } satisfies StoredQuota);
   return getAiQuota();
 }

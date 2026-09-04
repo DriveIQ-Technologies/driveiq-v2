@@ -63,11 +63,11 @@ const ROWS: Row[] = [
       'Two pings: 1 hour before the start so you can plan the route, and 25 minutes before it ends so you can leave ahead of the crowd.',
   },
   {
-    key: 'saved-flights',
-    icon: 'airplane',
-    title: 'Watched flights',
+    key: 'community-reports',
+    icon: 'flag',
+    title: 'Driver reports',
     body:
-      'Pings when a flight you have saved is delayed or cancelled, so you can adjust your airport run.',
+      'Pings when someone nearby reports police, a hazard, an accident or a closure, with the place on the map.',
   },
 ];
 

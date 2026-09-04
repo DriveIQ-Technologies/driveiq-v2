@@ -83,6 +83,7 @@ import {
   loadPrefs,
   scheduleEventReminder,
   startNotificationOpenTracking,
+  setNotificationOpenHandler,
   type NotificationPrefs,
 } from '@/services/notifications';
 import { fetchAirportFlights } from '@/services/aerodatabox';
@@ -101,10 +102,13 @@ import {
 import { addEventToCalendar } from '@/services/calendar';
 import { ReportSheet } from '@/components/ReportSheet';
 import { ReportMarker } from '@/components/ReportMarker';
+import { ReportPlaceOverlay } from '@/components/ReportPlaceOverlay';
+import { ReportDetailSheet } from '@/components/ReportDetailSheet';
 import {
   addReport,
-  loadReports,
+  confirmReport,
   removeReport,
+  subscribeReports,
   REPORT_META,
   type ReportCategory,
   type UserReport,
@@ -206,6 +210,7 @@ export default function MapScreen() {
     closeAccountPrompt,
     hasAccount,
     initializing,
+    user,
     registerSheetDismisser,
     completedAction,
     clearCompletedAction,
@@ -225,11 +230,14 @@ export default function MapScreen() {
   // event sheet and the 1-hour-before reminder.
   const [savedEvents, setSavedEvents] = useState<SavedEventMap>({});
 
-  // Community reports (persisted, device-local). `reportSheetOpen` drives the
-  // create-report sheet; `lastRegionRef` tracks the map centre so a new report
-  // drops where the user is looking.
+  // Community reports. Place-pin mode first, then the category sheet.
   const [reports, setReports] = useState<UserReport[]>([]);
   const [reportSheetOpen, setReportSheetOpen] = useState(false);
+  const [reportPlacing, setReportPlacing] = useState(false);
+  const [reportCoord, setReportCoord] = useState<{ latitude: number; longitude: number } | null>(
+    null,
+  );
+  const [selectedReport, setSelectedReport] = useState<UserReport | null>(null);
   const lastRegionRef = useRef<Region>(LONDON_REGION);
 
   // Bumped when the zoom level changes materially; passed to pins so any
@@ -399,6 +407,8 @@ export default function MapScreen() {
     setStationHub(null);
     setPickerDestination(null);
     setReportSheetOpen(false);
+    setReportPlacing(false);
+    setSelectedReport(null);
     setLayersOpen(false);
     setConnectionsOpen(false);
     setAirportsOpen(false);
@@ -981,7 +991,8 @@ export default function MapScreen() {
   // (no-op if notifications aren't granted / available).
   // Doc task 09: first save requires an account.
   const handleToggleSave = useCallback(
-    (event: AppEvent) => {
+    (event: AppEvent, opts?: { silent?: boolean }): boolean => {
+      let didSave = false;
       requireAccount('save', () => {
         setSavedEvents((prev) => {
           const isSaved = event.id in prev;
@@ -998,60 +1009,93 @@ export default function MapScreen() {
           saveEvent(event).catch(() => undefined);
           const prefs = prefsRef.current;
           if (prefs) scheduleEventReminder(event, prefs).catch(() => undefined);
-          showDialog('Saved and reminding you', reminderDialogMessage(event));
+          if (!opts?.silent) {
+            showDialog('Saved and reminding you', reminderDialogMessage(event));
+          }
+          didSave = true;
           return { ...prev, [event.id]: event };
         });
       });
+      return didSave;
     },
     [requireAccount],
   );
 
   // Export an event to the device calendar (start + end + 1h alarm).
   const handleAddToCalendar = useCallback(
-    async (event: AppEvent) => {
-      requireAccount('add_to_calendar', () => {
-        void (async () => {
-          const res = await addEventToCalendar(event);
-          track('event_calendar_attempted', {
-            event_id: event.id,
-            result: res.ok ? 'ok' : res.reason,
-          });
-          if (res.ok) {
-            showDialog('Added to calendar', `“${event.title}” is in your calendar.`);
-          } else if (res.reason === 'denied') {
-            showDialog(
-              'Calendar access needed',
-              'Allow calendar access in Settings to add events.',
-            );
-          } else if (res.reason === 'unavailable') {
-            showDialog(
-              'Not available yet',
-              'Calendar export turns on in the next build. Your event is still saved with a reminder.',
-            );
-          } else {
-            showDialog('Could not add', 'Something went wrong adding to your calendar.');
-          }
-        })();
-      });
-    },
+    (event: AppEvent, opts?: { silent?: boolean }): Promise<boolean> =>
+      new Promise((resolve) => {
+        const started = requireAccount('add_to_calendar', () => {
+          void (async () => {
+            const res = await addEventToCalendar(event);
+            track('event_calendar_attempted', {
+              event_id: event.id,
+              result: res.ok ? 'ok' : res.reason,
+            });
+            if (res.ok) {
+              if (!opts?.silent) {
+                showDialog('Added to calendar', `“${event.title}” is in your calendar.`);
+              }
+            } else if (res.reason === 'denied') {
+              showDialog(
+                'Calendar access needed',
+                'Allow calendar access in Settings to add events.',
+              );
+            } else if (res.reason === 'unavailable') {
+              showDialog(
+                'Could not add to calendar',
+                'This build cannot write to your calendar yet. The event was not added.',
+              );
+            } else {
+              showDialog('Could not add', 'Something went wrong adding to your calendar.');
+            }
+            resolve(res.ok);
+          })();
+        });
+        if (!started) resolve(false);
+      }),
     [requireAccount],
   );
 
-  // Hydrate community reports once on mount.
+  // Live community reports from Firestore, with a local cache fallback.
   useEffect(() => {
-    let cancelled = false;
-    loadReports().then((r) => {
-      if (!cancelled) setReports(r);
+    return subscribeReports((next) => {
+      setReports(next);
+      setSelectedReport((cur) => (cur ? next.find((r) => r.id === cur.id) ?? cur : null));
     });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [user?.uid]);
 
-  // Create a report at the current map centre.
+  useEffect(() => {
+    setNotificationOpenHandler((data) => {
+      if (data.kind !== 'community-report') return;
+      const lat = Number(data.lat);
+      const lng = Number(data.lng);
+      const id = typeof data.reportId === 'string' ? data.reportId : '';
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        mapRef.current?.animateToRegion(
+          { latitude: lat, longitude: lng, latitudeDelta: 0.04, longitudeDelta: 0.04 },
+          500,
+        );
+      }
+      if (id) {
+        setSelectedReport((cur) => reports.find((r) => r.id === id) ?? cur);
+      }
+    });
+    return () => setNotificationOpenHandler(null);
+  }, [reports]);
+
+  const startReportFlow = useCallback(() => {
+    requireAccount('report', () => {
+      track('report_place_started');
+      setReportSheetOpen(false);
+      setReportPlacing(true);
+    });
+  }, [requireAccount]);
+
+  // Create a report at the pin the user confirmed.
   const handleSubmitReport = useCallback(
     (category: ReportCategory, note: string) => {
-      const region = lastRegionRef.current;
+      const region = reportCoord ?? lastRegionRef.current;
       addReport({
         category,
         note: note || undefined,
@@ -1062,37 +1106,27 @@ export default function MapScreen() {
           track('report_submitted', { category, has_note: Boolean(note) });
           setReports(next);
           setReportSheetOpen(false);
+          setReportPlacing(false);
+          setReportCoord(null);
           showDialog(
             'Report added',
-            `Thanks — your ${REPORT_META[category].label.toLowerCase()} report is on the map.`,
+            `Thanks — your ${REPORT_META[category].label.toLowerCase()} report is on the map. Other drivers will get a ping.`,
           );
         })
-        .catch(() => setReportSheetOpen(false));
+        .catch((e) => {
+          setReportSheetOpen(false);
+          showDialog(
+            'Could not send report',
+            e instanceof Error ? e.message : 'Try that again in a moment.',
+          );
+        });
     },
-    [],
+    [reportCoord],
   );
 
-  // Tap an existing report → details + option to remove it.
   const handleReportPress = useCallback((report: UserReport) => {
     track('report_opened', { category: report.category, report_id: report.id });
-    const meta = REPORT_META[report.category] ?? REPORT_META.other;
-    const when = new Date(report.createdAt).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    showDialog(
-      meta.label,
-      `${report.note ? `${report.note}\n\n` : ''}Reported at ${when}`,
-      [
-        { label: 'Close', style: 'cancel' },
-        {
-          label: 'Remove',
-          style: 'destructive',
-          onPress: () =>
-            removeReport(report.id).then(setReports).catch(() => undefined),
-        },
-      ],
-    );
+    setSelectedReport(report);
   }, []);
 
   const recenter = () => {
@@ -1544,7 +1578,7 @@ export default function MapScreen() {
               anchor={{ x: 0.5, y: 1 }}
               tracksViewChanges={false}
             >
-              <ReportMarker category={report.category} />
+              <ReportMarker category={report.category} confirms={report.confirmCount} />
             </Marker>
           ))}
 
@@ -1732,7 +1766,7 @@ export default function MapScreen() {
         </SafeAreaView>
       ) : null}
 
-      {!destination && (
+      {!destination && !reportPlacing && (
       <MapActionStack
         bottomOffset={!isPremium && lockedEventsInFilter.length > 0 && !loading ? 168 : 90}
         primaryAction={{
@@ -1746,11 +1780,8 @@ export default function MapScreen() {
             key: 'report',
             label: 'Report something',
             icon: 'add-circle',
-            onPress: () => {
-              track('report_sheet_opened');
-              setReportSheetOpen(true);
-            },
-            active: reportSheetOpen,
+            onPress: startReportFlow,
+            active: reportSheetOpen || reportPlacing,
           },
           {
             key: 'connections',
@@ -1848,10 +1879,47 @@ export default function MapScreen() {
         }}
       />
 
+      <ReportPlaceOverlay
+        visible={reportPlacing}
+        onCancel={() => {
+          setReportPlacing(false);
+          setReportCoord(null);
+        }}
+        onConfirm={() => {
+          const r = lastRegionRef.current;
+          setReportCoord({ latitude: r.latitude, longitude: r.longitude });
+          setReportPlacing(false);
+          setReportSheetOpen(true);
+          track('report_pin_placed');
+        }}
+      />
+
       <ReportSheet
         visible={reportSheetOpen}
-        onClose={() => setReportSheetOpen(false)}
+        onClose={() => {
+          setReportSheetOpen(false);
+          setReportCoord(null);
+        }}
+        onMovePin={() => {
+          setReportSheetOpen(false);
+          setReportPlacing(true);
+        }}
         onSubmit={handleSubmitReport}
+      />
+
+      <ReportDetailSheet
+        report={selectedReport}
+        onClose={() => setSelectedReport(null)}
+        onConfirm={async (report) => {
+          const next = await confirmReport(report.id);
+          setReports(next);
+          const updated = next.find((r) => r.id === report.id);
+          if (updated) setSelectedReport(updated);
+        }}
+        onRemove={(report) => {
+          removeReport(report.id).then(setReports).catch(() => undefined);
+          setSelectedReport(null);
+        }}
       />
 
       <TrafficIncidentSheet
@@ -1974,9 +2042,10 @@ export default function MapScreen() {
         incidents={majorIncidents}
         lines={lineStatuses}
         onSaveEvent={(event) => {
-          if (!(event.id in savedEvents)) handleToggleSave(event);
+          if (event.id in savedEvents) return true;
+          return handleToggleSave(event, { silent: true });
         }}
-        onAddToCalendar={handleAddToCalendar}
+        onAddToCalendar={(event) => handleAddToCalendar(event, { silent: true })}
       />
 
       <AccountSheet

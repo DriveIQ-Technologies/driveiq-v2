@@ -22,7 +22,9 @@ import {
 interface Props {
   visible: boolean;
   onClose: () => void;
-  /** Submit a new report. Coordinates are supplied by the parent (map centre). */
+  /** Go back to the map to drag the pin. */
+  onMovePin?: () => void;
+  /** Submit a new report at the pin the parent already placed. */
   onSubmit: (category: ReportCategory, note: string) => void;
 }
 
@@ -31,7 +33,7 @@ interface Props {
  * The report drops at the centre of the current map view, so the user lines
  * up the spot first, then taps the report button.
  */
-export function ReportSheet({ visible, onClose, onSubmit }: Props) {
+export function ReportSheet({ visible, onClose, onSubmit, onMovePin }: Props) {
   const [category, setCategory] = useState<ReportCategory | null>(null);
   const [note, setNote] = useState('');
 
@@ -76,9 +78,16 @@ export function ReportSheet({ visible, onClose, onSubmit }: Props) {
             </Pressable>
           </View>
           <Text style={styles.subtitle}>
-            Your report drops a pin at the centre of the map. Move the map to
-            line up the spot, then choose what's happening.
+            Pin is set. Pick what you can see. You can still move the pin if this
+            is the wrong spot.
           </Text>
+
+          {onMovePin ? (
+            <Pressable style={styles.movePin} onPress={onMovePin} accessibilityRole="button">
+              <Ionicons name="move" size={16} color={colors.primary} />
+              <Text style={styles.movePinText}>Move pin</Text>
+            </Pressable>
+          ) : null}
 
           <View style={styles.grid}>
             {REPORT_ORDER.map((key) => {
@@ -171,7 +180,23 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     lineHeight: 18,
     marginTop: 6,
-    marginBottom: 16,
+    marginBottom: 12,
+  },
+  movePin: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: colors.primarySoft,
+    marginBottom: 14,
+  },
+  movePinText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primaryDark,
   },
   grid: {
     flexDirection: 'row',

@@ -15,6 +15,7 @@ export const colors = {
   primarySoft: '#E5F0FF',
   gradient: '#4CA9FF',
   accent: '#FF7E47',
+  success: '#16A34A',
 
   background: '#FFFFFF',
   backgroundDark: '#121212',

@@ -5,11 +5,13 @@ import { db, fsApi, auth } from './firebase';
 import type { NotificationPrefs } from './notifications';
 import type { LineSubscriptions } from './notifications';
 import type { SavedFlight } from './savedFlights';
+import type { FreeStationSlot } from '@/utils/freeStationSlot';
 
 export interface UserProfileSync {
   notificationPrefs?: NotificationPrefs;
   lineSubscriptions?: LineSubscriptions;
   savedFlights?: SavedFlight[];
+  freeStationSlot?: FreeStationSlot;
 }
 
 export async function syncUserProfile(patch: UserProfileSync): Promise<void> {
@@ -31,6 +33,7 @@ export async function syncUserProfile(patch: UserProfileSync): Promise<void> {
         delayMinutes: f.delayMinutes,
       }));
     }
+    if (patch.freeStationSlot) doc.freeStationSlot = patch.freeStationSlot;
     await fsApi.setDoc(fsApi.doc(db, 'users', uid), doc, { merge: true });
   } catch (e) {
     console.warn('[userSync] profile sync failed', e);

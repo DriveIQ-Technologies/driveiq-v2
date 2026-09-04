@@ -30,7 +30,7 @@ import {
 } from '@/services/analytics';
 import { auth, authApi } from '@/services/firebase';
 import { configureGoogleSignIn, getGoogleSignInIdToken } from '@/services/googleSignIn';
-import { claimWaitlistByEmail } from '@/services/waitlist';
+import { applyWaitlistOnAuth, type WaitlistClaimHints } from '@/services/waitlist';
 import { syncPremiumEntitlement } from '@/services/subscription';
 import { identifyPurchasesUser } from '@/services/purchases';
 import { registerPushToken, clearPushTokenOnLogout } from '@/services/pushTokens';
@@ -40,7 +40,8 @@ export type AccountAction =
   | 'notify'
   | 'watched_flight'
   | 'ai_question'
-  | 'add_to_calendar';
+  | 'add_to_calendar'
+  | 'report';
 
 export interface AccountPromptState {
   open: boolean;
@@ -80,12 +81,14 @@ export interface AuthContextValue {
    */
   completedAction: AccountAction | null;
   clearCompletedAction: () => void;
-  login: (email: string, password: string) => Promise<void>;
-  loginWithApple: () => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
-  signup: (name: string, email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, waitlist?: WaitlistClaimHints) => Promise<void>;
+  loginWithApple: (waitlist?: WaitlistClaimHints) => Promise<void>;
+  loginWithGoogle: (waitlist?: WaitlistClaimHints) => Promise<void>;
+  signup: (name: string, email: string, password: string, waitlist?: WaitlistClaimHints) => Promise<void>;
   logout: () => Promise<void>;
   sendReset: (email: string) => Promise<void>;
+  /** Firebase verify link. Returns true only if the email actually left. */
+  sendVerificationEmail: () => Promise<boolean>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateDisplayName: (name: string) => Promise<void>;
   updateUserEmail: (currentPassword: string, newEmail: string) => Promise<void>;
@@ -104,6 +107,7 @@ const ACTION_REASON_BY_ACTION: Record<AccountAction, string> = {
   watched_flight: 'Sign up to watch flights for delays and cancellations. It is free.',
   ai_question: 'Sign up to keep AI answers on this account. It is free.',
   add_to_calendar: 'Sign up to add events to your calendar. It is free.',
+  report: 'Sign up to report hazards so other drivers can see them. It is free.',
 };
 
 const emptyPrompt = (): AccountPromptState => ({
@@ -119,6 +123,20 @@ const emptyPrompt = (): AccountPromptState => ({
  * overlap.
  */
 const SHEET_DISMISS_MS = 300;
+
+/** Default Firebase template only — a custom continue URL often fails silently. */
+async function sendVerifyLink(user: User): Promise<boolean> {
+  if (!authApi) return false;
+  try {
+    await authApi.sendEmailVerification(user);
+    track('auth_verification_email_sent');
+    return true;
+  } catch (e) {
+    console.warn('[auth] verification email failed', e);
+    track('auth_verification_email_failed');
+    return false;
+  }
+}
 
 async function ensureAnonymousUser(): Promise<void> {
   if (!auth || !authApi) return;
@@ -331,7 +349,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       registerSheetDismisser,
       completedAction,
       clearCompletedAction,
-      login: async (email, password) => {
+      login: async (email, password, waitlist) => {
         const { a, api } = requireAuth();
         // Leaving anonymous browse for an existing account.
         if (a.currentUser?.isAnonymous) {
@@ -340,25 +358,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const cred = await api.signInWithEmailAndPassword(a, email, password);
         await identifyFirebaseUser(cred.user);
         track('auth_sign_in_succeeded');
-        if (cred.user.email) {
-          try {
-            const result = await claimWaitlistByEmail(cred.user.email);
-            track('waitlist_auto_claim_checked', {
-              source: 'email_signin',
-              status: result.status,
-              ok: result.ok,
-            });
-            if (result.ok && result.status === 'granted') {
-              const { presentPremiumUnlock } = await import('@/services/subscription');
-              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-            }
-          } catch (e) {
-            console.warn('[auth] waitlist auto-claim (signin) failed', e);
-          }
+        const granted = await applyWaitlistOnAuth({
+          accountEmail: cred.user.email,
+          waitlistEmail: waitlist?.waitlistEmail,
+          claimToken: waitlist?.claimToken,
+          source: 'email_signin',
+        });
+        if (granted) {
+          const { presentPremiumUnlock } = await import('@/services/subscription');
+          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
         }
         await syncPremiumEntitlement();
       },
-      loginWithApple: async () => {
+      loginWithApple: async (waitlist) => {
         const { a, api } = requireAuth();
         if (Platform.OS !== 'ios') {
           throw new Error('Sign in with Apple is available on iPhone only.');
@@ -421,25 +433,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           displayName: fullName || nextUser.displayName,
         });
         track('auth_sign_in_succeeded', { provider: 'apple' });
-        if (nextUser.email) {
-          try {
-            const result = await claimWaitlistByEmail(nextUser.email);
-            track('waitlist_auto_claim_checked', {
-              source: 'apple_signin',
-              status: result.status,
-              ok: result.ok,
-            });
-            if (result.ok && result.status === 'granted') {
-              const { presentPremiumUnlock } = await import('@/services/subscription');
-              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-            }
-          } catch (e) {
-            console.warn('[auth] waitlist auto-claim (apple) failed', e);
-          }
+        const granted = await applyWaitlistOnAuth({
+          accountEmail: nextUser.email,
+          waitlistEmail: waitlist?.waitlistEmail,
+          claimToken: waitlist?.claimToken,
+          source: 'apple_signin',
+        });
+        if (granted) {
+          const { presentPremiumUnlock } = await import('@/services/subscription');
+          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
         }
         await syncPremiumEntitlement();
       },
-      loginWithGoogle: async () => {
+      loginWithGoogle: async (waitlist) => {
         const { a, api } = requireAuth();
         const idToken = await getGoogleSignInIdToken();
         const firebaseCredential = api.GoogleAuthProvider.credential(idToken);
@@ -473,25 +479,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         await identifyFirebaseUser(nextUser);
         track('auth_sign_in_succeeded', { provider: 'google' });
-        if (nextUser.email) {
-          try {
-            const result = await claimWaitlistByEmail(nextUser.email);
-            track('waitlist_auto_claim_checked', {
-              source: 'google_signin',
-              status: result.status,
-              ok: result.ok,
-            });
-            if (result.ok && result.status === 'granted') {
-              const { presentPremiumUnlock } = await import('@/services/subscription');
-              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-            }
-          } catch (e) {
-            console.warn('[auth] waitlist auto-claim (google) failed', e);
-          }
+        const granted = await applyWaitlistOnAuth({
+          accountEmail: nextUser.email,
+          waitlistEmail: waitlist?.waitlistEmail,
+          claimToken: waitlist?.claimToken,
+          source: 'google_signin',
+        });
+        if (granted) {
+          const { presentPremiumUnlock } = await import('@/services/subscription');
+          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
         }
         await syncPremiumEntitlement();
       },
-      signup: async (name, email, password) => {
+      signup: async (name, email, password, waitlist) => {
         const { a, api } = requireAuth();
         const trimmedEmail = email.trim();
         const trimmed = name.trim();
@@ -545,35 +545,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
         track('signup_completed', { has_name: Boolean(trimmed) });
-        if (nextUser.email) {
-          try {
-            const result = await claimWaitlistByEmail(nextUser.email);
-            track('waitlist_auto_claim_checked', {
-              source: 'email_signup',
-              status: result.status,
-              ok: result.ok,
-            });
-            if (result.ok && result.status === 'granted') {
-              const { presentPremiumUnlock } = await import('@/services/subscription');
-              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-            }
-          } catch (e) {
-            console.warn('[auth] waitlist auto-claim (signup) failed', e);
-          }
+        const granted = await applyWaitlistOnAuth({
+          accountEmail: nextUser.email ?? trimmedEmail,
+          waitlistEmail: waitlist?.waitlistEmail,
+          claimToken: waitlist?.claimToken,
+          source: 'email_signup',
+        });
+        if (granted) {
+          const { presentPremiumUnlock } = await import('@/services/subscription');
+          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
         }
         await syncPremiumEntitlement();
 
-        try {
-          const origin =
-            process.env.EXPO_PUBLIC_AUTH_CONTINUE_URL ?? 'https://driveiq.app';
-          await api.sendEmailVerification(nextUser, {
-            url: origin,
-            handleCodeInApp: false,
+        const verificationSent = nextUser.emailVerified
+          ? null
+          : await sendVerifyLink(nextUser);
+        if (!granted) {
+          const { presentAccountReady } = await import('@/services/accountReady');
+          presentAccountReady({
+            name: trimmed,
+            email: nextUser.email ?? trimmedEmail,
+            verificationSent,
           });
-          track('auth_verification_email_sent');
-        } catch (e) {
-          console.warn('[auth] verification email failed', e);
-          track('auth_verification_email_failed');
         }
       },
       logout: async () => {
@@ -590,6 +583,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { a, api } = requireAuth();
         await api.sendPasswordResetEmail(a, email);
         track('auth_password_reset_sent');
+      },
+      sendVerificationEmail: async () => {
+        const { a } = requireAuth();
+        if (!a.currentUser || a.currentUser.isAnonymous) return false;
+        return sendVerifyLink(a.currentUser);
       },
       changePassword: async (currentPassword, newPassword) => {
         const { a, api } = requireAuth();

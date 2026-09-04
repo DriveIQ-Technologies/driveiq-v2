@@ -2,8 +2,7 @@
  * Saved stations + notify prefs.
  *
  * Looking at hubs is free. Save / notify is the paid line (free: 1 saved station).
- * Data is persisted locally now so it survives reloads. Account-required gating
- * (task 09) can wrap these calls later without changing the storage shape.
+ * That one hub is locked for 7 days so a free account cannot rotate every day.
  */
 
 import { track } from '@/services/analytics';
@@ -17,17 +16,32 @@ import {
 import { hasProAccess } from '@/services/subscription';
 import { getJSON, setJSON } from '@/services/storage';
 import type { MajorStation } from '@/services/stations';
+import {
+  formatStationLockUntil,
+  freeStationSaveGate,
+  FREE_SAVED_STATION_LIMIT,
+  FREE_STATION_LOCK_MS,
+  isSlotActive,
+  mergeFreeStationSlots,
+  slotAfterFreeSave,
+  type FreeStationSlot,
+  type SavedStation,
+  type SavedStationMap,
+} from '@/utils/freeStationSlot';
+
+export {
+  formatStationLockUntil,
+  freeStationSaveGate,
+  FREE_SAVED_STATION_LIMIT,
+  FREE_STATION_LOCK_MS,
+  isSlotActive,
+  mergeFreeStationSlots,
+  slotAfterFreeSave,
+};
+export type { FreeStationSlot, SavedStation, SavedStationMap };
 
 const SAVED_STATIONS_KEY = 'driveiq.savedStations.v1';
-const FREE_SAVED_STATION_LIMIT = 1;
-
-export interface SavedStation {
-  stationId: string;
-  notify: boolean;
-  savedAt: number;
-}
-
-export type SavedStationMap = Record<string, SavedStation>;
+const FREE_SLOT_KEY = 'driveiq.freeStationSlot.v1';
 
 export async function loadSavedStations(): Promise<SavedStationMap> {
   return getJSON<SavedStationMap>(SAVED_STATIONS_KEY, {});
@@ -35,6 +49,64 @@ export async function loadSavedStations(): Promise<SavedStationMap> {
 
 async function persistSavedStations(next: SavedStationMap): Promise<void> {
   await setJSON(SAVED_STATIONS_KEY, next);
+}
+
+async function loadLocalSlot(): Promise<FreeStationSlot | null> {
+  const raw = await getJSON<FreeStationSlot | null>(FREE_SLOT_KEY, null);
+  if (!raw || typeof raw.stationId !== 'string' || !Number.isFinite(raw.lockedUntil)) {
+    return null;
+  }
+  return raw;
+}
+
+async function loadRemoteSlot(): Promise<FreeStationSlot | null> {
+  try {
+    const { auth, db, fsApi } = await import('@/services/firebase');
+    const uid = auth?.currentUser?.uid;
+    if (!uid || !db || !fsApi) return null;
+    const snap = await fsApi.getDoc(fsApi.doc(db, 'users', uid));
+    const raw = snap.data()?.freeStationSlot as FreeStationSlot | undefined;
+    if (!raw || typeof raw.stationId !== 'string' || !Number.isFinite(Number(raw.lockedUntil))) {
+      return null;
+    }
+    return { stationId: raw.stationId, lockedUntil: Number(raw.lockedUntil) };
+  } catch {
+    return null;
+  }
+}
+
+export async function loadFreeStationSlot(): Promise<FreeStationSlot | null> {
+  const now = Date.now();
+  const [local, remote, map] = await Promise.all([
+    loadLocalSlot(),
+    loadRemoteSlot(),
+    loadSavedStations(),
+  ]);
+  let merged = mergeFreeStationSlots(local, remote, now);
+
+  // Anyone who already has a free hub saved, but no lock yet, starts the 7-day
+  // window now — otherwise they could unsave and rotate the same day.
+  const savedIds = Object.keys(map);
+  if (!isSlotActive(merged, now) && savedIds.length === 1) {
+    merged = { stationId: savedIds[0], lockedUntil: now + FREE_STATION_LOCK_MS };
+    await persistFreeSlot(merged);
+    return merged;
+  }
+
+  if (merged && JSON.stringify(merged) !== JSON.stringify(local)) {
+    await setJSON(FREE_SLOT_KEY, merged);
+  }
+  return merged;
+}
+
+async function persistFreeSlot(slot: FreeStationSlot): Promise<void> {
+  await setJSON(FREE_SLOT_KEY, slot);
+  try {
+    const { syncUserProfile } = await import('@/services/userSync');
+    await syncUserProfile({ freeStationSlot: slot });
+  } catch {
+    /* offline is fine — local lock still holds */
+  }
 }
 
 async function applyStationNotificationLines(
@@ -50,11 +122,11 @@ async function applyStationNotificationLines(
   await saveLineSubscriptions(next);
 }
 
-export type SaveStationResult = 'saved' | 'unsaved' | 'blocked-limit';
+export type SaveStationResult = 'saved' | 'unsaved' | 'blocked-limit' | 'blocked-cooldown';
 
 export async function toggleSaveStation(
   station: MajorStation,
-): Promise<{ result: SaveStationResult; map: SavedStationMap }> {
+): Promise<{ result: SaveStationResult; map: SavedStationMap; slot: FreeStationSlot | null }> {
   const map = await loadSavedStations();
   const existing = map[station.id];
   if (existing) {
@@ -65,21 +137,26 @@ export async function toggleSaveStation(
       await applyStationNotificationLines(station, false);
     }
     track('station_unsaved', { station_id: station.id });
-    return { result: 'unsaved', map: next };
+    return { result: 'unsaved', map: next, slot: await loadLocalSlot() };
   }
 
   const isPremium = await hasProAccess();
-  const savedCount = Object.keys(map).length;
-  if (!isPremium && savedCount >= FREE_SAVED_STATION_LIMIT) {
-    track('station_save_blocked_limit', {
-      tier: 'free',
-      current_saved_count: savedCount,
-      attempted_station_id: station.id,
-    });
-    if (savedCount >= 1) {
-      track('second_station_save_attempted', { station_id: station.id });
+  const slot = isPremium ? null : await loadFreeStationSlot();
+  if (!isPremium) {
+    const gate = freeStationSaveGate({ stationId: station.id, map, slot });
+    if (gate !== 'ok') {
+      track('station_save_blocked_limit', {
+        tier: 'free',
+        reason: gate,
+        current_saved_count: Object.keys(map).length,
+        attempted_station_id: station.id,
+        locked_station_id: slot?.stationId,
+      });
+      if (gate === 'blocked-limit') {
+        track('second_station_save_attempted', { station_id: station.id });
+      }
+      return { result: gate, map, slot };
     }
-    return { result: 'blocked-limit', map };
   }
 
   const next: SavedStationMap = {
@@ -91,34 +168,36 @@ export async function toggleSaveStation(
     },
   };
   await persistSavedStations(next);
+  const nextSlot = isPremium ? slot : slotAfterFreeSave(station.id, slot);
+  if (!isPremium && nextSlot) await persistFreeSlot(nextSlot);
   void incrementUsageCounter('stationsWatched');
   track('station_saved', {
     station_id: station.id,
     tier: isPremium ? 'premium' : 'free',
   });
-  return { result: 'saved', map: next };
+  return { result: 'saved', map: next, slot: nextSlot };
 }
 
-/**
- * Ensure a station is in the saved map. Used by notify so one tap can both
- * save and turn alerts on. Returns blocked-limit if free quota is full.
- */
 async function ensureStationSaved(
   station: MajorStation,
   map: SavedStationMap,
-): Promise<{ result: 'ok' | 'blocked-limit'; map: SavedStationMap }> {
-  if (map[station.id]) return { result: 'ok', map };
+  slot: FreeStationSlot | null,
+  isPremium: boolean,
+): Promise<{ result: 'ok' | 'blocked-limit' | 'blocked-cooldown'; map: SavedStationMap; slot: FreeStationSlot | null }> {
+  if (map[station.id]) return { result: 'ok', map, slot };
 
-  const isPremium = await hasProAccess();
-  const savedCount = Object.keys(map).length;
-  if (!isPremium && savedCount >= FREE_SAVED_STATION_LIMIT) {
-    track('station_save_blocked_limit', {
-      tier: 'free',
-      current_saved_count: savedCount,
-      attempted_station_id: station.id,
-      source: 'notify',
-    });
-    return { result: 'blocked-limit', map };
+  if (!isPremium) {
+    const gate = freeStationSaveGate({ stationId: station.id, map, slot });
+    if (gate !== 'ok') {
+      track('station_save_blocked_limit', {
+        tier: 'free',
+        reason: gate,
+        current_saved_count: Object.keys(map).length,
+        attempted_station_id: station.id,
+        source: 'notify',
+      });
+      return { result: gate, map, slot };
+    }
   }
 
   const next: SavedStationMap = {
@@ -130,50 +209,50 @@ async function ensureStationSaved(
     },
   };
   await persistSavedStations(next);
+  const nextSlot = isPremium ? slot : slotAfterFreeSave(station.id, slot);
+  if (!isPremium && nextSlot) await persistFreeSlot(nextSlot);
   void incrementUsageCounter('stationsWatched');
   track('station_saved', {
     station_id: station.id,
     tier: isPremium ? 'premium' : 'free',
     source: 'notify',
   });
-  return { result: 'ok', map: next };
+  return { result: 'ok', map: next, slot: nextSlot };
 }
 
 export type NotifyStationResult =
   | 'updated'
   | 'blocked-limit'
+  | 'blocked-cooldown'
   | 'permission-denied';
 
-/**
- * Turn station alerts on/off. Enabling also saves the station (if needed)
- * and asks for notification permission. Everything is written to local
- * storage immediately.
- */
 export async function setStationNotify(
   station: MajorStation,
   enabled: boolean,
-): Promise<{ result: NotifyStationResult; map: SavedStationMap }> {
+): Promise<{ result: NotifyStationResult; map: SavedStationMap; slot: FreeStationSlot | null }> {
   let map = await loadSavedStations();
+  const isPremium = await hasProAccess();
+  let slot = isPremium ? null : await loadFreeStationSlot();
 
   if (enabled) {
-    const ensured = await ensureStationSaved(station, map);
-    if (ensured.result === 'blocked-limit') {
-      return { result: 'blocked-limit', map: ensured.map };
+    const ensured = await ensureStationSaved(station, map, slot, isPremium);
+    if (ensured.result === 'blocked-limit' || ensured.result === 'blocked-cooldown') {
+      return { result: ensured.result, map: ensured.map, slot: ensured.slot };
     }
     map = ensured.map;
+    slot = ensured.slot;
 
     const granted = await ensurePermission();
     resetSheetPointers();
     if (!granted) {
       track('station_notify_permission_denied', { station_id: station.id });
-      return { result: 'permission-denied', map };
+      return { result: 'permission-denied', map, slot };
     }
   }
 
   const existing = map[station.id];
   if (!existing) {
-    // Turning off when nothing is saved — nothing to persist.
-    return { result: 'updated', map };
+    return { result: 'updated', map, slot };
   }
 
   const next: SavedStationMap = {
@@ -186,5 +265,5 @@ export async function setStationNotify(
   await persistSavedStations(next);
   await applyStationNotificationLines(station, enabled);
   track('station_notify_toggled', { station_id: station.id, enabled });
-  return { result: 'updated', map: next };
+  return { result: 'updated', map: next, slot };
 }

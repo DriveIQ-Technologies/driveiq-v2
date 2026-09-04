@@ -3,7 +3,7 @@
     "name": "DriveIQ",
     "slug": "driveiq-91cbfgcslw1jeepr9yba",
     "scheme": "driveiq",
-    "version": "6.1.5",
+    "version": "6.1.6",
     "orientation": "portrait",
     "icon": "./assets/driveiq-app-icon-1024.png",
     "userInterfaceStyle": "light",
@@ -16,10 +16,12 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "driveiq.app",
-      "buildNumber": "19",
+      "buildNumber": "21",
       "usesAppleSignIn": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location to show nearby events and calculate distance to event venues."
+        "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location to show nearby events and calculate distance to event venues.",
+        "NSCalendarsUsageDescription": "DriveIQ adds saved events to your calendar with the start and finish times.",
+        "NSCalendarsFullAccessUsageDescription": "DriveIQ adds saved events to your calendar with the start and finish times."
       }
     },
     "android": {
@@ -32,7 +34,7 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
       ],
-      "versionCode": 22
+      "versionCode": 24
     },
     "web": {
       "bundler": "metro"
@@ -40,6 +42,7 @@
     "plugins": [
       "expo-router",
       "expo-apple-authentication",
+      "expo-calendar",
       [
         "expo-location",
         {

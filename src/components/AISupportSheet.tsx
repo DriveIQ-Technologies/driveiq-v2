@@ -14,6 +14,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 
 import {
+  applyServerAiQuota,
+  consumeAiQuestion,
   getAiQuota,
   type AiQuota,
 } from '@/services/aiQuota';
@@ -35,8 +37,6 @@ import {
 } from '@/utils/dateFilters';
 import { addDaysYmd, londonDayBounds, londonYmd } from '@/utils/ukTime';
 import { turnoutRange, venueProfileFor } from '@/data/venueProfiles';
-import { reminderConfirmationCopy } from '@/services/eventReminders';
-import { showDialog } from '@/services/dialog';
 import { ChatComposer } from '@/components/ai/ChatComposer';
 import { EmptyHero, type PromptCard } from '@/components/ai/EmptyHero';
 import { EventSectionBlock } from '@/components/ai/EventSectionBlock';
@@ -57,16 +57,17 @@ interface Props {
   events?: AppEvent[];
   incidents?: TrafficIncident[];
   lines?: LineStatus[];
-  /** Save + reminder for an event (no-op if not provided). */
-  onSaveEvent?: (event: AppEvent) => void;
-  /** Add an event to the device calendar (no-op if not provided). */
-  onAddToCalendar?: (event: AppEvent) => void;
+  /** Save + reminder. Return true only after it actually saved. */
+  onSaveEvent?: (event: AppEvent) => boolean | Promise<boolean>;
+  /** Add to device calendar. Return true only after it actually landed. */
+  onAddToCalendar?: (event: AppEvent) => boolean | Promise<boolean>;
 }
 
 interface ChatAction {
   label: string;
   icon: React.ComponentProps<typeof Ionicons>['name'];
-  onPress: () => void;
+  onPress: () => boolean | Promise<boolean>;
+  doneLabel?: string;
 }
 
 interface ChatMessage {
@@ -185,7 +186,7 @@ function resolveWindow(q: string, now: Date = new Date()): { label: string; rang
   return null;
 }
 
-const EVENT_WORDS = ['event', 'events', 'happening', 'going on', 'on tonight', 'on today',
+const EVENT_WORDS = ['event', 'events', 'happening', 'on tonight', 'on today',
   'on tomorrow', 'whats on', "what's on", 'what is on', 'show', 'shows', 'gig', 'gigs',
   'concert', 'concerts', 'match', 'matches', 'fixture', 'fixtures', 'anything on', 'look out for'];
 
@@ -433,16 +434,25 @@ function byFreshThenDemand(a: AppEvent, b: AppEvent): number {
   return byDemandThenTime(a, b);
 }
 
-/** Prefer stadium / featured events in the asked window so the model sees the big nights. */
+/**
+ * Prefer stadium / featured events in the asked window only.
+ * For non-event questions returns empty so we never pollute the agent context.
+ */
 function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
   const q = question.toLowerCase();
+  // Hard stop: don't send events for travel / non-event questions
+  if (looksLikeTravelQuestion(q) || looksLikeEventRefusal(q)) return [];
+  if (!looksLikeEventQuestion(question)) return [];
+
   const tonightAsk = /\b(today|tonight|now|going on)\b/.test(q);
   const win = resolveWindow(q);
+  // Use explicit window or "this week" for big queries; never spill beyond 7 days
   const range =
     win?.range ??
     (looksLikeBigQuery(q)
       ? { start: rangeFor('today').start, end: rangeFor('day:6').end }
-      : rangeFor('next3'));
+      : { start: rangeFor('today').start, end: rangeFor('tomorrow').end });
+
   const inWindow = all.filter(
     (e) =>
       isInRange(e.startsAt, range) ||
@@ -458,6 +468,7 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
     : inWindow;
   const windowIds = new Set(useful.map((e) => e.id));
   const rankedWindow = [...useful].sort(tonightAsk ? byFreshThenDemand : byDemandThenTime);
+  // After 21:00 London, also peek tomorrow for "tonight" queries
   let nextUp: AppEvent[] = [];
   if (tonightAsk && londonHour() >= 21) {
     const tomorrow = rangeFor('tomorrow');
@@ -471,14 +482,13 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
       .sort(byDemandThenTime)
       .slice(0, 8);
   }
-  const rest = all.filter((e) => !windowIds.has(e.id)).sort(byDemandThenTime);
   const seen = new Set<string>();
   const out: AppEvent[] = [];
-  for (const e of [...rankedWindow, ...nextUp, ...rest]) {
+  for (const e of [...rankedWindow, ...nextUp]) {
     if (seen.has(e.id)) continue;
     seen.add(e.id);
     out.push(e);
-    if (out.length >= 50) break;
+    if (out.length >= 40) break;
   }
   return out;
 }
@@ -489,8 +499,21 @@ function looksLikeEmptyAgentReply(text: string): boolean {
   );
 }
 
+function looksLikeTravelQuestion(q: string): boolean {
+  return /\b(train|trains|tube|rail|tfl|travel|traffic|road|roads|delay|delays|flight|flights|airport|heathrow|gatwick|stansted|luton|congestion|disruption)\b/i.test(
+    q,
+  );
+}
+
+function looksLikeEventRefusal(q: string): boolean {
+  return /don'?t want.{0,40}events?|not (about )?events|no events|besides events|other than events|instead of events/i.test(
+    q,
+  );
+}
+
 function looksLikeEventQuestion(q: string): boolean {
   const lower = q.toLowerCase();
+  if (looksLikeTravelQuestion(lower) || looksLikeEventRefusal(lower)) return false;
   return (
     EVENT_WORDS.some((w) => lower.includes(w)) ||
     looksLikeBigQuery(lower) ||
@@ -515,6 +538,46 @@ function mentionsEvent(text: string, e: AppEvent): boolean {
   return venueHit && words.some((w) => t.includes(w));
 }
 
+/** Chip row that tracks done-state per chip to prevent double-taps. */
+function ActionChipRow({ actions, msgId }: { actions: ChatAction[]; msgId: string }) {
+  const [done, setDone] = React.useState<Record<number, boolean>>({});
+  const [busy, setBusy] = React.useState<number | null>(null);
+  return (
+    <View style={styles.actionsRow}>
+      {actions.map((a, i) => {
+        const isDone = !!done[i];
+        const isBusy = busy === i;
+        return (
+          <Pressable
+            key={`${msgId}-a-${i}`}
+            style={[styles.actionChip, isDone && styles.actionChipDone]}
+            onPress={() => {
+              if (isDone || busy != null) return;
+              setBusy(i);
+              void Promise.resolve(a.onPress()).then((ok) => {
+                if (ok) setDone((prev) => ({ ...prev, [i]: true }));
+                setBusy(null);
+              });
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={isDone ? (a.doneLabel ?? a.label) : a.label}
+            accessibilityState={{ disabled: isDone || isBusy }}
+          >
+            <Ionicons
+              name={isDone ? 'checkmark-circle' : a.icon}
+              size={14}
+              color={isDone ? colors.success : colors.textPrimary}
+            />
+            <Text style={[styles.actionChipText, isDone && styles.actionChipTextDone]}>
+              {isDone ? (a.doneLabel ?? 'Done') : isBusy ? 'Working…' : a.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function AISupportSheet({
   visible,
   onClose,
@@ -534,14 +597,22 @@ export function AISupportSheet({
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
-    if (!visible) {
-      setMessages([]);
-      setInput('');
-      setSending(false);
-      return;
-    }
+    if (!visible) return;
     trackScreen('ai_support_sheet');
-    getAiQuota().then(setQuota);
+    getAiQuota().then((q) => {
+      setQuota((prev) => {
+        // Never jump back up after a question this London day.
+        if (
+          prev &&
+          !prev.pro &&
+          !q.pro &&
+          q.remaining > prev.remaining
+        ) {
+          return prev;
+        }
+        return q;
+      });
+    });
     void syncPremiumEntitlement();
   }, [visible]);
 
@@ -550,16 +621,11 @@ export function AISupportSheet({
   // inset directly and pad the header so the X is always reachable.
   const insets = useSafeAreaInsets();
 
-  const pushBot = (text: string) =>
-    setMessages((prev) => [...prev, { id: `b-${Date.now()}-${Math.random()}`, role: 'bot', text }]);
-
-  const confirmRemind = (event: AppEvent, source: 'chat' | 'card') => {
-    if (!onSaveEvent) return;
-    onSaveEvent(event);
-    track('ai_event_action_tapped', { action: 'remind', source });
-    const copy = reminderConfirmationCopy(event);
-    pushBot(copy);
-    showDialog('Reminder on', copy);
+  const confirmRemind = async (event: AppEvent, source: 'chat' | 'card'): Promise<boolean> => {
+    if (!onSaveEvent) return false;
+    const ok = await onSaveEvent(event);
+    if (ok) track('ai_event_action_tapped', { action: 'remind', source });
+    return ok;
   };
 
   /** Build reminder / calendar chips for the events the answer offered. */
@@ -569,6 +635,7 @@ export function AISupportSheet({
       if (onSaveEvent) {
         actions.push({
           label: i === 0 ? 'Remind me' : `Remind: ${shortTitle(e.title)}`,
+          doneLabel: 'Saved',
           icon: 'notifications-outline',
           onPress: () => confirmRemind(e, 'chat'),
         });
@@ -577,11 +644,12 @@ export function AISupportSheet({
     if (offer[0] && onAddToCalendar) {
       actions.push({
         label: 'Add to calendar',
+        doneLabel: 'Added',
         icon: 'calendar-outline',
-        onPress: () => {
-          onAddToCalendar(offer[0]);
-          track('ai_event_action_tapped', { action: 'calendar', source: 'chat' });
-          pushBot(`Added “${offer[0].title}” to your calendar.`);
+        onPress: async () => {
+          const ok = await onAddToCalendar(offer[0]);
+          if (ok) track('ai_event_action_tapped', { action: 'calendar', source: 'chat' });
+          return ok;
         },
       });
     }
@@ -635,12 +703,14 @@ export function AISupportSheet({
               return true;
             });
 
-          const picked = eventsForAgent(trimmed, events ?? []);
-          const source =
-            picked.length > 0 ? picked : [...(events ?? [])].sort(byDemandThenTime).slice(0, 50);
+          const wantEvents = looksLikeEventQuestion(trimmed);
+          // Only send events when the question is clearly about events.
+          // Never send events for travel/non-event questions.
+          const picked = wantEvents ? eventsForAgent(trimmed, events ?? []) : [];
+          const source = picked; // No global fallback — window is authoritative
           const cardEvents = source.filter((e) => eventStatus(e) !== 'finished').slice(0, 24);
           const eventSections =
-            looksLikeEventQuestion(trimmed) && cardEvents.length > 0
+            wantEvents && cardEvents.length > 0
               ? groupEventsByDay(cardEvents)
               : undefined;
           const clientEvents = source.map((e) => ({
@@ -698,12 +768,16 @@ export function AISupportSheet({
             void incrementUsageCounter('aiQuestions');
           }
           if (!pro && res.limit != null && res.remaining != null) {
+            await applyServerAiQuota(res.limit, res.remaining);
             setQuota({
               pro: false,
               limit: res.limit,
               remaining: res.remaining,
               used: res.limit - res.remaining,
             });
+          } else if (!pro && !res.capped) {
+            const next = await consumeAiQuestion();
+            setQuota(next);
           } else if (pro) {
             setQuota({ pro: true, used: 0, limit: Infinity, remaining: Infinity });
           }
@@ -739,6 +813,7 @@ export function AISupportSheet({
               });
               answer = eventResult.text;
             } else if (
+              wantEvents &&
               leaders.length > 0 &&
               !leaders.some((e) => mentionsEvent(answer, e))
             ) {
@@ -804,15 +879,13 @@ export function AISupportSheet({
       })();
   };
 
-  const handleRemind = (event: AppEvent) => {
-    confirmRemind(event, 'card');
-  };
+  const handleRemind = (event: AppEvent) => confirmRemind(event, 'card');
 
-  const handleCalendar = (event: AppEvent) => {
-    if (!onAddToCalendar) return;
-    onAddToCalendar(event);
-    track('ai_event_action_tapped', { action: 'calendar', source: 'card' });
-    pushBot(`Added “${event.title}” to your calendar.`);
+  const handleCalendar = async (event: AppEvent): Promise<boolean> => {
+    if (!onAddToCalendar) return false;
+    const ok = await onAddToCalendar(event);
+    if (ok) track('ai_event_action_tapped', { action: 'calendar', source: 'card' });
+    return ok;
   };
 
   const quotaLabel =
@@ -935,20 +1008,7 @@ export function AISupportSheet({
                           />
                         ))}
                         {m.actions && m.actions.length > 0 ? (
-                          <View style={styles.actionsRow}>
-                            {m.actions.map((a, i) => (
-                              <Pressable
-                                key={`${m.id}-a-${i}`}
-                                style={styles.actionChip}
-                                onPress={a.onPress}
-                                accessibilityRole="button"
-                                accessibilityLabel={a.label}
-                              >
-                                <Ionicons name={a.icon} size={14} color={colors.textPrimary} />
-                                <Text style={styles.actionChipText}>{a.label}</Text>
-                              </Pressable>
-                            ))}
-                          </View>
+                          <ActionChipRow actions={m.actions} msgId={m.id} />
                         ) : null}
                       </>
                     )}
@@ -1101,6 +1161,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textPrimary,
     fontWeight: '600',
+  },
+  actionChipDone: {
+    opacity: 0.8,
+    borderColor: colors.success,
+  },
+  actionChipTextDone: {
+    color: colors.success,
   },
   botBubble: {
     alignSelf: 'flex-start',

@@ -217,7 +217,7 @@ export function SidebarMenu({
         {
           key: 'signup',
           icon: 'person-add',
-          label: 'Create an account',
+          label: 'Create a free account',
           handler: () => afterClose(() => onOpenAuth('signup')),
         },
       ];

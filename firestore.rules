@@ -102,6 +102,12 @@ service cloud.firestore {
         ]);
     }
 
+    // Community hazard reports. Writes go through Cloud Functions.
+    match /communityReports/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

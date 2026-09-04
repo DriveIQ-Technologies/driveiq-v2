@@ -49,7 +49,7 @@ const STEPS: Step[] = [
   {
     icon: 'add-circle',
     title: 'Report what you see',
-    body: "Spotted a hazard, accident or closure? Tap ➕, line up the map and let everyone nearby know. You're all set. Enjoy DriveIQ!",
+    body: "Spotted a hazard, accident or closure? Tap ➕, drag the map to drop the pin, then tell other drivers. They get a ping, and they can tap thumbs up if they can see it too.",
   },
 ];
 

@@ -14,6 +14,7 @@ export interface NotificationPrefs {
   'line-closures': boolean;
   'saved-events': boolean;
   'saved-flights': boolean;
+  'community-reports': boolean;
 }
 
 const DEFAULT_PREFS: NotificationPrefs = {
@@ -21,6 +22,7 @@ const DEFAULT_PREFS: NotificationPrefs = {
   'line-closures': true,
   'saved-events': true,
   'saved-flights': true,
+  'community-reports': true,
 };
 
 interface SavedFlight {
@@ -94,6 +96,7 @@ function parsePrefs(raw: unknown): NotificationPrefs {
     'line-closures': x['line-closures'] !== false,
     'saved-events': x['saved-events'] !== false,
     'saved-flights': x['saved-flights'] !== false,
+    'community-reports': x['community-reports'] !== false,
   };
 }
 

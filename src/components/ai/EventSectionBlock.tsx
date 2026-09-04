@@ -9,8 +9,8 @@ import type { EventDaySection } from './eventPresentation';
 
 interface Props {
   section: EventDaySection;
-  onRemind?: (event: AppEvent) => void;
-  onCalendar?: (event: AppEvent) => void;
+  onRemind?: (event: AppEvent) => boolean | Promise<boolean>;
+  onCalendar?: (event: AppEvent) => boolean | Promise<boolean>;
 }
 
 export function EventSectionBlock({ section, onRemind, onCalendar }: Props) {

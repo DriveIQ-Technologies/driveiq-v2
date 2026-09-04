@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '@/theme/colors';
 import { REPORT_META, type ReportCategory } from '@/services/reports';
@@ -10,8 +10,15 @@ import { REPORT_META, type ReportCategory } from '@/services/reports';
  * icon — visually distinct from event pins (which are ringed bubbles) so
  * user reports never get confused with venue events.
  */
-export function ReportMarker({ category }: { category: ReportCategory }) {
+export function ReportMarker({
+  category,
+  confirms,
+}: {
+  category: ReportCategory;
+  confirms?: number;
+}) {
   const meta = REPORT_META[category] ?? REPORT_META.other;
+  const count = confirms && confirms > 0 ? confirms : 0;
   return (
     <View style={styles.container}>
       <View style={[styles.bubble, { backgroundColor: meta.color }]}>
@@ -21,6 +28,11 @@ export function ReportMarker({ category }: { category: ReportCategory }) {
           color={colors.textOnPrimary}
         />
       </View>
+      {count > 0 ? (
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{count > 99 ? '99+' : count}</Text>
+        </View>
+      ) : null}
       <View style={[styles.tail, { borderTopColor: meta.color }]} />
     </View>
   );
@@ -44,6 +56,25 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+  },
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -8,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.textPrimary,
   },
   tail: {
     width: 0,

@@ -350,6 +350,58 @@ export async function claimWaitlistByEmail(waitlistEmail: string): Promise<Waitl
   return result;
 }
 
+export interface WaitlistClaimHints {
+  waitlistEmail?: string;
+  claimToken?: string;
+}
+
+/**
+ * After signup / sign-in: optional code first, then auto-match emails.
+ * Returns true if a new week was granted.
+ */
+export async function applyWaitlistOnAuth(opts: {
+  accountEmail?: string | null;
+  waitlistEmail?: string;
+  claimToken?: string;
+  source: string;
+}): Promise<boolean> {
+  const emails = [
+    ...new Set(
+      [opts.accountEmail, opts.waitlistEmail]
+        .map((e) => normalizeEmail(e ?? ''))
+        .filter(Boolean),
+    ),
+  ];
+  try {
+    const token = normalizeClaimToken(opts.claimToken ?? '');
+    if (token) {
+      const result = await claimWaitlistByToken(token);
+      track('waitlist_auto_claim_checked', {
+        source: opts.source,
+        via: 'token',
+        status: result.status,
+        ok: result.ok,
+      });
+      return applyClaimResult(result);
+    }
+    for (const email of emails) {
+      const result = await claimWaitlistByEmail(email);
+      track('waitlist_auto_claim_checked', {
+        source: opts.source,
+        via: 'email',
+        status: result.status,
+        ok: result.ok,
+      });
+      if (result.ok && (result.status === 'granted' || result.status === 'already_active')) {
+        return applyClaimResult(result);
+      }
+    }
+  } catch (e) {
+    console.warn('[auth] waitlist auto-claim failed', opts.source, e);
+  }
+  return false;
+}
+
 /** Claim any pending token captured from a deep link. */
 export async function claimPendingWaitlistToken(): Promise<WaitlistClaimResponse | null> {
   const token = await takePendingWaitlistToken();

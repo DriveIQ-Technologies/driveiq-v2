@@ -7,6 +7,7 @@
 import { HttpsError } from 'firebase-functions/v2/https';
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldValue } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 export const WAITLIST_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 export const TOKEN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
@@ -171,6 +172,19 @@ function tokenClaimable(tokenDoc: WaitlistTokenDoc, nowMs: number): boolean {
   return usedCount < Math.max(1, maxUses);
 }
 
+/** True if Firebase Auth still has this uid (deleted test accounts should not keep a code locked). */
+export async function authUserExists(uid: string): Promise<boolean> {
+  try {
+    await getAuth().getUser(uid);
+    return true;
+  } catch (e) {
+    const code =
+      typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : '';
+    if (code === 'auth/user-not-found') return false;
+    return true;
+  }
+}
+
 /**
  * Main token claim flow.
  *
@@ -213,41 +227,52 @@ export async function handleClaimWaitlistPremium(opts: {
           message: userMessageForStatus('invalid_email'),
         };
       }
-      const emailMatches = await tx.get(
-        opts.db.collection('waitlistTokens').where('email', '==', waitlistEmail).limit(25),
-      );
-      if (emailMatches.empty) {
-        return {
-          ok: false,
-          status: 'invalid_email',
-          premiumUntil: null,
-          waitlistEmail,
-          token: null,
-          message: userMessageForStatus('invalid_email'),
-        };
-      }
-
-      for (const doc of emailMatches.docs) {
-        const data = (doc.data() ?? {}) as WaitlistTokenDoc;
-        const existing = evaluateExistingClaim(data, opts.uid, nowMs);
-        if (existing?.status === 'already_active' || existing?.status === 'already_used') {
-          return { ...existing, token: doc.id };
+      // Prefer waitlist/{email} (no composite index). Fall back to a token query.
+      const waitlistSnap = await tx.get(opts.db.doc(`waitlist/${waitlistEmail}`));
+      const mapped = waitlistSnap.exists
+        ? normalizeClaimToken(
+            String((waitlistSnap.data() as { claimToken?: unknown })?.claimToken ?? ''),
+          )
+        : '';
+      if (mapped) {
+        token = mapped;
+      } else {
+        const emailMatches = await tx.get(
+          opts.db.collection('waitlistTokens').where('email', '==', waitlistEmail).limit(25),
+        );
+        if (emailMatches.empty) {
+          return {
+            ok: false,
+            status: 'invalid_email',
+            premiumUntil: null,
+            waitlistEmail,
+            token: null,
+            message: userMessageForStatus('invalid_email'),
+          };
         }
+
+        for (const doc of emailMatches.docs) {
+          const data = (doc.data() ?? {}) as WaitlistTokenDoc;
+          const existing = evaluateExistingClaim(data, opts.uid, nowMs);
+          if (existing?.status === 'already_active' || existing?.status === 'already_used') {
+            return { ...existing, token: doc.id };
+          }
+        }
+        const claimable = emailMatches.docs.find((doc) =>
+          tokenClaimable((doc.data() ?? {}) as WaitlistTokenDoc, nowMs),
+        );
+        if (!claimable) {
+          return {
+            ok: false,
+            status: 'already_claimed',
+            premiumUntil: null,
+            waitlistEmail,
+            token: null,
+            message: userMessageForStatus('already_claimed'),
+          };
+        }
+        token = claimable.id;
       }
-      const claimable = emailMatches.docs.find((doc) =>
-        tokenClaimable((doc.data() ?? {}) as WaitlistTokenDoc, nowMs),
-      );
-      if (!claimable) {
-        return {
-          ok: false,
-          status: 'already_claimed',
-          premiumUntil: null,
-          waitlistEmail,
-          token: null,
-          message: userMessageForStatus('already_claimed'),
-        };
-      }
-      token = claimable.id;
     }
 
     const tokenRef = opts.db.doc(`waitlistTokens/${token}`);
@@ -288,7 +313,15 @@ export async function handleClaimWaitlistPremium(opts: {
       };
     }
     const existing = evaluateExistingClaim(tokenDoc, opts.uid, nowMs);
-    if (existing) return { ...existing, token };
+    if (existing) {
+      const previous = tokenDoc.claimedByUid;
+      const abandoned =
+        existing.status === 'already_claimed' &&
+        Boolean(previous) &&
+        previous !== opts.uid &&
+        !(await authUserExists(previous as string));
+      if (!abandoned) return { ...existing, token };
+    }
 
     const [entitlementSnap, userSnap] = await Promise.all([tx.get(entitlementRef), tx.get(userRef)]);
     const entitlement = (entitlementSnap.data() ?? {}) as UserEntitlementDoc;
@@ -330,14 +363,18 @@ export async function handleClaimWaitlistPremium(opts: {
     const usedCount = Number.isFinite(tokenDoc.usedCount) ? Number(tokenDoc.usedCount) : 0;
     const maxUses = Number.isFinite(tokenDoc.maxUses) ? Number(tokenDoc.maxUses) : 1;
     if (usedCount >= Math.max(1, maxUses)) {
-      return {
-        ok: false,
-        status: 'already_claimed',
-        premiumUntil: tokenDoc.premiumUntil ?? null,
-        waitlistEmail: typeof tokenDoc.email === 'string' ? tokenDoc.email : null,
-        token,
-        message: userMessageForStatus('already_claimed'),
-      };
+      const previous = tokenDoc.claimedByUid;
+      const abandoned = previous ? !(await authUserExists(previous)) : false;
+      if (!abandoned) {
+        return {
+          ok: false,
+          status: 'already_claimed',
+          premiumUntil: tokenDoc.premiumUntil ?? null,
+          waitlistEmail: typeof tokenDoc.email === 'string' ? tokenDoc.email : null,
+          token,
+          message: userMessageForStatus('already_claimed'),
+        };
+      }
     }
 
     tx.set(

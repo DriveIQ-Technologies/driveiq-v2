@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '@/theme/colors';
@@ -16,8 +16,8 @@ import {
 interface Props {
   event: AppEvent;
   featured?: boolean;
-  onRemind?: () => void;
-  onCalendar?: () => void;
+  onRemind?: () => boolean | Promise<boolean>;
+  onCalendar?: () => boolean | Promise<boolean>;
   onPress?: () => void;
 }
 
@@ -25,6 +25,25 @@ export function EventCard({ event, featured, onRemind, onCalendar, onPress }: Pr
   const cat = categoryMeta(event);
   const status = eventLifeStatus(event);
   const crowd = crowdLabel(event);
+  const [remindDone, setRemindDone] = useState(false);
+  const [calDone, setCalDone] = useState(false);
+  const [busy, setBusy] = useState<'remind' | 'cal' | null>(null);
+
+  const runAction = async (kind: 'remind' | 'cal', fn: () => boolean | Promise<boolean>) => {
+    if (busy) return;
+    if (kind === 'remind' && remindDone) return;
+    if (kind === 'cal' && calDone) return;
+    setBusy(kind);
+    try {
+      const ok = await fn();
+      if (ok) {
+        if (kind === 'remind') setRemindDone(true);
+        else setCalDone(true);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <Pressable
@@ -53,15 +72,43 @@ export function EventCard({ event, featured, onRemind, onCalendar, onPress }: Pr
       </Text>
       <View style={styles.actions}>
         {onCalendar ? (
-          <Pressable style={styles.actionBtn} onPress={onCalendar} hitSlop={6}>
-            <Ionicons name="calendar-outline" size={14} color={colors.textPrimary} />
-            <Text style={styles.actionText}>Calendar</Text>
+          <Pressable
+            style={[styles.actionBtn, calDone && styles.actionBtnDone]}
+            onPress={(e) => {
+              e.stopPropagation();
+              void runAction('cal', onCalendar);
+            }}
+            hitSlop={6}
+            accessibilityState={{ disabled: calDone || busy === 'cal' }}
+          >
+            <Ionicons
+              name={calDone ? 'checkmark-circle' : 'calendar-outline'}
+              size={14}
+              color={calDone ? colors.success : colors.textPrimary}
+            />
+            <Text style={[styles.actionText, calDone && styles.actionTextDone]}>
+              {calDone ? 'Added' : busy === 'cal' ? 'Adding…' : 'Calendar'}
+            </Text>
           </Pressable>
         ) : null}
         {onRemind ? (
-          <Pressable style={styles.actionBtn} onPress={onRemind} hitSlop={6}>
-            <Ionicons name="notifications-outline" size={14} color={colors.textPrimary} />
-            <Text style={styles.actionText}>Remind</Text>
+          <Pressable
+            style={[styles.actionBtn, remindDone && styles.actionBtnDone]}
+            onPress={(e) => {
+              e.stopPropagation();
+              void runAction('remind', onRemind);
+            }}
+            hitSlop={6}
+            accessibilityState={{ disabled: remindDone || busy === 'remind' }}
+          >
+            <Ionicons
+              name={remindDone ? 'checkmark-circle' : 'notifications-outline'}
+              size={14}
+              color={remindDone ? colors.success : colors.textPrimary}
+            />
+            <Text style={[styles.actionText, remindDone && styles.actionTextDone]}>
+              {remindDone ? 'Saved' : busy === 'remind' ? 'Saving…' : 'Remind'}
+            </Text>
           </Pressable>
         ) : null}
       </View>
@@ -169,9 +216,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  actionBtnDone: {
+    opacity: 0.75,
+  },
   actionText: {
     fontSize: 13,
     fontWeight: '600',
     color: colors.textPrimary,
+  },
+  actionTextDone: {
+    color: colors.success,
   },
 });

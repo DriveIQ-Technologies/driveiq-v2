@@ -47,7 +47,7 @@ const FAQS: QA[] = [
   },
   {
     q: 'How do I report something?',
-    a: 'Tap the ➕ button on the right of the map, line the map up over the spot, choose what\'s happening (hazard, accident, roadworks, closure, police, event), add an optional note and submit. Reports show as coloured pins and clear themselves automatically after a while.',
+    a: 'Tap the ➕ button on the right of the map, drag the map to move the pin, then tap This is the spot. Choose what is happening, add an optional note and submit. Other drivers get a ping. Tap a report pin and thumbs-up if you can still see it.',
   },
   {
     q: 'How do I get directions?',

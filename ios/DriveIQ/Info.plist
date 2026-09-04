@@ -21,7 +21,7 @@
     <key>CFBundlePackageType</key>
     <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
     <key>CFBundleShortVersionString</key>
-    <string>6.1.5</string>
+    <string>6.1.6</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleURLTypes</key>
@@ -41,7 +41,7 @@
       </dict>
     </array>
     <key>CFBundleVersion</key>
-    <string>19</string>
+    <string>21</string>
     <key>GMSApiKey</key>
     <string>AIzaSyAJ4hMVM4SQzf71lBBwXHJdFbhlVXrdKBM</string>
     <key>LSMinimumSystemVersion</key>
@@ -55,12 +55,20 @@
       <key>NSAllowsLocalNetworking</key>
       <true/>
     </dict>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>DriveIQ adds saved events to your calendar with the start and finish times.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>DriveIQ adds saved events to your calendar with the start and finish times.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>DriveIQ uses your location to show nearby events and calculate distance to event venues.</string>
     <key>NSLocationAlwaysUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your location</string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>DriveIQ uses your location to show nearby events and calculate distance to event venues.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Allow $(PRODUCT_NAME) to access your reminders</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Allow $(PRODUCT_NAME) to access your reminders</string>
     <key>NSUserActivityTypes</key>
     <array>
       <string>$(PRODUCT_BUNDLE_IDENTIFIER).expo.index_route</string>

@@ -35,6 +35,10 @@ import {
   requestWaitlistCodeByEmail,
 } from './waitlistClaim.js';
 import { buildWaitlistClaimCodeEmail } from './waitlistEmail.js';
+import {
+  handleConfirmCommunityReport,
+  handleSubmitCommunityReport,
+} from './communityReports.js';
 
 initializeApp();
 const db = getFirestore();
@@ -285,6 +289,7 @@ export const askDriveiqAgent = onCall(
     secrets: [anthropicKey],
     enforceAppCheck: false,
     invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
   },
   async (request) => {
     logger.info('agent.callable_in', {
@@ -309,6 +314,7 @@ export const askDriveiqAgentHttp = onRequest(
     secrets: [anthropicKey],
     cors: true,
     invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
   },
   async (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
@@ -708,6 +714,116 @@ export const requestWaitlistCodeHttp = onRequest(
         stack: e instanceof Error ? e.stack : null,
       });
       res.status(200).json({ result: generic });
+    }
+  },
+);
+
+async function uidFromBearer(req: { get: (h: string) => string | undefined }): Promise<string> {
+  const authHeader = String(req.get('authorization') ?? '');
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!token) throw new Error('UNAUTHENTICATED');
+  const decoded = await getAuth().verifyIdToken(token);
+  if (!decoded.uid) throw new Error('UNAUTHENTICATED');
+  return decoded.uid;
+}
+
+function httpError(res: { status: (n: number) => { json: (b: unknown) => void } }, e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (msg === 'UNAUTHENTICATED') {
+    res.status(401).json({ error: { message: 'Sign in required', status: 'UNAUTHENTICATED' } });
+    return;
+  }
+  const friendly: Record<string, string> = {
+    invalid_category: 'Pick what you are reporting.',
+    outside_london: 'Reports have to be in Greater London.',
+    rate_limited: 'You have already sent several reports today. Try again tomorrow.',
+    invalid_id: 'That report is gone.',
+    not_found: 'That report is gone.',
+    expired: 'That report has expired.',
+  };
+  res.status(200).json({
+    error: { message: friendly[msg] || 'Could not save that report. Try again.', status: msg },
+  });
+}
+
+export const submitCommunityReportHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 60,
+    cors: true,
+    invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
+  },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { message: 'POST required', status: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const uid = await uidFromBearer(req);
+      const body = (req.body ?? {}) as { data?: Record<string, unknown> };
+      const data = body.data ?? (req.body as Record<string, unknown>) ?? {};
+      const result = await handleSubmitCommunityReport({
+        db,
+        uid,
+        category: data.category,
+        note: data.note,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        placeLabel: data.placeLabel,
+      });
+      res.status(200).json({ result });
+    } catch (e) {
+      logger.warn('community_report.submit_fail', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      httpError(res, e);
+    }
+  },
+);
+
+export const confirmCommunityReportHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 30,
+    cors: true,
+    invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
+  },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { message: 'POST required', status: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const uid = await uidFromBearer(req);
+      const body = (req.body ?? {}) as { data?: Record<string, unknown> };
+      const data = body.data ?? (req.body as Record<string, unknown>) ?? {};
+      const result = await handleConfirmCommunityReport({
+        db,
+        uid,
+        reportId: data.reportId,
+      });
+      res.status(200).json({ result });
+    } catch (e) {
+      logger.warn('community_report.confirm_fail', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      httpError(res, e);
     }
   },
 );

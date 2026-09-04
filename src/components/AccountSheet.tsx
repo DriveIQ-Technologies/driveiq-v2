@@ -192,10 +192,10 @@ export function AccountSheet({ visible, section, onClose }: Props) {
             {section === 'waitlist' ? (
               <>
                 <Text style={styles.help}>
-                  Enter the claim code from your launch email to unlock your free
-                  Premium week. The code can be claimed on any account and is bound
-                  to the first account that redeems it.
-                </Text>
+              Sign up with your waitlist email for automatic Premium. If this
+              account uses a different email, enter the waitlist address below
+              to resend your code, or paste the claim code from the email.
+            </Text>
                 <Field
                   icon="mail-outline"
                   placeholder="Waitlist email"
