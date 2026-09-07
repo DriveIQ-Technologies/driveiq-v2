@@ -92,6 +92,8 @@ export interface AuthContextValue {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateDisplayName: (name: string) => Promise<void>;
   updateUserEmail: (currentPassword: string, newEmail: string) => Promise<void>;
+  /** Permanently deletes account + server data (App Store 5.1.1(v)). */
+  deleteAccount: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -615,6 +617,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email_verified: false,
         });
         track('account_email_updated');
+      },
+      deleteAccount: async () => {
+        const { a, api } = requireAuth();
+        if (!a.currentUser || a.currentUser.isAnonymous) {
+          throw new Error('Sign in required to delete your account.');
+        }
+        const { requestAccountDeletion, clearAccountLocalData } = await import(
+          '@/services/deleteAccount'
+        );
+        await clearPushTokenOnLogout();
+        await requestAccountDeletion();
+        const { clearWaitlistCache } = await import('@/services/waitlist');
+        await clearWaitlistCache();
+        await clearAccountLocalData();
+        try {
+          await api.signOut(a);
+        } catch {
+          /* Auth user may already be gone server-side */
+        }
+        track('auth_account_deleted');
+        resetAnalyticsUser();
+        await ensureAnonymousUser();
+        await syncPremiumEntitlement();
       },
     }),
     [

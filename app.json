@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "driveiq.app",
-      "buildNumber": "21",
+      "buildNumber": "22",
       "usesAppleSignIn": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location to show nearby events and calculate distance to event venues.",
@@ -34,7 +34,7 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
       ],
-      "versionCode": 24
+      "versionCode": 26
     },
     "web": {
       "bundler": "metro"

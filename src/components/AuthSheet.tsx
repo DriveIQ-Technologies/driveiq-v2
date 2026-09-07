@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -23,6 +24,9 @@ import {
   isGoogleSignInConfigured,
 } from '@/services/googleSignIn';
 import { colors } from '@/theme/colors';
+
+const TERMS_URL = 'https://driveiq.app/terms';
+const PRIVACY_URL = 'https://driveiq.app/privacy';
 
 type Step = 'email' | 'password' | 'signup';
 
@@ -489,7 +493,21 @@ export function AuthSheet({
                 ) : null}
 
                 <Text style={styles.termsText}>
-                  By creating an account you agree to our terms and privacy policy.
+                  By creating an account you agree to our{' '}
+                  <Text
+                    style={styles.termsLink}
+                    onPress={() => void Linking.openURL(TERMS_URL).catch(() => undefined)}
+                  >
+                    Terms of Use
+                  </Text>
+                  {' '}and{' '}
+                  <Text
+                    style={styles.termsLink}
+                    onPress={() => void Linking.openURL(PRIVACY_URL).catch(() => undefined)}
+                  >
+                    Privacy Policy
+                  </Text>
+                  .
                 </Text>
               </>
             ) : null}
@@ -796,6 +814,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     lineHeight: 16,
     marginTop: 4,
+  },
+  termsLink: {
+    color: colors.primary,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   footer: {
     borderTopWidth: StyleSheet.hairlineWidth,

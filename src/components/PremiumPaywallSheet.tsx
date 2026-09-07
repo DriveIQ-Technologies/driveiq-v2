@@ -165,13 +165,15 @@ export function PremiumPaywallSheet({
       : 'Subscribe';
 
   const finePrint = (() => {
-    if (!selected) return 'Cancel anytime in Settings.';
-    const price = packagePriceLabel(selected);
-    const period = isAnnual(selected) ? 'a year' : 'a month';
-    if (hasTrial) {
-      return `Nothing to pay for 7 days. Then ${price} ${period}. Cancel anytime in Settings.`;
+    if (!selected) {
+      return 'Subscription auto-renews unless cancelled at least 24 hours before the end of the current period. Manage or cancel in your App Store / Google Play account settings.';
     }
-    return `${price} ${period}. Cancel anytime in Settings.`;
+    const price = packagePriceLabel(selected);
+    const period = isAnnual(selected) ? 'year' : 'month';
+    if (hasTrial) {
+      return `DriveIQ Premium: free for 7 days, then ${price}/${period}. Payment is charged to your Apple ID / Google account at confirmation. Subscription auto-renews unless cancelled at least 24 hours before the period ends. Manage or cancel in Settings → Subscriptions.`;
+    }
+    return `DriveIQ Premium: ${price}/${period}. Payment is charged to your Apple ID / Google account at confirmation. Subscription auto-renews unless cancelled at least 24 hours before the period ends. Manage or cancel in Settings → Subscriptions.`;
   })();
 
   const buy = async () => {

@@ -39,6 +39,7 @@ import {
   handleConfirmCommunityReport,
   handleSubmitCommunityReport,
 } from './communityReports.js';
+import { handleDeleteAccount } from './deleteAccount.js';
 
 initializeApp();
 const db = getFirestore();
@@ -824,6 +825,50 @@ export const confirmCommunityReportHttp = onRequest(
         error: e instanceof Error ? e.message : String(e),
       });
       httpError(res, e);
+    }
+  },
+);
+
+/** App Store 5.1.1(v) — authenticated account + data wipe. */
+export const deleteAccountHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 60,
+    cors: true,
+    invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
+  },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { message: 'POST required', status: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const uid = await uidFromBearer(req);
+      const result = await handleDeleteAccount({ db, uid });
+      res.status(200).json({ result });
+    } catch (e) {
+      logger.error('delete_account.fail', {
+        error: e instanceof Error ? e.message : String(e),
+        stack: e instanceof Error ? e.stack : null,
+      });
+      if (e instanceof Error && e.message === 'UNAUTHENTICATED') {
+        res.status(401).json({ error: { message: 'Sign in required', status: 'UNAUTHENTICATED' } });
+        return;
+      }
+      res.status(200).json({
+        error: {
+          message: 'Could not delete your account. Try again or contact support.',
+          status: 'INTERNAL',
+        },
+      });
     }
   },
 );

@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import {
   Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
+
+const TERMS_URL = 'https://driveiq.app/terms';
+const PRIVACY_URL = 'https://driveiq.app/privacy';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const BRAND_LOGO = require('../../assets/driveiq-logo.png');
@@ -31,6 +35,10 @@ export function AboutSheet({
   version = Constants.expoConfig?.version ?? 'n/a',
 }: Props) {
   if (!visible) return null;
+
+  const openUrl = (url: string) => {
+    void Linking.openURL(url).catch(() => undefined);
+  };
 
   return (
     <SheetOverlay onRequestClose={onClose} dim={false} visible={visible}>
@@ -77,6 +85,16 @@ export function AboutSheet({
               <Text style={styles.bullet}>{line}</Text>
             </View>
           ))}
+
+          <Text style={styles.sectionTitle}>Legal</Text>
+          <Pressable style={styles.linkRow} onPress={() => openUrl(PRIVACY_URL)}>
+            <Text style={styles.linkLabel}>Privacy Policy</Text>
+            <Ionicons name="open-outline" size={16} color={colors.primary} />
+          </Pressable>
+          <Pressable style={styles.linkRow} onPress={() => openUrl(TERMS_URL)}>
+            <Text style={styles.linkLabel}>Terms of Use</Text>
+            <Ionicons name="open-outline" size={16} color={colors.primary} />
+          </Pressable>
 
           <Text style={styles.legal}>
             Event data is aggregated from third-party providers and Transport
@@ -131,6 +149,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: colors.textSecondary,
     marginBottom: 10,
+    marginTop: 8,
   },
   bulletRow: {
     flexDirection: 'row',
@@ -139,6 +158,15 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   bullet: { flex: 1, fontSize: 14, lineHeight: 20, color: colors.textPrimary },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  linkLabel: { fontSize: 15, fontWeight: '600', color: colors.primary },
   legal: {
     fontSize: 12,
     lineHeight: 18,

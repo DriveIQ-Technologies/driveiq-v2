@@ -61,6 +61,14 @@ const FAQS: QA[] = [
     q: 'Where does the live transport status come from?',
     a: 'Train, tube, Overground, Elizabeth line, DLR and tram status come from Transport for London, and airport rail-link status updates through the day. Tap the train and plane buttons on the right of the map.',
   },
+  {
+    q: 'How do I cancel Premium?',
+    a: 'Open Menu → Manage subscription. That opens your App Store or Google Play subscription settings, where you can cancel or change your plan. Deleting your DriveIQ account does not cancel a store subscription.',
+  },
+  {
+    q: 'How do I delete my account?',
+    a: 'Open Menu → Settings → Delete account. Confirm when asked. This permanently removes your DriveIQ account and personal data on our servers. Community reports you shared stay on the map without your name. If you have Premium through the App Store or Google Play, cancel that separately under Manage subscription.',
+  },
 ];
 
 export function HelpSheet({ visible, onClose, onOpenAISupport }: Props) {

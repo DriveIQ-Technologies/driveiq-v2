@@ -6,6 +6,8 @@ import {
   Dimensions,
   Easing,
   Image,
+  Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,7 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
-import { showConfirm, showDialog } from '@/services/dialog';
+import { showConfirm } from '@/services/dialog';
 import { restorePurchases } from '@/services/purchases';
 import { showPurchaseFailure } from '@/services/premiumPurchaseFlow';
 import {
@@ -29,6 +31,11 @@ import {
 import { getWaitlistTrialEnds } from '@/services/waitlist';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
+
+const MANAGE_SUBSCRIPTION_URL =
+  Platform.OS === 'ios'
+    ? 'https://apps.apple.com/account/subscriptions'
+    : 'https://play.google.com/store/account/subscriptions';
 
 function waitlistDaysLeft(endsIso: string | null): number | null {
   if (!endsIso) return null;
@@ -56,6 +63,8 @@ interface Props {
   onOpenAuth: (mode: 'signin' | 'signup') => void;
   /** Open a signed-in account-management section. */
   onOpenAccount: (section: AccountSection) => void;
+  /** Open Settings (email, password, delete account). */
+  onOpenSettings: () => void;
   /** Support sheets. */
   onOpenHelp: () => void;
   onOpenFeedback: () => void;
@@ -89,6 +98,7 @@ export function SidebarMenu({
   onOpenNotifications,
   onOpenAuth,
   onOpenAccount,
+  onOpenSettings,
   onOpenHelp,
   onOpenFeedback,
   onOpenAbout,
@@ -177,16 +187,11 @@ export function SidebarMenu({
           handler: () => afterClose(() => onOpenAccount('profile')),
         },
         {
-          key: 'email',
-          icon: 'mail',
-          label: 'Change email',
-          handler: () => afterClose(() => onOpenAccount('email')),
-        },
-        {
-          key: 'password',
-          icon: 'lock-closed',
-          label: 'Change password',
-          handler: () => afterClose(() => onOpenAccount('password')),
+          key: 'settings',
+          icon: 'settings',
+          label: 'Settings',
+          body: 'Email, password, delete account',
+          handler: () => afterClose(onOpenSettings),
         },
         ...(!isPremium
           ? [
@@ -267,7 +272,9 @@ export function SidebarMenu({
                   ? `Welcome — free waitlist week · ${waitlistDays} day${waitlistDays === 1 ? '' : 's'} left`
                   : 'Welcome — free waitlist week of Premium'
                 : premiumSource === 'preview'
-                  ? 'Preview mode is on — turn off EXPO_PUBLIC_PRO_PREVIEW to test purchases'
+                  ? __DEV__
+                    ? 'Preview mode is on — turn off EXPO_PUBLIC_PRO_PREVIEW to test purchases'
+                    : 'Complimentary Premium access'
                   : 'Dev unlock — not a real subscription',
           badge: premiumBadge,
           handler: () => {
@@ -286,6 +293,20 @@ export function SidebarMenu({
           label: 'Restore purchases',
           handler: () => {
             afterClose(restoreFromSidebar);
+          },
+        },
+        {
+          key: 'manage-sub',
+          icon: 'card',
+          label: 'Manage subscription',
+          body:
+            Platform.OS === 'ios'
+              ? 'Cancel or change in App Store subscriptions'
+              : 'Cancel or change in Google Play subscriptions',
+          handler: () => {
+            afterClose(() => {
+              void Linking.openURL(MANAGE_SUBSCRIPTION_URL).catch(() => undefined);
+            });
           },
         },
       ]
@@ -308,6 +329,20 @@ export function SidebarMenu({
           label: 'Restore purchases',
           handler: () => {
             afterClose(restoreFromSidebar);
+          },
+        },
+        {
+          key: 'manage-sub',
+          icon: 'card',
+          label: 'Manage subscription',
+          body:
+            Platform.OS === 'ios'
+              ? 'Open App Store subscription settings'
+              : 'Open Google Play subscription settings',
+          handler: () => {
+            afterClose(() => {
+              void Linking.openURL(MANAGE_SUBSCRIPTION_URL).catch(() => undefined);
+            });
           },
         },
       ];

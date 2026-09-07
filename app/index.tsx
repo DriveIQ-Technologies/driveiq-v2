@@ -130,6 +130,7 @@ import { AboutSheet } from '@/components/AboutSheet';
 import { AISupportSheet } from '@/components/AISupportSheet';
 import { AuthSheet } from '@/components/AuthSheet';
 import { AccountSheet, type AccountSection } from '@/components/AccountSheet';
+import { SettingsSheet } from '@/components/SettingsSheet';
 import { hasProAccess, showPremiumPaywall } from '@/services/subscription';
 import {
   hasSeenSignupInvite,
@@ -290,6 +291,7 @@ export default function MapScreen() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [aiSupportOpen, setAiSupportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Auth UI: sign-in / create-account sheet, and the signed-in account
   // management sheet (profile / email / password).
@@ -418,6 +420,7 @@ export default function MapScreen() {
     setFeedbackOpen(false);
     setAboutOpen(false);
     setAiSupportOpen(false);
+    setSettingsOpen(false);
     setAccountSheet((s) => ({ ...s, open: false }));
   }, []);
 
@@ -2007,6 +2010,10 @@ export default function MapScreen() {
           track('account_sheet_opened', { section, source: 'sidebar' });
           setAccountSheet({ open: true, section });
         }}
+        onOpenSettings={() => {
+          track('settings_opened', { source: 'sidebar' });
+          setSettingsOpen(true);
+        }}
         onOpenHelp={() => {
           track('help_opened');
           setHelpOpen(true);
@@ -2052,6 +2059,15 @@ export default function MapScreen() {
         visible={accountSheet.open}
         section={accountSheet.section}
         onClose={() => setAccountSheet((s) => ({ ...s, open: false }))}
+      />
+
+      <SettingsSheet
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onOpenAccount={(section) => {
+          track('account_sheet_opened', { section, source: 'settings' });
+          setAccountSheet({ open: true, section });
+        }}
       />
 
       <NotificationSettingsPanel
