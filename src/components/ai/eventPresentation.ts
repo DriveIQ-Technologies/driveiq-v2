@@ -162,9 +162,14 @@ export function placeHintsFromQuestion(question: string): string[] {
     ['emirates', ['emirates', 'arsenal']],
     ['stamford', ['stamford bridge', 'chelsea']],
     ['craven cottage', ['craven cottage', 'fulham']],
+    ['brentford', ['brentford', 'gtech']],
+    ['crystal palace', ['crystal palace', 'selhurst']],
+    ['west ham', ['west ham', 'london stadium']],
+    ['qpr', ['qpr', 'loftus road']],
     ['twickenham', ['twickenham']],
     ['excel', ['excel']],
     ['olympia', ['olympia']],
+    ['ally pally', ['ally pally', 'alexandra palace']],
   ];
 
   for (const [canonical, needles] of aliases) {
@@ -189,8 +194,60 @@ export function eventMatchesPlaceHints(e: AppEvent, hints: string[]): boolean {
     if (h === 'o2') {
       return /\bo2\b/.test(hay) || hay.includes('o2 arena') || hay.includes('the o2');
     }
+    if (h === 'brentford') {
+      return hay.includes('brentford') || hay.includes('gtech');
+    }
     return hay.includes(h);
   });
+}
+
+const NAMED_STOP = new Set([
+  'what',
+  'whats',
+  'what’s',
+  'tonight',
+  'today',
+  'tomorrow',
+  'weekend',
+  'week',
+  'events',
+  'event',
+  'this',
+  'that',
+  'with',
+  'from',
+  'near',
+  'around',
+  'london',
+  'please',
+  'show',
+  'shows',
+  'match',
+  'matches',
+  'game',
+  'games',
+  'fixture',
+  'there',
+  'going',
+  'anything',
+  'biggest',
+  'major',
+]);
+
+/** Tokens in the question that look like a named club, venue, or show. */
+export function namedSearchTokens(question: string): string[] {
+  return question
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !NAMED_STOP.has(w));
+}
+
+/** True when the question names this event's title or venue (e.g. Brentford). */
+export function eventMatchesQuestionName(e: AppEvent, question: string): boolean {
+  const tokens = namedSearchTokens(question);
+  if (!tokens.length) return false;
+  const hay = `${e.title} ${e.venue}`.toLowerCase();
+  return tokens.some((t) => hay.includes(t));
 }
 
 /** How many cards to show for this question — keep the chat short. */

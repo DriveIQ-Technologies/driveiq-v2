@@ -78,9 +78,10 @@ import {
   diffAndNotifyIncidents,
   diffAndNotifyLines,
   diffAndNotifyFlights,
-  ensurePermission,
   hasSeenOnboarding,
   loadPrefs,
+  presentNotificationOnboardingIfNeeded,
+  registerNotificationPrimeHost,
   scheduleEventReminder,
   startNotificationOpenTracking,
   setNotificationOpenHandler,
@@ -114,6 +115,7 @@ import {
   type UserReport,
 } from '@/services/reports';
 import { NotificationOnboarding } from '@/components/NotificationOnboarding';
+import { LocationOnboarding } from '@/components/LocationOnboarding';
 import { OnboardingTour } from '@/components/OnboardingTour';
 import { PremiumInlineBar } from '@/components/PremiumInlineBar';
 import {
@@ -132,6 +134,12 @@ import { AuthSheet } from '@/components/AuthSheet';
 import { AccountSheet, type AccountSection } from '@/components/AccountSheet';
 import { SettingsSheet } from '@/components/SettingsSheet';
 import { hasProAccess, showPremiumPaywall } from '@/services/subscription';
+import {
+  hasSeenLocationOnboarding,
+  markLocationOnboardingSeen,
+  readCurrentLocation,
+} from '@/services/deviceLocation';
+import { startPushTokenRefresh } from '@/services/pushTokens';
 import {
   hasSeenSignupInvite,
   markSignupInviteSeen,
@@ -285,6 +293,7 @@ export default function MapScreen() {
   const [tourDone, setTourDone] = useState(false);
   const [signupInvite, setSignupInvite] = useState(false);
   const [signupInviteEligible, setSignupInviteEligible] = useState(false);
+  const [locationOnboardingOpen, setLocationOnboardingOpen] = useState(false);
 
   // Support sheets reachable from the sidebar.
   const [helpOpen, setHelpOpen] = useState(false);
@@ -421,6 +430,7 @@ export default function MapScreen() {
     setAboutOpen(false);
     setAiSupportOpen(false);
     setSettingsOpen(false);
+    setLocationOnboardingOpen(false);
     setAccountSheet((s) => ({ ...s, open: false }));
   }, []);
 
@@ -429,9 +439,9 @@ export default function MapScreen() {
     return () => registerSheetDismisser(null);
   }, [registerSheetDismisser, closeAllSheets]);
 
-  // Notifications are account-gated, so only ask the OS for permission once
-  // there's an account to attach them to, and re-read prefs across sign in /
-  // sign out so the poll loop stops or resumes with the right opt-ins.
+  // Notifications are account-gated. Ask with the in-app card after signup —
+  // do not fire the silent iOS prompt here (that is what hid the explainer
+  // and left people without a token for backend push).
   useEffect(() => {
     hasAccountRef.current = hasAccount;
     let cancelled = false;
@@ -439,12 +449,20 @@ export default function MapScreen() {
       const prefs = await loadPrefs();
       if (cancelled) return;
       prefsRef.current = prefs;
-      if (hasAccount) await ensurePermission();
+      if (hasAccount && !locationOnboardingOpen) {
+        await presentNotificationOnboardingIfNeeded();
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [hasAccount]);
+  }, [hasAccount, locationOnboardingOpen]);
+
+  useEffect(() => {
+    registerNotificationPrimeHost(setNotifPrimingOpen);
+    startPushTokenRefresh();
+    return () => registerNotificationPrimeHost(null);
+  }, []);
 
   // The AI sheet is the one surface we dismissed that the user can't get back
   // to on their own, so reopen it once the account exists.
@@ -460,7 +478,7 @@ export default function MapScreen() {
   // After the walkthrough: Create account, with a quiet skip. Wait until
   // auth has settled so we don't flash this at people who already signed in.
   useEffect(() => {
-    if (!tourDone || !signupInviteEligible || initializing || hasAccount || signupInvite) {
+    if (!tourDone || locationOnboardingOpen || !signupInviteEligible || initializing || hasAccount || signupInvite) {
       return;
     }
     let cancelled = false;
@@ -471,31 +489,30 @@ export default function MapScreen() {
     return () => {
       cancelled = true;
     };
-  }, [tourDone, signupInviteEligible, initializing, hasAccount, signupInvite]);
+  }, [tourDone, locationOnboardingOpen, signupInviteEligible, initializing, hasAccount, signupInvite]);
 
-  // Ask for location permission once on mount.
+  // After the tour: ask for location with an in-app card, then iOS/Android
+  // show the system "While Using the App" prompt. Do not fire a silent
+  // request on splash — that is easy to miss and looks like tracking.
   useEffect(() => {
+    if (!tourDone) return;
     let cancelled = false;
     (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (cancelled || status !== 'granted') return;
-        const pos = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        if (cancelled) return;
-        setUserLocation({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        });
-      } catch (e) {
-        console.warn('[location] failed', e);
+      const existing = await readCurrentLocation();
+      if (cancelled) return;
+      if (existing) {
+        setUserLocation(existing);
+        await markLocationOnboardingSeen();
+        return;
       }
+      const seen = await hasSeenLocationOnboarding();
+      if (cancelled) return;
+      if (!seen) setLocationOnboardingOpen(true);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [tourDone]);
 
   // Re-read the GPS fix whenever the app returns to the foreground. Location
   // was only read once on mount, so if the user moved while the app was
@@ -1979,6 +1996,15 @@ export default function MapScreen() {
         }}
       />
 
+      <LocationOnboarding
+        open={locationOnboardingOpen}
+        onDone={(coord) => {
+          setLocationOnboardingOpen(false);
+          if (coord) setUserLocation(coord);
+          if (hasAccount) void presentNotificationOnboardingIfNeeded();
+        }}
+      />
+
       <NotificationOnboarding
         open={notifPrimingOpen}
         onDone={async () => {
@@ -2048,6 +2074,15 @@ export default function MapScreen() {
         events={events}
         incidents={majorIncidents}
         lines={lineStatuses}
+        userLocation={userLocation}
+        onLocationGranted={(coord) => setUserLocation(coord)}
+        onDiscoveredEvents={(extra) => {
+          setEvents((prev) => {
+            const ids = new Set(prev.map((e) => e.id));
+            const next = extra.filter((e) => !ids.has(e.id) && isPlausibleLondonEvent(e));
+            return next.length ? [...prev, ...next] : prev;
+          });
+        }}
         onSaveEvent={(event) => {
           if (event.id in savedEvents) return true;
           return handleToggleSave(event, { silent: true });

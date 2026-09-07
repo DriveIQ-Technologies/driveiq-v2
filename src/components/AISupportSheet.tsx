@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -11,7 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { SheetOverlay } from '@/components/ui/SheetOverlay';
+import { SheetOverlay, resetSheetPointers } from '@/components/ui/SheetOverlay';
 
 import {
   applyServerAiQuota,
@@ -20,7 +21,7 @@ import {
   type AiQuota,
 } from '@/services/aiQuota';
 import { track, trackScreen } from '@/services/analytics';
-import { askDriveiqAgent } from '@/services/agent';
+import { askDriveiqAgent, discoveredEventToAppEvent } from '@/services/agent';
 import { incrementUsageCounter } from '@/services/usageCounters';
 import { hasProAccess, showProPaywall, syncPremiumEntitlement } from '@/services/subscription';
 import { colors } from '@/theme/colors';
@@ -48,6 +49,7 @@ import {
   eventDisplayEnd,
   eventDisplayStart,
   eventMatchesPlaceHints,
+  eventMatchesQuestionName,
   groupEventsByDay,
   placeHintsFromQuestion,
   type EventDaySection,
@@ -56,6 +58,8 @@ import { SearchStatus } from '@/components/ai/SearchStatus';
 import { showDialog } from '@/services/dialog';
 import { reminderChatDialogMessage } from '@/services/eventReminders';
 import { SuggestionChips } from '@/components/ai/SuggestionChips';
+import { areaLabelFor, getForegroundLocationStatus, requestForegroundLocation } from '@/services/deviceLocation';
+import { distanceKm, type LatLng } from '@/utils/distance';
 
 interface Props {
   visible: boolean;
@@ -64,6 +68,12 @@ interface Props {
   events?: AppEvent[];
   incidents?: TrafficIncident[];
   lines?: LineStatus[];
+  /** Driver GPS — used for "near me" / area answers. */
+  userLocation?: LatLng | null;
+  /** Persist a fresh GPS fix from the AI location button. */
+  onLocationGranted?: (coord: LatLng) => void;
+  /** Pin catalogue events the agent found that were missing from the open map. */
+  onDiscoveredEvents?: (events: AppEvent[]) => void;
   /** Save + reminder. Return true only after it actually saved. */
   onSaveEvent?: (event: AppEvent) => boolean | Promise<boolean>;
   /** Add to device calendar. Return true only after it actually landed. */
@@ -449,28 +459,35 @@ function byFreshThenDemand(a: AppEvent, b: AppEvent): number {
   return byDemandThenTime(a, b);
 }
 
+const AGENT_EVENT_LIMIT = 80;
+
 /**
- * Prefer stadium / featured events in the asked window only.
- * Venue / place names in the question hard-filter the pool.
- * For non-event questions returns empty so we never pollute the agent context.
+ * Prefer stadium / featured events in the asked window, plus any named
+ * club/venue (Brentford, Gtech, Wembley…) even if they are not in the top 24.
  */
 function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
   const q = question.toLowerCase();
-  // Hard stop: don't send events for travel / non-event questions
-  if (looksLikeTravelQuestion(q) || looksLikeEventRefusal(q)) return [];
-  if (!looksLikeEventQuestion(question)) return [];
+  if (looksLikeEventRefusal(q)) return [];
+  const named = all.filter((e) => eventMatchesQuestionName(e, q));
+  if (!looksLikeEventQuestion(question) && named.length === 0) return [];
 
   const places = placeHintsFromQuestion(q);
-  const placeFiltered = places.length
-    ? all.filter((e) => eventMatchesPlaceHints(e, places))
-    : all;
+  const placeFiltered =
+    places.length || named.length
+      ? all.filter(
+          (e) =>
+            eventMatchesPlaceHints(e, places) ||
+            named.some((n) => n.id === e.id),
+        )
+      : all;
 
   const tonightAsk = /\b(today|tonight|now|going on)\b/.test(q);
+  const namedAsk = places.length > 0 || named.length > 0;
   const win = resolveWindow(q);
-  // Use explicit window or "this week" for big queries; never spill beyond 7 days
+  // Named clubs/venues: search the week on the map, not just tonight/tomorrow.
   const range =
     win?.range ??
-    (looksLikeBigQuery(q)
+    (namedAsk || looksLikeBigQuery(q)
       ? { start: rangeFor('today').start, end: rangeFor('day:6').end }
       : { start: rangeFor('today').start, end: rangeFor('tomorrow').end });
 
@@ -479,6 +496,15 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
       isInRange(e.startsAt, range) ||
       (e.realStartAt ? isInRange(e.realStartAt, range) : false),
   );
+  // Named matches outside the default window still go through (up to 14 days).
+  const namedExtra = namedAsk
+    ? named.filter((e) => {
+        const t = Date.parse(e.realStartAt || e.startsAt);
+        if (!Number.isFinite(t)) return false;
+        const horizon = Date.now() + 14 * 24 * 60 * 60 * 1000;
+        return t <= horizon;
+      })
+    : [];
   const useful = tonightAsk
     ? inWindow.filter(
         (e) =>
@@ -489,10 +515,8 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
     : inWindow;
   const windowIds = new Set(useful.map((e) => e.id));
   const rankedWindow = [...useful].sort(tonightAsk ? byFreshThenDemand : byDemandThenTime);
-  // After 21:00 London, also peek tomorrow for "tonight" queries — but not when
-  // the user named specific venues (keep the answer tight).
   let nextUp: AppEvent[] = [];
-  if (tonightAsk && londonHour() >= 21 && places.length === 0) {
+  if (tonightAsk && londonHour() >= 21 && places.length === 0 && named.length === 0) {
     const tomorrow = rangeFor('tomorrow');
     nextUp = placeFiltered
       .filter(
@@ -506,11 +530,11 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
   }
   const seen = new Set<string>();
   const out: AppEvent[] = [];
-  for (const e of dedupeEvents([...rankedWindow, ...nextUp])) {
+  for (const e of dedupeEvents([...namedExtra, ...rankedWindow, ...nextUp])) {
     if (seen.has(e.id)) continue;
     seen.add(e.id);
     out.push(e);
-    if (out.length >= 24) break;
+    if (out.length >= AGENT_EVENT_LIMIT) break;
   }
   return out;
 }
@@ -535,13 +559,17 @@ function looksLikeEventRefusal(q: string): boolean {
 
 function looksLikeEventQuestion(q: string): boolean {
   const lower = q.toLowerCase();
-  if (looksLikeTravelQuestion(lower) || looksLikeEventRefusal(lower)) return false;
+  if (looksLikeEventRefusal(lower)) return false;
   return (
     EVENT_WORDS.some((w) => lower.includes(w)) ||
     looksLikeBigQuery(lower) ||
     resolveWindow(lower) !== null ||
     placeHintsFromQuestion(lower).length > 0
   );
+}
+
+function looksLikeNearMeQuestion(q: string): boolean {
+  return /\b(near me|nearby|around me|my area|close to me|where i am)\b/i.test(q);
 }
 
 function summaryForCards(answer: string, sections: EventDaySection[]): string {
@@ -636,12 +664,17 @@ export function AISupportSheet({
   events,
   incidents,
   lines,
+  userLocation = null,
+  onLocationGranted,
+  onDiscoveredEvents,
   onSaveEvent,
   onAddToCalendar,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [composerReset, setComposerReset] = useState(0);
+  const [locBusy, setLocBusy] = useState(false);
+  const [areaLabel, setAreaLabel] = useState<string | null>(null);
   const isEmpty = messages.length === 0;
   // Free plan: FREE_DAILY_LIMIT questions/day; Premium unlimited. Reloaded each
   // open so the counter is always current.
@@ -653,7 +686,6 @@ export function AISupportSheet({
     trackScreen('ai_support_sheet');
     getAiQuota().then((q) => {
       setQuota((prev) => {
-        // Never jump back up after a question this London day.
         if (
           prev &&
           !prev.pro &&
@@ -667,6 +699,20 @@ export function AISupportSheet({
     });
     void syncPremiumEntitlement();
   }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !userLocation) {
+      setAreaLabel(null);
+      return;
+    }
+    let cancelled = false;
+    void areaLabelFor(userLocation).then((label) => {
+      if (!cancelled) setAreaLabel(label);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, userLocation?.latitude, userLocation?.longitude]);
 
   // SafeAreaView's top edge doesn't apply reliably inside a Modal, which left
   // the header (and the close button) jammed under the status bar. Read the
@@ -736,7 +782,7 @@ export function AISupportSheet({
         userMsg,
         { id: thinkingId, role: 'bot', text: '', isLoading: true },
       ]);
-      setInput('');
+      setComposerReset((n) => n + 1);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
 
       void (async () => {
@@ -774,24 +820,61 @@ export function AISupportSheet({
               return true;
             });
 
-          const wantEvents = looksLikeEventQuestion(trimmed);
-          // Only send events when the question is clearly about events.
-          // Never send events for travel/non-event questions.
-          const picked = wantEvents ? eventsForAgent(trimmed, events ?? []) : [];
-          const source = picked; // No global fallback — window is authoritative
+          const wantEvents =
+            looksLikeEventQuestion(trimmed) ||
+            looksLikeNearMeQuestion(trimmed) ||
+            (events ?? []).some((e) => eventMatchesQuestionName(e, trimmed));
+          const travelOnly =
+            looksLikeTravelQuestion(trimmed) &&
+            !wantEvents &&
+            !looksLikeNearMeQuestion(trimmed);
+          const picked = travelOnly ? [] : eventsForAgent(trimmed, events ?? []);
+          let source = picked;
+          if (userLocation && (wantEvents || looksLikeNearMeQuestion(trimmed))) {
+            const nearby = [...(events ?? [])]
+              .filter((e) => eventStatus(e) !== 'finished')
+              .map((e) => ({
+                e,
+                km: distanceKm(userLocation, {
+                  latitude: e.latitude,
+                  longitude: e.longitude,
+                }),
+              }))
+              .filter((x) => x.km <= 12)
+              .sort((a, b) => a.km - b.km)
+              .slice(0, 20)
+              .map((x) => x.e);
+            const seen = new Set(source.map((e) => e.id));
+            source = [...source, ...nearby.filter((e) => !seen.has(e.id))];
+            if (source.length > AGENT_EVENT_LIMIT) {
+              source = source.slice(0, AGENT_EVENT_LIMIT);
+            }
+          }
           const places = placeHintsFromQuestion(trimmed);
-          const clientEvents = source.map((e) => ({
-            title: e.title,
-            venue: e.venue,
-            kind: typeOf(e),
-            startsAt: londonStamp(eventDisplayStart(e)),
-            endsAt: londonStamp(eventDisplayEnd(e)),
-            doorsAt: e.doorsAt ? londonStamp(e.doorsAt) : undefined,
-            turnout: turnoutLabel(e),
-            featured: e.source === 'featured',
-            copy: e.copyLine?.slice(0, 140),
-            status: eventStatus(e),
-          }));
+          const clientEvents = source.map((e) => {
+            const km =
+              userLocation && Number.isFinite(e.latitude) && Number.isFinite(e.longitude)
+                ? distanceKm(userLocation, {
+                    latitude: e.latitude,
+                    longitude: e.longitude,
+                  })
+                : undefined;
+            return {
+              title: e.title,
+              venue: e.venue,
+              kind: typeOf(e),
+              startsAt: londonStamp(eventDisplayStart(e)),
+              endsAt: londonStamp(eventDisplayEnd(e)),
+              doorsAt: e.doorsAt ? londonStamp(e.doorsAt) : undefined,
+              turnout: turnoutLabel(e),
+              featured: e.source === 'featured',
+              copy: e.copyLine?.slice(0, 140),
+              status: eventStatus(e),
+              latitude: e.latitude,
+              longitude: e.longitude,
+              kmAway: km != null && Number.isFinite(km) ? Math.round(km * 10) / 10 : undefined,
+            };
+          });
           const clientRoads = (incidents ?? []).length
             ? (incidents ?? []).slice(0, 20).map((inc) =>
                 incidentRoadLine(inc, inc.location || inc.category || 'London'),
@@ -831,6 +914,13 @@ export function AISupportSheet({
             rails: clientRails,
             premium: pro,
             clockLondon: londonStamp(new Date().toISOString()),
+            location: userLocation
+              ? {
+                  latitude: userLocation.latitude,
+                  longitude: userLocation.longitude,
+                  label: areaLabel,
+                }
+              : undefined,
           });
           if (!res.capped) {
             void incrementUsageCounter('aiQuestions');
@@ -867,6 +957,14 @@ export function AISupportSheet({
             });
           } else {
             let answer = res.answer;
+            const discovered = (res.discoveredEvents ?? [])
+              .map(discoveredEventToAppEvent)
+              .filter((e): e is AppEvent => e != null);
+            if (discovered.length) {
+              onDiscoveredEvents?.(discovered);
+              const seenIds = new Set(source.map((e) => e.id));
+              source = [...source, ...discovered.filter((e) => !seenIds.has(e.id))];
+            }
             if (
               eventResult &&
               eventResult.offer.length > 0 &&
@@ -982,7 +1080,46 @@ export function AISupportSheet({
 
   const pickPrompt = (prompt: string) => {
     track('ai_suggestion_tapped', { suggestion: prompt });
+    setComposerReset((n) => n + 1);
     send(prompt);
+  };
+
+  const enableLocationFromChat = async () => {
+    if (locBusy) return;
+    setLocBusy(true);
+    try {
+      const prior = await getForegroundLocationStatus();
+      const coord = await requestForegroundLocation();
+      resetSheetPointers();
+      track('location_permission_result', {
+        granted: Boolean(coord),
+        source: 'ai_chat',
+      });
+      if (coord) {
+        onLocationGranted?.(coord);
+        const label = await areaLabelFor(coord);
+        setAreaLabel(label);
+        showDialog(
+          'Location on',
+          label
+            ? `Using your position near ${label}. Ask what’s on near you.`
+            : 'Using your current position. Ask what’s on near you.',
+        );
+      } else if (prior === 'denied') {
+        showDialog(
+          'Location is off',
+          'Turn on Location for DriveIQ in your phone Settings, then come back and tap Use my location.',
+          [{ label: 'Open Settings', onPress: () => { void Linking.openSettings(); } }, { label: 'OK' }],
+        );
+      } else {
+        showDialog(
+          'Location not available',
+          'Allow location while using DriveIQ to get events and delays around you.',
+        );
+      }
+    } finally {
+      setLocBusy(false);
+    }
   };
 
   if (!visible) return null;
@@ -1007,7 +1144,7 @@ export function AISupportSheet({
               <Pressable
                 onPress={() => {
                   setMessages([]);
-                  setInput('');
+                  setComposerReset((n) => n + 1);
                   setSending(false);
                   track('ai_chat_reset');
                 }}
@@ -1027,7 +1164,7 @@ export function AISupportSheet({
 
         <KeyboardAvoidingView
           style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         >
           <ScrollView
@@ -1038,9 +1175,20 @@ export function AISupportSheet({
               isEmpty && styles.threadContentEmpty,
             ]}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
           >
             {isEmpty ? (
-              <EmptyHero cards={PROMPT_CARDS} onSelect={pickPrompt} />
+              <EmptyHero
+                cards={PROMPT_CARDS}
+                onSelect={pickPrompt}
+                subtitle={
+                  userLocation
+                    ? `Ask about London events, roads, and travel. I’ll use what’s live on your map${
+                        areaLabel ? ` near ${areaLabel}` : ''
+                      }.`
+                    : 'Ask about London events, roads, and travel. Turn on location for what’s on near you.'
+                }
+              />
             ) : (
               messages.map((m) => (
                 <View
@@ -1106,11 +1254,24 @@ export function AISupportSheet({
           {!isEmpty ? (
             <SuggestionChips items={SUGGESTIONS.slice(0, 4)} onSelect={pickPrompt} />
           ) : null}
+          {!userLocation ? (
+            <Pressable
+              onPress={() => void enableLocationFromChat()}
+              style={styles.locationBar}
+              disabled={locBusy}
+              accessibilityRole="button"
+              accessibilityLabel="Use my location"
+            >
+              <Ionicons name="location-outline" size={16} color={colors.primary} />
+              <Text style={styles.locationBarText}>
+                {locBusy ? 'Asking for location…' : 'Use my location for nearby events'}
+              </Text>
+            </Pressable>
+          ) : null}
           <ChatComposer
-            value={input}
-            onChange={setInput}
-            onSend={() => send(input)}
+            onSend={(text) => send(text)}
             disabled={sending}
+            resetToken={composerReset}
           />
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -1160,7 +1321,25 @@ const styles = StyleSheet.create({
   appSubtitle: {
     fontSize: 12,
     color: colors.textSecondary,
-    marginTop: 1,
+  },
+  locationBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 14,
+    marginTop: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: colors.primarySoft,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  locationBarText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
   },
   headerActions: {
     flexDirection: 'row',

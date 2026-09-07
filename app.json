@@ -19,9 +19,10 @@
       "buildNumber": "22",
       "usesAppleSignIn": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location to show nearby events and calculate distance to event venues.",
+        "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location while the app is open to show where you are on the map, nearby events in AI chat, distances to venues, and directions. We do not track you in the background.",
         "NSCalendarsUsageDescription": "DriveIQ adds saved events to your calendar with the start and finish times.",
-        "NSCalendarsFullAccessUsageDescription": "DriveIQ adds saved events to your calendar with the start and finish times."
+        "NSCalendarsFullAccessUsageDescription": "DriveIQ adds saved events to your calendar with the start and finish times.",
+        "UIBackgroundModes": ["remote-notification"]
       }
     },
     "android": {
@@ -32,7 +33,9 @@
       },
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED"
       ],
       "versionCode": 26
     },
@@ -46,7 +49,13 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "DriveIQ uses your location to show nearby events and calculate distance to event venues."
+          "locationAlwaysAndWhenInUsePermission": "DriveIQ uses your location while the app is open to show where you are on the map, nearby events in AI chat, distances to venues, and directions. We do not track you in the background."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": true
         }
       ],
       [

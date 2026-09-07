@@ -3,6 +3,7 @@ import { logger } from 'firebase-functions';
 import type { Firestore } from 'firebase-admin/firestore';
 import { askAgent, type AgentModel } from './anthropic.js';
 import { AGENT_SYSTEM_ADDENDUM, AGENT_SYSTEM_PROMPT_VERBATIM } from './agentPrompt.js';
+import { lookupCatalogueMatches, type CatalogueEvent } from './agentCatalogue.js';
 
 const CHAT_PROMPT_VERSION = 3;
 
@@ -14,6 +15,7 @@ interface AskInput {
   clientRails?: unknown;
   premium?: unknown;
   clockLondon?: unknown;
+  location?: unknown;
 }
 
 interface AskOutput {
@@ -23,6 +25,7 @@ interface AskOutput {
   remaining: number | null;
   limit: number | null;
   model: AgentModel | null;
+  discoveredEvents?: CatalogueEvent[];
 }
 
 function pickModel(question: string): AgentModel {
@@ -138,7 +141,7 @@ function toIsoOrEmpty(v: unknown): string {
 function parseClientEvents(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const lines: string[] = [];
-  for (const row of raw.slice(0, 50)) {
+  for (const row of raw.slice(0, 80)) {
     if (!row || typeof row !== 'object') continue;
     const x = row as Record<string, unknown>;
     const title = typeof x.title === 'string' ? x.title.trim() : '';
@@ -152,6 +155,7 @@ function parseClientEvents(raw: unknown): string[] {
     const featured = x.featured === true ? 'FEATURED' : '';
     const copy = typeof x.copy === 'string' && x.copy.trim() ? x.copy.trim() : '';
     const status = typeof x.status === 'string' && x.status.trim() ? x.status.trim() : '';
+    const kmAway = typeof x.kmAway === 'number' && Number.isFinite(x.kmAway) ? `${x.kmAway}km` : '';
     lines.push(
       [
         featured,
@@ -163,6 +167,7 @@ function parseClientEvents(raw: unknown): string[] {
         `start ${start || 'n/a'}`,
         `finish ${finish || 'n/a'}`,
         turnout,
+        kmAway ? `distance ${kmAway}` : '',
         copy,
       ]
         .filter(Boolean)
@@ -170,6 +175,19 @@ function parseClientEvents(raw: unknown): string[] {
     );
   }
   return lines;
+}
+
+function parseClientLocation(raw: unknown): { latitude: number; longitude: number; label?: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const x = raw as Record<string, unknown>;
+  const latitude = Number(x.latitude);
+  const longitude = Number(x.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude < 51.2 || latitude > 51.8 || longitude < -0.6 || longitude > 0.4) {
+    // Still pass through — driver may be just outside Greater London.
+  }
+  const label = typeof x.label === 'string' && x.label.trim() ? x.label.trim() : undefined;
+  return { latitude, longitude, label };
 }
 
 function parseClientLines(raw: unknown): string[] {
@@ -201,6 +219,7 @@ async function buildContextBlock(opts: {
   clientEvents?: string[];
   clientRoads?: string[];
   clientRails?: string[];
+  location?: { latitude: number; longitude: number; label?: string } | null;
 }): Promise<string> {
   const now = new Date();
   const nowMs = now.getTime();
@@ -330,17 +349,32 @@ async function buildContextBlock(opts: {
         ? events
         : ['none in firestore']),
     '',
-    'RAIL STATUS LINES:',
-    ...(rails.length ? rails : opts.clientRails?.length ? opts.clientRails : ['none in context']),
+    'RAIL STATUS LINES (live map first):',
+    ...(opts.clientRails?.length
+      ? opts.clientRails
+      : rails.length
+        ? rails
+        : ['none in context']),
     '',
-    'ROAD STATUS LINES:',
-    ...(roads.length ? roads : opts.clientRoads?.length ? opts.clientRoads : ['none in context']),
+    'ROAD STATUS LINES (live map first):',
+    ...(opts.clientRoads?.length
+      ? opts.clientRoads
+      : roads.length
+        ? roads
+        : ['none in context']),
     '',
     'FLIGHT STATUS LINES:',
     ...(flights.length ? flights : ['none in context']),
     '',
     'USER SAVED HINTS:',
     ...savedHints,
+    '',
+    'DRIVER LOCATION:',
+    opts.location
+      ? `lat ${opts.location.latitude.toFixed(4)}, lng ${opts.location.longitude.toFixed(4)}${
+          opts.location.label ? `, area ${opts.location.label}` : ''
+        }. LIVE MAP EVENTS rows may include distance in km. For "near me" / "my area", prefer events within about 12 km and roads that affect that area.`
+      : 'not shared. If they ask near me / my area, say location is off and they can tap Use my location in this chat.',
   ].join('\n');
 }
 
@@ -366,6 +400,7 @@ export async function handleAskAgent(opts: {
   const clientEvents = parseClientEvents(opts.request.data?.clientEvents);
   const clientRoads = parseClientLines(opts.request.data?.clientRoads);
   const clientRails = parseClientLines(opts.request.data?.clientRails);
+  const clientLocation = parseClientLocation(opts.request.data?.location);
   const clientPremium = opts.request.data?.premium === true;
   const clockLondon =
     typeof opts.request.data?.clockLondon === 'string' && opts.request.data.clockLondon.trim()
@@ -382,6 +417,7 @@ export async function handleAskAgent(opts: {
     clientRailSample: clientRails.slice(0, 2),
     clientPremium,
     clockLondon,
+    hasLocation: Boolean(clientLocation),
   });
 
   let cap = 10;
@@ -470,6 +506,7 @@ export async function handleAskAgent(opts: {
       clientEvents,
       clientRoads,
       clientRails,
+      location: clientLocation,
     });
     logger.info('agent.context_built', {
       uid,
@@ -505,9 +542,32 @@ export async function handleAskAgent(opts: {
         .join('\n')}`
     : '';
   const liveCount = clientEvents.length;
+  let catalogueEvents: CatalogueEvent[] = [];
+  try {
+    const catalogue = await lookupCatalogueMatches({
+      db: opts.db,
+      question,
+      liveEventLines: clientEvents,
+    });
+    catalogueEvents = catalogue.events;
+    contextBlock += `\n\nSERVER CATALOGUE MATCHES (verified DriveIQ feeds, not model memory):\n${
+      catalogue.lines.length ? catalogue.lines.join('\n') : 'none for this question'
+    }\n\nVALIDATION:\n${catalogue.validation.join('\n')}`;
+    logger.info('agent.catalogue_lookup', {
+      uid,
+      tokens: catalogue.tokens,
+      matchLines: catalogue.lines.length,
+      discovered: catalogueEvents.length,
+    });
+  } catch (e) {
+    logger.warn('agent.catalogue_lookup_fail', {
+      error: e instanceof Error ? e.message : 'error',
+    });
+  }
+
   const combinedPrompt = `${tierLine}
 LONDON_CLOCK: ${clockLondon} Europe/London. The driver's phone may show a different time zone. Always say "London HH:mm". Today and tonight mean the London calendar day, not the phone's day.
-DATA RULE: LIVE MAP EVENTS has ${liveCount} row(s) from the driver's open map. If ${liveCount} > 0 AND the question is about events / what's on / tonight, lead with those and mark finished events as already done. If ${liveCount} is 0, do not invent or dump events. For trains, tube, roads, traffic, travel or flights, answer from RAIL STATUS / ROAD STATUS (and flights if present). Never open with "I found N events" unless they asked what's on.
+DATA RULE: LIVE MAP EVENTS has ${liveCount} row(s) from the open map. SERVER CATALOGUE MATCHES are extra verified rows from DriveIQ feeds. If they name a club or venue, use matching LIVE MAP or CATALOGUE rows. Never invent a fixture from memory. If both lists are empty for that name, say you do not have it. For trains, tube, roads, traffic, travel or flights, answer from RAIL STATUS / ROAD STATUS (and flights if present). You may mention both travel AND events when they asked for both. If DRIVER LOCATION is present, use it for near me / my area.
 PRODUCT: Waitlist Premium is a free 7-day week (full-day flights, every station hub, weeks-ahead calendar by demand, unlimited AI). Disruption alerts on every plan. After day 7 it ends unless they subscribe.
 
 CONTEXT BLOCK:
@@ -556,5 +616,6 @@ ${question}`;
     remaining,
     limit: premium ? null : cap,
     model,
+    discoveredEvents: catalogueEvents.length ? catalogueEvents : undefined,
   };
 }

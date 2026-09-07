@@ -27,6 +27,7 @@ import { ingestEventsRaw } from './eventsIngest.js';
 import { isAirportPollWindow } from './londonTime.js';
 import {
   dispatchPushNotifications,
+  dispatchSavedEventReminders,
   loadFlightsByAirport,
   parseLineStatuses,
 } from './dispatch.js';
@@ -182,6 +183,7 @@ export const writeQueuedCopy = onSchedule(
         lines,
         flightsByAirport,
       });
+      await dispatchSavedEventReminders({ db });
     } catch (e) {
       logger.warn('dispatch.fail', { error: e instanceof Error ? e.message : 'error' });
     }
@@ -341,6 +343,7 @@ export const askDriveiqAgentHttp = onRequest(
         clientRails?: unknown;
         premium?: unknown;
         clockLondon?: unknown;
+        location?: unknown;
       };
       question?: unknown;
       history?: unknown;
@@ -349,6 +352,7 @@ export const askDriveiqAgentHttp = onRequest(
       clientRails?: unknown;
       premium?: unknown;
       clockLondon?: unknown;
+      location?: unknown;
     };
     const data = body.data ?? body;
     const question = typeof data.question === 'string' ? data.question : '';
@@ -426,6 +430,7 @@ export const askDriveiqAgentHttp = onRequest(
             clientRails: data.clientRails,
             premium: data.premium,
             clockLondon: data.clockLondon,
+            location: data.location,
           },
         },
       });

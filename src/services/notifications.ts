@@ -78,8 +78,12 @@ export function effectivePrefs(
 
 const STORAGE_KEY_PREFS = 'driveiq.notif.prefs.v1';
 const STORAGE_KEY_INCIDENTS = 'driveiq.notif.lastIncidents.v2';
+const STORAGE_KEY_INCIDENTS_AT = 'driveiq.notif.lastIncidents.at.v1';
 const STORAGE_KEY_LINES = 'driveiq.notif.lastLines.v1';
+const STORAGE_KEY_LINES_AT = 'driveiq.notif.lastLines.at.v1';
 const STORAGE_KEY_ONBOARDING_SEEN = 'driveiq.notif.onboardingSeen.v1';
+/** Local catch-up older than this is treated as a fresh seed — FCM should have covered the gap. */
+const STALE_SNAPSHOT_MS = 12 * 60 * 1000;
 
 // Lazy module loaders — the require() lives behind a try so a missing
 // package never crashes startup. The package is wired up at build time
@@ -187,10 +191,12 @@ async function syncNotificationProfile(): Promise<void> {
   try {
     const { syncUserProfileFromLocal } = await import('./userSync');
     const { loadSavedFlights } = await import('./savedFlights');
+    const { loadSavedEvents } = await import('./savedEvents');
     const prefs = await loadPrefs();
     const lineSubs = await loadLineSubscriptions();
     const flights = Object.values(await loadSavedFlights());
-    await syncUserProfileFromLocal(prefs, lineSubs, flights);
+    const events = Object.values(await loadSavedEvents());
+    await syncUserProfileFromLocal(prefs, lineSubs, flights, events);
   } catch (e) {
     console.warn('[notif] profile sync skipped', e);
   }
@@ -207,6 +213,29 @@ export async function hasSeenOnboarding(): Promise<boolean> {
 
 export async function markOnboardingSeen(): Promise<void> {
   await safeSet(STORAGE_KEY_ONBOARDING_SEEN, '1');
+}
+
+let _primeHost: ((open: boolean) => void) | null = null;
+
+export function registerNotificationPrimeHost(fn: ((open: boolean) => void) | null): void {
+  _primeHost = fn;
+}
+
+/** Show the in-app “can we send notifications” card after signup / launch. */
+export async function presentNotificationOnboardingIfNeeded(): Promise<void> {
+  if (await hasSeenOnboarding()) return;
+  _primeHost?.(true);
+}
+
+async function snapshotIsStale(atKey: string): Promise<boolean> {
+  const raw = await safeGet(atKey);
+  const at = raw ? Number(raw) : 0;
+  if (!Number.isFinite(at) || at <= 0) return true;
+  return Date.now() - at > STALE_SNAPSHOT_MS;
+}
+
+async function touchSnapshot(atKey: string): Promise<void> {
+  await safeSet(atKey, String(Date.now()));
 }
 
 // ─── Per-line subscriptions ─────────────────────────────────────────────
@@ -440,8 +469,10 @@ export async function diffAndNotifyIncidents(
     }
   }
 
-  // First-run guard — don't ping on initial population.
-  const isFirstRun = Object.keys(prev).length === 0;
+  // First-run / stale-open guard — don't dump hours of old incidents when
+  // the app comes back. Closed-app alerts come from FCM using users.fcmTokens.
+  const isFirstRun =
+    Object.keys(prev).length === 0 || (await snapshotIsStale(STORAGE_KEY_INCIDENTS_AT));
 
   for (const inc of next) {
     const before = prev[inc.id];
@@ -476,6 +507,7 @@ export async function diffAndNotifyIncidents(
   const snap: Record<string, IncidentSnapshot> = {};
   for (const inc of next) snap[inc.id] = incidentFingerprint(inc);
   await safeSet(STORAGE_KEY_INCIDENTS, JSON.stringify(snap));
+  await touchSnapshot(STORAGE_KEY_INCIDENTS_AT);
 }
 
 /**
@@ -508,7 +540,8 @@ export async function diffAndNotifyLines(
     }
   }
 
-  const isFirstRun = Object.keys(prev).length === 0;
+  const isFirstRun =
+    Object.keys(prev).length === 0 || (await snapshotIsStale(STORAGE_KEY_LINES_AT));
 
   for (const l of next) {
     const before = prev[l.id];
@@ -533,6 +566,7 @@ export async function diffAndNotifyLines(
   }
 
   await safeSet(STORAGE_KEY_LINES, JSON.stringify(snapshot));
+  await touchSnapshot(STORAGE_KEY_LINES_AT);
 }
 
 /**

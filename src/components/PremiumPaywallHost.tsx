@@ -6,6 +6,7 @@ import { PremiumUnlockedSheet } from '@/components/PremiumUnlockedSheet';
 import type { AccountReadyInfo } from '@/data/freeAccountCopy';
 import type { PremiumUnlockOutcome } from '@/data/premiumUnlockCopy';
 import { registerAccountReadyHost } from '@/services/accountReady';
+import { presentNotificationOnboardingIfNeeded } from '@/services/notifications';
 import {
   registerPremiumUnlockHost,
   registerPaywallHost,
@@ -88,6 +89,7 @@ export function PremiumPaywallHost({ onUnlocked }: { onUnlocked?: () => void }) 
         onClose={() => {
           setReadyOpen(false);
           setReadyInfo(null);
+          void presentNotificationOnboardingIfNeeded();
         }}
       />
     </>

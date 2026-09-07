@@ -1,11 +1,14 @@
 /**
- * Register the device FCM token for server-side push when the app is closed.
+ * Register the device FCM/APNs token on users/{uid}.fcmTokens so the
+ * backend can send push while the app is closed.
  */
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { auth, db, fsApi } from './firebase';
 
 let registeredToken: string | null = null;
+let registeredUid: string | null = null;
+let appStateBound = false;
 
 function getNotificationsModule(): typeof import('expo-notifications') | null {
   try {
@@ -17,7 +20,7 @@ function getNotificationsModule(): typeof import('expo-notifications') | null {
 
 export async function registerPushToken(): Promise<boolean> {
   const uid = auth?.currentUser?.uid;
-  if (!uid || !db || !fsApi) return false;
+  if (!uid || auth.currentUser?.isAnonymous || !db || !fsApi) return false;
 
   const N = getNotificationsModule();
   if (!N) return false;
@@ -29,7 +32,8 @@ export async function registerPushToken(): Promise<boolean> {
     const tokenResult = await N.getDevicePushTokenAsync();
     const token =
       typeof tokenResult?.data === 'string' ? tokenResult.data.trim() : '';
-    if (!token || token === registeredToken) return Boolean(token);
+    if (!token) return false;
+    if (token === registeredToken && uid === registeredUid) return true;
 
     const userRef = fsApi.doc(db, 'users', uid);
     const snap = await fsApi.getDoc(userRef);
@@ -51,6 +55,8 @@ export async function registerPushToken(): Promise<boolean> {
       { merge: true },
     );
     registeredToken = token;
+    registeredUid = uid;
+    console.log('[push] token saved on users/' + uid);
     return true;
   } catch (e) {
     console.warn('[push] token registration failed', e);
@@ -59,5 +65,35 @@ export async function registerPushToken(): Promise<boolean> {
 }
 
 export async function clearPushTokenOnLogout(): Promise<void> {
+  const uid = registeredUid ?? auth?.currentUser?.uid;
+  const token = registeredToken;
   registeredToken = null;
+  registeredUid = null;
+  if (!uid || !token || !db || !fsApi) return;
+  try {
+    const userRef = fsApi.doc(db, 'users', uid);
+    const snap = await fsApi.getDoc(userRef);
+    const existing = snap.exists()
+      ? ((snap.data()?.fcmTokens as string[] | undefined) ?? [])
+      : [];
+    await fsApi.setDoc(
+      userRef,
+      {
+        fcmTokens: existing.filter((t) => t !== token),
+        pushUpdatedAt: new Date().toISOString(),
+      },
+      { merge: true },
+    );
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Re-save the token when the app comes back — iOS can rotate it. */
+export function startPushTokenRefresh(): void {
+  if (appStateBound) return;
+  appStateBound = true;
+  AppState.addEventListener('change', (state) => {
+    if (state === 'active') void registerPushToken();
+  });
 }

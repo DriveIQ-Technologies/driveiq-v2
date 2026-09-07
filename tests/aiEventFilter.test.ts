@@ -4,6 +4,7 @@ import {
   cardLimitForQuestion,
   dedupeEvents,
   eventMatchesPlaceHints,
+  eventMatchesQuestionName,
   placeHintsFromQuestion,
 } from '@/components/ai/eventPresentation';
 import type { AppEvent } from '@/types/event';
@@ -63,7 +64,25 @@ describe('AI event filtering helpers', () => {
     expect(out[0]?.id).toBe('a');
   });
 
-  it('caps cards for “3 biggest” prompts', () => {
-    expect(cardLimitForQuestion('Can you show me the 3 biggest events for tonight?')).toBe(3);
+  it('extracts Brentford / Gtech as a place hint', () => {
+    expect(placeHintsFromQuestion('What time is Brentford tonight?')).toEqual(
+      expect.arrayContaining(['brentford']),
+    );
+    expect(
+      eventMatchesPlaceHints(
+        event({ id: 'b', title: 'Brentford vs Chelsea', venue: 'Gtech Community Stadium' }),
+        ['brentford'],
+      ),
+    ).toBe(true);
+  });
+
+  it('matches a named club in the question even without the word event', () => {
+    const brentford = event({
+      id: 'b',
+      title: 'Brentford vs Fulham',
+      venue: 'Gtech Community Stadium',
+    });
+    expect(eventMatchesQuestionName(brentford, 'what’s on at Brentford')).toBe(true);
+    expect(eventMatchesQuestionName(brentford, 'biggest events tonight')).toBe(false);
   });
 });

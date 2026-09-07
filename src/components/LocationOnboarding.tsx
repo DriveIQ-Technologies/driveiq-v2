@@ -1,136 +1,99 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { SheetOverlay } from '@/components/ui/SheetOverlay';
-import { useAuth } from '@/providers/AuthProvider';
-import { colors } from '@/theme/colors';
+import { SheetOverlay, resetSheetPointers } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
 import {
-  DEFAULT_PREFS,
-  ensurePermission,
-  markOnboardingSeen,
-  presentNotificationOnboardingIfNeeded,
-  savePrefs,
-} from '@/services/notifications';
-import { resetSheetPointers } from '@/components/ui/SheetOverlay';
+  markLocationOnboardingSeen,
+  requestForegroundLocation,
+} from '@/services/deviceLocation';
+import { colors } from '@/theme/colors';
+import type { LatLng } from '@/utils/distance';
 
 interface Props {
-  /** Called when the user closes the popup (either decision). */
-  onDone: () => void;
-  /** Controlled mode: show when true (e.g. after first station save). */
   open?: boolean;
+  onDone: (location: LatLng | null) => void;
 }
 
-interface PerkRow {
-  icon: React.ComponentProps<typeof Ionicons>['name'];
-  title: string;
-  body: string;
-}
-
-const PERKS: PerkRow[] = [
+const PERKS = [
   {
-    icon: 'car-sport',
-    title: 'Road closures and heavy traffic',
-    body: 'A heads-up when key routes such as the M25, A40 or Blackwall Tunnel close or turn into major delays.',
+    icon: 'navigate' as const,
+    title: 'Show where you are on the map',
+    body: 'The blue dot and Recentre use your live position while the app is open.',
   },
   {
-    icon: 'train',
-    title: 'Train & tube disruptions',
-    body: 'Be the first to know when your tube, Overground, Elizabeth line, DLR or National Rail operator goes into Severe or Closed status. You can pick specific lines in Settings.',
+    icon: 'sparkles' as const,
+    title: 'Nearby events in AI chat',
+    body: 'Ask “what’s on near me” and get matches around your area, not the whole city dumped at random.',
   },
   {
-    icon: 'calendar',
-    title: 'Events you have saved',
-    body: 'Two reminders: 1 hour before it starts, and 25 minutes before crowds leave.',
+    icon: 'car-sport' as const,
+    title: 'Directions from where you are',
+    body: 'Routes start from your current location. We do not track you in the background.',
   },
 ];
 
 /**
- * One-shot first-launch popup that explains what DriveIQ will notify you
- * about and asks for permission. Stored as "seen" once dismissed so it
- * never re-appears — users can revisit notification settings from the
- * Notifications panel any time.
+ * First-launch location card, same shape as the notifications ask.
+ * iOS/Android then show the system “While Using the App” prompt.
  */
-export function NotificationOnboarding({ onDone, open }: Props) {
-  const { hasAccount, requireAccount } = useAuth();
+export function LocationOnboarding({ open, onDone }: Props) {
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
       setVisible(true);
-      trackScreen('notification_onboarding');
+      trackScreen('location_onboarding');
       return;
     }
-    if (open === false) {
-      setVisible(false);
-    }
+    if (open === false) setVisible(false);
   }, [open]);
 
-  const presentAfterSignup = async () => {
-    await savePrefs({ ...DEFAULT_PREFS });
-    setTimeout(() => {
-      void presentNotificationOnboardingIfNeeded();
-    }, 400);
+  const finish = (location: LatLng | null) => {
+    setVisible(false);
+    setBusy(false);
+    resetSheetPointers();
+    onDone(location);
   };
 
   const handleEnable = async () => {
-    // No account yet: alerts have nowhere to go, so send the user to create
-    // one instead of burning the one-shot iOS permission prompt. Dismiss this
-    // card first — two modals presented at once wedges touch handling.
-    if (!hasAccount) {
-      track('notification_onboarding_account_required');
-      setVisible(false);
-      onDone();
-      requireAccount('notify', () => {
-        void presentAfterSignup();
-      });
-      return;
-    }
-
-    track('notification_onboarding_enabled');
+    track('location_onboarding_enabled');
     setBusy(true);
-    const granted = await ensurePermission();
-    track('notification_permission_result', { granted });
-    await markOnboardingSeen();
-    resetSheetPointers();
-    setVisible(false);
-    setBusy(false);
-    const { registerPushToken } = await import('@/services/pushTokens');
-    void registerPushToken();
-    onDone();
+    await markLocationOnboardingSeen();
+    const location = await requestForegroundLocation();
+    track('location_permission_result', { granted: Boolean(location), source: 'onboarding' });
+    if (!location) {
+      track('location_onboarding_denied');
+    }
+    finish(location);
   };
 
   const handleSkip = async () => {
-    track('notification_onboarding_skipped');
-    await markOnboardingSeen();
-    setVisible(false);
-    onDone();
+    track('location_onboarding_skipped');
+    await markLocationOnboardingSeen();
+    finish(null);
+  };
+
+  const openSettings = () => {
+    void Linking.openSettings().catch(() => undefined);
   };
 
   if (!visible) return null;
 
   return (
-    <SheetOverlay onRequestClose={handleSkip} dismissOnBackdropPress={false} level={20}>
+    <SheetOverlay onRequestClose={handleSkip} dismissOnBackdropPress={false} level={30}>
       <View style={styles.backdrop} pointerEvents="box-none">
         <View style={styles.card}>
           <View style={styles.iconBadge}>
-            <Ionicons
-              name="notifications"
-              size={28}
-              color={colors.textOnPrimary}
-            />
+            <Ionicons name="location" size={28} color={colors.textOnPrimary} />
           </View>
-          <Text style={styles.title}>Stay ahead with DriveIQ</Text>
+          <Text style={styles.title}>Use your location</Text>
           <Text style={styles.subtitle}>
-            We can give you a quiet heads-up when something important
-            happens on your route or for events you care about.
+            DriveIQ can show events and delays around you, and start directions
+            from where you are. Location stays on this device while you use the app.
+            We do not track you after you close it.
           </Text>
 
           <View style={styles.perkList}>
@@ -148,9 +111,8 @@ export function NotificationOnboarding({ onDone, open }: Props) {
           </View>
 
           <Text style={styles.footer}>
-            {hasAccount
-              ? 'You stay in control. Every category has its own toggle in Settings, and per-line subscriptions let you pick exactly which lines to follow.'
-              : 'Alerts need a free account so we know where to send them. You stay in control. Every category has its own toggle in Settings once you are in.'}
+            You can change this later in your phone Settings, or tap Use my location
+            in AI chat.
           </Text>
 
           <View style={styles.buttonRow}>
@@ -163,20 +125,19 @@ export function NotificationOnboarding({ onDone, open }: Props) {
               <Text style={styles.skipText}>Not now</Text>
             </Pressable>
             <Pressable
-              onPress={handleEnable}
+              onPress={() => void handleEnable()}
               style={styles.enableBtn}
               accessibilityRole="button"
               disabled={busy}
             >
               <Text style={styles.enableText}>
-                {busy
-                  ? 'Enabling…'
-                  : hasAccount
-                    ? 'Enable notifications'
-                    : 'Create free account'}
+                {busy ? 'Asking…' : 'Allow location'}
               </Text>
             </Pressable>
           </View>
+          <Pressable onPress={openSettings} hitSlop={8} style={styles.settingsLink}>
+            <Text style={styles.settingsLinkText}>Open phone Settings</Text>
+          </Pressable>
         </View>
       </View>
     </SheetOverlay>
@@ -284,5 +245,14 @@ const styles = StyleSheet.create({
     color: colors.textOnPrimary,
     fontSize: 14,
     fontWeight: '800',
+  },
+  settingsLink: {
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  settingsLinkText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.primary,
   },
 });

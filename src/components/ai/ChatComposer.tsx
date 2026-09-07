@@ -1,45 +1,80 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors } from '@/theme/colors';
 
 interface Props {
-  value: string;
-  onChange: (text: string) => void;
-  onSend: () => void;
+  onSend: (text: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  /** Bump after send from a prompt card so the box clears. */
+  resetToken?: number;
 }
 
+/**
+ * Local draft state on purpose. The chat sheet paints through SheetHost, so a
+ * parent-controlled value round-trips every keystroke and drops characters.
+ */
 export function ChatComposer({
-  value,
-  onChange,
   onSend,
   disabled,
   placeholder = 'Message DriveIQ…',
+  resetToken = 0,
 }: Props) {
   const insets = useSafeAreaInsets();
-  const canSend = value.trim().length > 0 && !disabled;
+  const [draft, setDraft] = useState('');
+  const draftRef = useRef('');
+  const inputRef = useRef<TextInput>(null);
+  draftRef.current = draft;
+
+  useEffect(() => {
+    if (resetToken === 0) return;
+    draftRef.current = '';
+    setDraft('');
+  }, [resetToken]);
+
+  const canSend = draft.trim().length > 0 && !disabled;
+
+  const submit = () => {
+    const text = draftRef.current.trim();
+    if (!text || disabled) return;
+    draftRef.current = '';
+    setDraft('');
+    onSend(text);
+  };
 
   return (
-    <View style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+    <View
+      style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, 12) }]}
+      pointerEvents="auto"
+    >
       <View style={styles.bar}>
         <TextInput
+          ref={inputRef}
           style={styles.input}
           placeholder={placeholder}
           placeholderTextColor={colors.textSecondary}
-          value={value}
-          onChangeText={onChange}
-          onSubmitEditing={canSend ? onSend : undefined}
-          returnKeyType="send"
+          value={draft}
+          onChangeText={(text) => {
+            draftRef.current = text;
+            setDraft(text);
+          }}
+          onSubmitEditing={canSend ? submit : undefined}
+          blurOnSubmit={false}
+          returnKeyType="default"
           editable={!disabled}
           multiline
+          scrollEnabled
           maxLength={800}
+          autoCorrect
+          autoCapitalize="sentences"
+          textAlignVertical="top"
+          keyboardAppearance="light"
         />
         <Pressable
-          onPress={onSend}
+          onPress={submit}
           style={[styles.send, !canSend && styles.sendOff]}
           disabled={!canSend}
           accessibilityLabel="Send message"

@@ -312,6 +312,95 @@ export async function dispatchPushNotifications(opts: {
   logger.info('dispatch.done', { users: userDocs.length });
 }
 
+interface SavedEventRow {
+  id: string;
+  title: string;
+  venue?: string;
+  startsAt?: string;
+  endsAt?: string;
+  realStartAt?: string;
+  estimatedFinishAt?: string;
+}
+
+const PRE_START_MS = 60 * 60 * 1000;
+const PRE_END_MS = 25 * 60 * 1000;
+const REMINDER_WINDOW_MS = 6 * 60 * 1000;
+
+/**
+ * FCM for saved-event reminders. Reads users/{uid}.savedEvents + fcmTokens.
+ * Not a Firestore listener — the 5-minute scheduler calls this.
+ */
+export async function dispatchSavedEventReminders(opts: { db: Firestore }): Promise<void> {
+  if (isQuietHours()) return;
+
+  const usersSnap = await opts.db.collection('users').limit(500).get();
+  let sent = 0;
+
+  for (const userDoc of usersSnap.docs) {
+    const data = userDoc.data();
+    const tokens = Array.isArray(data.fcmTokens)
+      ? (data.fcmTokens as string[]).filter((t) => typeof t === 'string' && t.length > 8)
+      : [];
+    if (tokens.length === 0) continue;
+
+    const prefs = parsePrefs(data.notificationPrefs);
+    if (!prefs['saved-events']) continue;
+
+    const events = Array.isArray(data.savedEvents) ? (data.savedEvents as SavedEventRow[]) : [];
+    if (events.length === 0) continue;
+
+    const stateRef = opts.db.doc(`users/${userDoc.id}/notificationState/reminders`);
+    const stateSnap = await stateRef.get();
+    const sentMap = { ...((stateSnap.data()?.sent as Record<string, string> | undefined) ?? {}) };
+    const now = Date.now();
+    let changed = false;
+
+    for (const e of events) {
+      const start = Date.parse(e.realStartAt || e.startsAt || '');
+      const end = Date.parse(e.estimatedFinishAt || e.endsAt || '');
+      const venue = e.venue?.trim() || 'the venue';
+
+      const trySend = async (key: string, at: number, title: string, body: string) => {
+        if (!Number.isFinite(at) || sentMap[key]) return;
+        if (now < at || now > at + REMINDER_WINDOW_MS) return;
+        await sendPushToTokens(tokens, {
+          title,
+          body,
+          data: { kind: key.endsWith('end') ? 'saved-event-end' : 'saved-event', eventId: e.id },
+        });
+        sentMap[key] = new Date().toISOString();
+        changed = true;
+        sent += 1;
+      };
+
+      if (Number.isFinite(start)) {
+        await trySend(
+          `${e.id}:preStart`,
+          start - PRE_START_MS,
+          `${e.title} starts in 1 hour`,
+          venue !== 'the venue'
+            ? `Time to head to ${venue}. Tap for the fastest route with live traffic.`
+            : 'Time to head out. Tap for the fastest route with live traffic.',
+        );
+      }
+      if (Number.isFinite(end)) {
+        await trySend(
+          `${e.id}:preEnd`,
+          end - PRE_END_MS,
+          `${e.title} is about to end`,
+          `Wrapping up in about 25 minutes. Expect traffic around ${venue} as crowds leave.`,
+        );
+      }
+    }
+
+    if (changed) {
+      await stateRef.set({ sent: sentMap, updatedAt: new Date().toISOString() }, { merge: true });
+    }
+  }
+
+  logger.info('dispatch.event_reminders', { sent });
+}
+
 export function parseLineStatuses(rows: unknown[]): LineStatus[] {
   return rows
     .map((row) => {

@@ -227,11 +227,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         void (async () => {
           const { loadPrefs, loadLineSubscriptions } = await import('@/services/notifications');
           const { loadSavedFlights } = await import('@/services/savedFlights');
+          const { loadSavedEvents } = await import('@/services/savedEvents');
           const { syncUserProfileFromLocal } = await import('@/services/userSync');
           await syncUserProfileFromLocal(
             await loadPrefs(),
             await loadLineSubscriptions(),
             Object.values(await loadSavedFlights()),
+            Object.values(await loadSavedEvents()),
           );
         })();
       } else {

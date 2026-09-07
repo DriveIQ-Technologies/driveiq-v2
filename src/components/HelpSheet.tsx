@@ -69,6 +69,10 @@ const FAQS: QA[] = [
     q: 'How do I delete my account?',
     a: 'Open Menu → Settings → Delete account. Confirm when asked. This permanently removes your DriveIQ account and personal data on our servers. Community reports you shared stay on the map without your name. If you have Premium through the App Store or Google Play, cancel that separately under Manage subscription.',
   },
+  {
+    q: 'How do I turn on location?',
+    a: 'On first launch, DriveIQ asks you to Allow location, then your phone shows the usual While Using the App prompt. You can also tap Use my location in AI chat, or turn it on in your phone Settings → DriveIQ → Location. We only use it while the app is open, for the blue dot, nearby events, and directions.',
+  },
 ];
 
 export function HelpSheet({ visible, onClose, onOpenAISupport }: Props) {

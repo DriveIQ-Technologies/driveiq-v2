@@ -1,4 +1,24 @@
 import { auth, authApi } from './firebase';
+import type { AppEvent } from '@/types/event';
+
+export interface AgentDiscoveredEvent {
+  id: string;
+  source: string;
+  category: 'sports' | 'other';
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  venue: string;
+  latitude: number;
+  longitude: number;
+  subCategory?: string;
+  doorsAt?: string;
+  realStartAt?: string;
+  estimatedFinishAt?: string;
+  turnoutMin?: number;
+  turnoutMax?: number;
+  copyLine?: string;
+}
 
 export interface AgentAnswer {
   ok: boolean;
@@ -7,6 +27,7 @@ export interface AgentAnswer {
   remaining: number | null;
   limit: number | null;
   model: 'haiku' | 'sonnet' | null;
+  discoveredEvents?: AgentDiscoveredEvent[];
 }
 
 export interface AgentTurn {
@@ -38,6 +59,9 @@ export interface AgentEventHint {
   featured?: boolean;
   copy?: string;
   status?: 'live' | 'upcoming' | 'finished';
+  latitude?: number;
+  longitude?: number;
+  kmAway?: number;
 }
 
 export interface AgentLiveContext {
@@ -46,6 +70,7 @@ export interface AgentLiveContext {
   rails?: string[];
   premium?: boolean;
   clockLondon?: string;
+  location?: { latitude: number; longitude: number; label?: string | null };
 }
 
 export async function askDriveiqAgent(
@@ -70,11 +95,12 @@ export async function askDriveiqAgent(
   const payload = {
     question,
     history: history?.length ? history : undefined,
-    clientEvents: live?.events?.length ? live.events.slice(0, 50) : undefined,
-    clientRoads: live?.roads?.length ? live.roads.slice(0, 20) : undefined,
-    clientRails: live?.rails?.length ? live.rails.slice(0, 20) : undefined,
+    clientEvents: live?.events?.length ? live.events.slice(0, 80) : undefined,
+    clientRoads: live?.roads?.length ? live.roads.slice(0, 24) : undefined,
+    clientRails: live?.rails?.length ? live.rails.slice(0, 24) : undefined,
     premium: live?.premium === true,
     clockLondon: live?.clockLondon,
+    location: live?.location,
   };
 
   const logBase = {
@@ -144,4 +170,41 @@ export async function askDriveiqAgent(
     }
     throw httpErr;
   }
+}
+
+const APP_SOURCES = new Set<AppEvent['source']>([
+  'thesportsdb',
+  'football-data',
+  'espn',
+  'fotmob',
+  'ticketmaster',
+  'venue-site',
+  'sample',
+  'featured',
+]);
+
+export function discoveredEventToAppEvent(row: AgentDiscoveredEvent): AppEvent | null {
+  if (!row.id || !row.title || !row.startsAt) return null;
+  if (!Number.isFinite(row.latitude) || !Number.isFinite(row.longitude)) return null;
+  const source = APP_SOURCES.has(row.source as AppEvent['source'])
+    ? (row.source as AppEvent['source'])
+    : 'ticketmaster';
+  return {
+    id: row.id,
+    source,
+    category: row.category === 'sports' ? 'sports' : 'other',
+    title: row.title,
+    startsAt: row.startsAt,
+    endsAt: row.endsAt || row.startsAt,
+    venue: row.venue || 'London',
+    latitude: row.latitude,
+    longitude: row.longitude,
+    subCategory: row.subCategory,
+    doorsAt: row.doorsAt,
+    realStartAt: row.realStartAt,
+    estimatedFinishAt: row.estimatedFinishAt,
+    turnoutMin: row.turnoutMin,
+    turnoutMax: row.turnoutMax,
+    copyLine: row.copyLine,
+  };
 }

@@ -23,6 +23,7 @@ export async function saveEvent(event: AppEvent): Promise<SavedEventMap> {
   const isNew = !(event.id in map);
   map[event.id] = event;
   await setJSON(STORAGE_KEY, map);
+  void syncSavedEventsToServer(map);
   if (isNew) {
     void incrementUsageCounter('eventsSaved');
   }
@@ -33,10 +34,20 @@ export async function unsaveEvent(id: string): Promise<SavedEventMap> {
   const map = await loadSavedEvents();
   delete map[id];
   await setJSON(STORAGE_KEY, map);
+  void syncSavedEventsToServer(map);
   return map;
 }
 
 export async function isEventSaved(id: string): Promise<boolean> {
   const map = await loadSavedEvents();
   return id in map;
+}
+
+async function syncSavedEventsToServer(map: SavedEventMap): Promise<void> {
+  try {
+    const { syncUserProfile } = await import('./userSync');
+    await syncUserProfile({ savedEvents: Object.values(map) });
+  } catch {
+    /* offline */
+  }
 }
