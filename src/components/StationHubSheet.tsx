@@ -158,7 +158,6 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
         onFirstStationSaved?.();
       }
     } catch (e) {
-      console.warn('[stations] save failed', e);
       if (mountedRef.current) {
         showDialog('Could not save', 'Please try that again in a moment.');
       }
@@ -184,7 +183,6 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
         );
       }
     } catch (e) {
-      console.warn('[stations] notify failed', e);
       if (mountedRef.current) {
         showDialog('Could not update alerts', 'Please try that again in a moment.');
       }

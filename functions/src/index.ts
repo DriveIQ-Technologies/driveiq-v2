@@ -294,7 +294,7 @@ export const askDriveiqAgent = onCall(
     invoker: 'public',
     serviceAccount: WAITLIST_FN_SA,
   },
-  async (request) => {
+  async (request, response) => {
     logger.info('agent.callable_in', {
       uid: request.auth?.uid ?? null,
       hasAuth: Boolean(request.auth?.uid),
@@ -302,7 +302,18 @@ export const askDriveiqAgent = onCall(
         typeof request.data?.question === 'string' ? request.data.question.length : 0,
     });
     const apiKey = await keyOrEmpty(anthropicKey);
-    return handleAskAgent({ db, apiKey, request });
+    // `acceptsStreaming` is true only when the client called .stream(). Pair it
+    // with the server-side `aiStreaming` flag (checked in handleAskAgent) so
+    // streaming needs BOTH sides to opt in. A non-streaming client never gets
+    // an onDelta, so its code path is byte-for-byte what it was.
+    const onDelta =
+      request.acceptsStreaming && response
+        ? (text: string) => {
+            // Fire-and-forget: a client that hung up must not fail the answer.
+            void response.sendChunk({ delta: text }).catch(() => undefined);
+          }
+        : undefined;
+    return handleAskAgent({ db, apiKey, request, onDelta });
   },
 );
 

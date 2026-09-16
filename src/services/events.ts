@@ -95,7 +95,6 @@ export async function fetchAllEvents(
         duration_ms: Date.now() - started,
       });
     } catch (e) {
-      console.warn(`[events] ${label} failed`, e);
       buckets[key] = [];
       track('events_provider_failed', {
         provider: label,
@@ -107,9 +106,6 @@ export async function fetchAllEvents(
 
   const published = await fetchPublishedEvents();
   if (published) {
-    console.log(
-      `[events] using server catalogue (${published.events.length} rows, age ${Math.round((Date.now() - published.updatedAt) / 60000)}m)`,
-    );
     track('events_published_loaded', { count: published.events.length });
     const serverFeatured = published.events.filter((e) => e.source === 'featured');
     buckets.ticketmaster = published.events.filter((e) => e.source !== 'featured');
@@ -153,19 +149,12 @@ export async function fetchAllEvents(
     run('venueSites', 'venue-sites', () => fetchVenueSiteEvents(range)),
   ]);
 
-  console.log(
-    `[events] provider counts: espn=${buckets.espn.length} cric=${buckets.cricinfo.length} ` +
-      `football-data=${buckets.footballData.length} sportsdb=${buckets.sports.length} ` +
-      `fotmob=${buckets.fotmob.length} tm=${buckets.ticketmaster.length} ics=${buckets.venueSites.length} ` +
-      `featured=${buckets.featured.length}`,
-  );
 
   const merged = (await finalizeAsync(buckets, range)).map(normaliseEventLocal);
   warnOnEmptyCoverageVenues(merged);
   try {
     return await mergeRemoteEventRecords(merged);
   } catch (e) {
-    console.warn('[events] remote records skipped', e);
     return merged;
   }
 }
@@ -178,7 +167,6 @@ function withTimeout<T>(
 ): Promise<T> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      console.warn(`[events] ${label} timed out after ${ms}ms`);
       track('events_provider_timed_out', { provider: label, timeout_ms: ms });
       resolve(fallback);
     }, ms);
@@ -189,7 +177,6 @@ function withTimeout<T>(
       })
       .catch((e) => {
         clearTimeout(timer);
-        console.warn(`[events] ${label} failed`, e);
         resolve(fallback);
       });
   });
@@ -227,9 +214,7 @@ function finalize(
   // actually is (teams + day, or title + venue + performance).
   const { events: deduped, removed, samples } = dedupeEvents(combined);
   if (removed > 0) {
-    console.log(`[events] collapsed ${removed} duplicate records across providers`);
     for (const s of samples) {
-      console.log(`[events]   kept ${s.kept} — dropped ${s.dropped.join('; ')}`);
     }
   }
 
@@ -244,7 +229,6 @@ function finalize(
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
   );
   if (droppedGeo > 0 && allowSample) {
-    console.warn(`[events] dropped ${droppedGeo} outside DriveIQ area`);
   }
   return merged;
 }
@@ -323,9 +307,5 @@ function warnOnEmptyCoverageVenues(events: AppEvent[]): void {
     (label) => (counts.get(label) ?? 0) === 0,
   );
   if (empty.length > 0) {
-    console.warn(
-      `[events] COVERAGE GAP — no events in next 7 days at: ${empty.join(', ')}. ` +
-        'Verify against club fixture lists; may be genuinely dark or a provider miss.',
-    );
   }
 }

@@ -83,7 +83,6 @@ function loadPurchases(): PurchasesModule['default'] | null {
   if (!isPurchasesNativeAvailable()) {
     if (!nativeUnavailableLogged) {
       nativeUnavailableLogged = true;
-      console.warn('[purchases] RNPurchases native module not in this build', purchasesUnavailableMessage());
     }
     return null;
   }
@@ -93,7 +92,6 @@ function loadPurchases(): PurchasesModule['default'] | null {
     Purchases = mod.default ?? null;
     return Purchases;
   } catch (e) {
-    console.warn('[purchases] SDK unavailable', e);
     return null;
   }
 }
@@ -132,9 +130,6 @@ export async function configurePurchases(): Promise<boolean> {
 
   const apiKey = apiKeyForPlatform();
   if (!apiKey) {
-    console.warn(
-      `[purchases] No RevenueCat API key for ${Platform.OS}. Set EXPO_PUBLIC_REVENUECAT_${Platform.OS === 'ios' ? 'IOS' : 'ANDROID'}_API_KEY.`,
-    );
     return false;
   }
 
@@ -143,7 +138,12 @@ export async function configurePurchases(): Promise<boolean> {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { LOG_LEVEL } = require('react-native-purchases') as PurchasesModule;
-        P.setLogLevel(LOG_LEVEL.DEBUG);
+        // WARN, not DEBUG. RevenueCat routes every log line back into JS through
+        // the bridge, so at DEBUG each entitlement read costs a round trip and
+        // a render — that is the "Vending CustomerInfo from cache" spam, and it
+        // is heavy enough to make the UI feel unresponsive. Raise to DEBUG only
+        // while actively debugging a purchase.
+        P.setLogLevel(LOG_LEVEL.WARN);
       } catch {
         /* non-fatal in dev */
       }
@@ -165,7 +165,6 @@ export async function configurePurchases(): Promise<boolean> {
   } catch (e) {
     Purchases = null;
     configured = false;
-    console.warn('[purchases] configure failed', e);
     track('purchases_configure_failed');
     return false;
   }
@@ -187,7 +186,6 @@ export async function getCustomerInfo(force = false): Promise<CustomerInfo | nul
     emitPremium(hasPremiumEntitlement(lastCustomerInfo));
     return lastCustomerInfo;
   } catch (e) {
-    console.warn('[purchases] getCustomerInfo failed', e);
     return lastCustomerInfo;
   }
 }
@@ -214,7 +212,6 @@ export async function identifyPurchasesUser(uid: string | null | undefined): Pro
     // Offerings are per-subscriber; refresh after identity settles.
     void prefetchOfferings(true);
   } catch (e) {
-    console.warn('[purchases] identify failed', e);
   }
 }
 
@@ -256,21 +253,6 @@ export async function prefetchOfferings(force = false): Promise<PurchasesOfferin
         };
         const catalogueGbp = catalogueGbpAmount(pkg);
         const displayed = packagePriceLabel(pkg, lastStorefront);
-        console.log('[purchases] price compare', {
-          storefront: lastStorefront,
-          package_id: pkg.identifier,
-          product_id: product.identifier,
-          revenuecat: {
-            price: product.price,
-            currencyCode: product.currencyCode,
-            priceString: product.priceString,
-            pricePerMonth: product.pricePerMonth ?? null,
-            pricePerYear: product.pricePerYear ?? null,
-            pricePerMonthString: product.pricePerMonthString ?? null,
-          },
-          catalogue_gbp: catalogueGbp,
-          displayed,
-        });
         track('purchases_price_compare', {
           storefront: lastStorefront ?? '',
           package_id: pkg.identifier,
@@ -284,7 +266,6 @@ export async function prefetchOfferings(force = false): Promise<PurchasesOfferin
       }
       return cachedOffering;
     } catch (e) {
-      console.warn('[purchases] prefetchOfferings failed', e);
       return cachedOffering;
     } finally {
       offeringsPrefetch = null;
@@ -497,7 +478,6 @@ export async function presentRevenueCatPaywall(): Promise<
     }
     return 'cancelled';
   } catch (e) {
-    console.warn('[purchases] presentPaywall failed', e);
     return 'unavailable';
   }
 }

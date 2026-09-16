@@ -535,7 +535,6 @@ export default function MapScreen() {
             longitude: pos.coords.longitude,
           });
         } catch (e) {
-          console.warn('[location] foreground re-read failed', e);
         }
       })();
     });
@@ -569,7 +568,6 @@ export default function MapScreen() {
         const label = i === 0 ? 'today' : i === 1 ? 'tomorrow' : `+${i}d`;
         next7.push(`${key}(${label})=${buckets[key] ?? 0}`);
       }
-      console.log(`[events] ${list.length} total cached; next 7 days: ${next7.join(', ')}`);
     };
 
     (async () => {
@@ -581,7 +579,6 @@ export default function MapScreen() {
           setEvents(cached);
           setLoading(false);
         });
-        console.log(`[events] painted ${cached.length} from disk cache`);
         track('events_cache_loaded', { count: cached.length });
       }
 
@@ -617,7 +614,6 @@ export default function MapScreen() {
         });
       } catch (e) {
         if (cancelled) return;
-        console.warn('[events] fetch failed', e);
         if (!cached?.length) {
           setErrorMsg('Could not load events. Pull to retry.');
         }
@@ -661,7 +657,6 @@ export default function MapScreen() {
       try {
         await runLoad();
       } catch (e) {
-        console.warn('[poll] live data refresh failed', e);
       } finally {
         inFlight = false;
       }
@@ -1182,7 +1177,6 @@ export default function MapScreen() {
       setUserLocation(fresh);
       return fresh;
     } catch (e) {
-      console.warn('[location] re-read failed', e);
       return null;
     }
   }, [userLocation]);
@@ -1398,7 +1392,6 @@ export default function MapScreen() {
           headSub = null;
         }
       } catch (e) {
-        console.warn('[nav] watchers failed', e);
       }
     })();
 

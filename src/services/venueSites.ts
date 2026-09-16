@@ -144,12 +144,10 @@ const fetchText = async (url: string): Promise<string | null> => {
       headers: { Accept: 'text/html,text/calendar,application/json', 'User-Agent': UA },
     });
     if (!res.ok) {
-      console.warn('[venue-sites] non-OK', res.status, url.slice(0, 60));
       return null;
     }
     return await res.text();
   } catch (e) {
-    console.warn('[venue-sites] network error', url.slice(0, 60), e);
     return null;
   }
 };
@@ -411,7 +409,6 @@ const rahToEvents = (
   try {
     parsed = JSON.parse(json) as RahEvent[];
   } catch {
-    console.warn('[venue-sites] RAH feed: invalid JSON');
     return [];
   }
   if (!Array.isArray(parsed)) return [];
@@ -458,7 +455,6 @@ const rahToEvents = (
 async function fetchSite(site: VenueSite, range: DateRange): Promise<AppEvent[]> {
   const place = findLondonPlace(site.venue);
   if (!place) {
-    console.warn('[venue-sites] no coords for', site.venue, '— add to londonVenues');
     return [];
   }
   if (site.kind === 'jsonld-crawl') return fetchJsonldCrawl(site, place, range);
@@ -474,7 +470,6 @@ export async function fetchVenueSiteEvents(range: DateRange): Promise<AppEvent[]
     VENUE_SITES.map(async (site) => ({
       site,
       events: await fetchSite(site, range).catch((e) => {
-        console.warn('[venue-sites]', site.venue, 'failed', e);
         return [] as AppEvent[];
       }),
     })),
@@ -488,6 +483,5 @@ export async function fetchVenueSiteEvents(range: DateRange): Promise<AppEvent[]
   const summary = results
     .map(({ site, events }) => `${site.venue.split(' ')[0]}:${site.kind}=${events.length}`)
     .join(', ');
-  console.log(`[venue-sites] ${all.length} events (${summary})`);
   return all;
 }

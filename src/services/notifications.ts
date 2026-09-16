@@ -114,10 +114,6 @@ const hasNativeNotificationsModule = (): boolean => {
 const getNotifications = (): any => {
   if (_Notifications !== null) return _Notifications;
   if (!hasNativeNotificationsModule()) {
-    console.warn(
-      '[notif] expo-notifications native module is not in this build — ' +
-        'notifications disabled. Run `npx pod-install ios` and rebuild to enable.',
-    );
     _Notifications = false;
     return null;
   }
@@ -198,7 +194,6 @@ async function syncNotificationProfile(): Promise<void> {
     const events = Object.values(await loadSavedEvents());
     await syncUserProfileFromLocal(prefs, lineSubs, flights, events);
   } catch (e) {
-    console.warn('[notif] profile sync skipped', e);
   }
 }
 
@@ -342,11 +337,9 @@ const fire = async (
 ): Promise<void> => {
   const N = getNotifications();
   if (!N) {
-    console.log('[notif] (no-op)', title, body);
     return;
   }
   if (isQuietHours()) {
-    console.log('[notif] quiet hours, skipped', title);
     return;
   }
   try {
@@ -363,7 +356,6 @@ const fire = async (
       type: alertTypeFromKind(kind),
     });
   } catch (e) {
-    console.warn('[notif] schedule failed', e);
     track('notification_dispatch_failed');
   }
 };
@@ -419,7 +411,6 @@ export function startNotificationOpenTracking(): void {
       _openHandler?.(data);
     });
   } catch (e) {
-    console.warn('[notif] response listener setup failed', e);
   }
 }
 
@@ -583,7 +574,6 @@ export async function scheduleEventReminder(
   if (!prefs['saved-events']) return;
   const granted = await ensurePermission();
   if (!granted) {
-    console.warn('[notif] event reminder skipped — permission not granted');
     return;
   }
   const N = getNotifications();
@@ -613,7 +603,6 @@ export async function scheduleEventReminder(
       });
       track('event_reminder_scheduled', { phase: 'pre_start', event_id: event.id });
     } catch (e) {
-      console.warn('[notif] event reminder failed', e);
     }
   }
 
@@ -636,7 +625,6 @@ export async function scheduleEventReminder(
       });
       track('event_reminder_scheduled', { phase: 'pre_end', event_id: event.id });
     } catch (e) {
-      console.warn('[notif] event end reminder failed', e);
     }
   }
 }

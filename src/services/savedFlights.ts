@@ -55,7 +55,6 @@ async function syncFlightsProfile(map: SavedFlightMap): Promise<void> {
     const lineSubs = await loadLineSubscriptions();
     await syncUserProfileFromLocal(prefs, lineSubs, Object.values(map));
   } catch (e) {
-    console.warn('[flights] profile sync skipped', e);
   }
 }
 

@@ -96,7 +96,6 @@ try {
     _db = fsMod.getFirestore(app);
     _fsApi = fsMod;
   } catch (fsErr) {
-    console.warn('[firebase] Firestore unavailable', fsErr);
     _db = null;
     _fsApi = null;
   }
@@ -107,12 +106,10 @@ try {
     _functions = fnMod.getFunctions(app, 'europe-west2');
     _functionsApi = fnMod;
   } catch (fnErr) {
-    console.warn('[firebase] Functions unavailable', fnErr);
     _functions = null;
     _functionsApi = null;
   }
 } catch (e) {
-  console.warn('[firebase] initialisation failed — auth disabled', e);
   _auth = null;
   _authApi = null;
   _db = null;

@@ -26,6 +26,14 @@ export interface CachedFlight {
   scheduledLocal?: string;
   revisedLocal?: string;
   scheduledMs: number;
+  /** Revised (expected) time as ms epoch, when the feed has one. */
+  revisedMs?: number;
+  /**
+   * Revised time when present, else scheduled. The board sorts and windows on
+   * this so a delayed flight stays in the right place — see the same field in
+   * src/services/aerodatabox.ts.
+   */
+  effectiveMs: number;
   status: string;
   cancelled: boolean;
   delayed: boolean;
@@ -84,6 +92,12 @@ function normalizeOne(f: AdbFlight, direction: 'arrival' | 'departure', index: n
     scheduledLocal: m.scheduledTime?.local,
     revisedLocal: m.revisedTime?.local,
     scheduledMs: Number.isFinite(schedMs) ? schedMs : 0,
+    revisedMs: Number.isFinite(revMs) ? revMs : undefined,
+    effectiveMs: Number.isFinite(revMs)
+      ? revMs
+      : Number.isFinite(schedMs)
+        ? schedMs
+        : 0,
     status: (f.status ?? '').trim() || 'Scheduled',
     cancelled,
     delayed,
@@ -102,7 +116,7 @@ export function normalizeFids(raw: AdbFidsResponse): CachedFlight[] {
     if (f.isCargo) return;
     out.push(normalizeOne(f, 'departure', i));
   });
-  return out.sort((a, b) => a.scheduledMs - b.scheduledMs);
+  return out.sort((a, b) => a.effectiveMs - b.effectiveMs);
 }
 
 const p2 = (n: number) => String(n).padStart(2, '0');

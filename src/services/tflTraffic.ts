@@ -69,11 +69,9 @@ export async function fetchTrafficIncidents(): Promise<TrafficIncident[]> {
   try {
     res = await fetch(url);
   } catch (e) {
-    console.warn('[tfl-traffic] network error', e);
     return [];
   }
   if (!res.ok) {
-    console.warn('[tfl-traffic] non-OK', res.status);
     return [];
   }
 
@@ -97,7 +95,6 @@ export async function fetchTrafficIncidents(): Promise<TrafficIncident[]> {
       hasClosures: !!r.hasClosures,
     });
   }
-  console.log(`[tfl-traffic] ${out.length} incidents`);
   return out;
 }
 

@@ -84,11 +84,9 @@ export async function askDriveiqAgent(
       const cred = await authApi.signInAnonymously(auth);
       currentUser = cred.user;
     } catch (e) {
-      console.warn('[agent] anonymous sign-in failed', e);
     }
   }
   if (!currentUser) {
-    console.warn('[agent] no currentUser — cannot call backend');
     throw new Error('agent/unavailable');
   }
 
@@ -125,13 +123,6 @@ export async function askDriveiqAgent(
 
   const viaHttp = async (forceRefresh: boolean): Promise<AgentAnswer> => {
     const token = await currentUser.getIdToken(forceRefresh);
-    console.log('[agent] http request', {
-      ...logBase,
-      url: HTTP_URL,
-      forceRefresh,
-      hasToken: Boolean(token),
-      tokenChars: token.length,
-    });
     const res = await fetch(HTTP_URL, {
       method: 'POST',
       headers: {
@@ -141,12 +132,6 @@ export async function askDriveiqAgent(
       body: JSON.stringify({ data: payload }),
     });
     const raw = await res.text();
-    console.log('[agent] http response', {
-      status: res.status,
-      ok: res.ok,
-      bodyChars: raw.length,
-      bodyPreview: preview(raw, 240),
-    });
     let json: AgentHttpBody | null = null;
     try {
       json = raw ? (JSON.parse(raw) as AgentHttpBody) : null;
@@ -164,7 +149,6 @@ export async function askDriveiqAgent(
     return await viaHttp(false);
   } catch (httpErr) {
     const httpMsg = httpErr instanceof Error ? httpErr.message : String(httpErr);
-    console.warn('[agent] http path failed', httpMsg);
     if (httpMsg.includes('401') || httpMsg.toLowerCase().includes('unauth') || httpMsg.includes('Sign in required')) {
       return await viaHttp(true);
     }

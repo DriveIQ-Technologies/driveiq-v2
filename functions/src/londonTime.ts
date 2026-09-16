@@ -65,3 +65,33 @@ export function addMinutesIso(iso: string, minutes: number): string {
   if (!Number.isFinite(t)) return iso;
   return new Date(t + minutes * 60_000).toISOString();
 }
+
+/**
+ * "Wed 16 Sep 19:30" in Europe/London, or '' when the input is unusable.
+ *
+ * Event rows used to reach the agent as raw UTC ISO strings while the prompt
+ * told the model to "always say London HH:mm" — leaving it to do the timezone
+ * arithmetic. Through BST that is a systematic one-hour error on every time it
+ * quotes, and models are unreliable at DST boundaries even when they try. Do
+ * the conversion here, where `Intl` gets it right, and hand the model a string
+ * it only has to copy.
+ */
+export function londonStamp(iso: string | undefined | null): string {
+  if (!iso) return '';
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms).toLocaleString('en-GB', {
+    timeZone: 'Europe/London',
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+/** London stamp, or the given fallback when the input can't be parsed. */
+export function londonStampOr(iso: string | undefined | null, fallback = 'n/a'): string {
+  return londonStamp(iso) || fallback;
+}

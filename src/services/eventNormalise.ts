@@ -284,7 +284,6 @@ async function fetchOverlayChunk(
       ],
     );
   } catch (e) {
-    console.warn(`[events] overlay read failed for ${collectionName}`, e);
     return [];
   }
 }

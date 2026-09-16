@@ -20,6 +20,7 @@ import React, {
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 import type { User } from 'firebase/auth';
 
 import {
@@ -96,6 +97,173 @@ export interface AuthContextValue {
   deleteAccount: () => Promise<void>;
 }
 
+/**
+ * Ceiling on the Firebase half of a federated sign-in.
+ *
+ * Exchanging an Apple credential is a network call with no timeout of its own,
+ * so on a weak connection it sits there indefinitely — the user watches a
+ * spinner for a minute and then gets a failure with no idea why. Fail fast and
+ * say what happened instead.
+ */
+const CREDENTIAL_EXCHANGE_MS = 20_000;
+
+class SignInTimeoutError extends Error {}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new SignInTimeoutError('credential-exchange-timeout')),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * Run the after-sign-in housekeeping without ever failing the sign-in.
+ *
+ * Once Firebase has returned a user, the user IS signed in — profile updates,
+ * analytics identify, waitlist claim and entitlement sync are all bookkeeping
+ * that happens afterwards. Awaiting them bare meant any one of them rejecting
+ * (a flaky network, PostHog, StoreKit with no signed-in App Store account —
+ * common on a review device) rejected the whole `loginWith…` call. The sheet
+ * then showed a generic failure and never closed, so a user who had just
+ * successfully authenticated was told "Something went wrong. Please try again."
+ * and left staring at the sign-in form. That is the App Review 2.1(a) bug.
+ *
+ * Each step is isolated so one failure cannot take down the others either.
+ */
+async function settleAfterSignIn(
+  label: string,
+  steps: Array<() => void | Promise<unknown>>,
+): Promise<void> {
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (e) {
+      // Swallowed on purpose — the user is signed in and stays signed in —
+      // but never silently: tagged as post_signin so it is visible.
+      reportAuthFailure(label, 'post_signin', e);
+    }
+  }
+}
+
+/**
+ * Stage-tagged failure reporting for federated sign-in.
+ *
+ * "Something went wrong" told us nothing: the flow has four places it can fail
+ * (Apple's own sheet, building the credential, the Firebase exchange, the
+ * bookkeeping afterwards) and they need completely different fixes. Every
+ * failure is now tagged with the stage and the raw code/message, sent to
+ * analytics in every build and printed verbatim in a dev build.
+ *
+ * This is a deliberate diagnostic channel, not general logging — it fires only
+ * on an auth failure, never on the happy path.
+ */
+/**
+ * An error whose message is already the exact sentence the user should read.
+ *
+ * `friendlyAuthError` maps Firebase codes to copy and falls back to a generic
+ * line for anything it does not recognise — which silently discarded every
+ * message this file throws by hand, including the ones naming the precise
+ * Firebase misconfiguration. Throw this instead of a bare Error and the text
+ * survives all the way to the sheet.
+ */
+export class AuthMessageError extends Error {
+  readonly userFacing = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthMessageError';
+  }
+}
+
+function isUserFacing(e: unknown): e is AuthMessageError {
+  return (
+    e instanceof AuthMessageError ||
+    (typeof e === 'object' &&
+      e !== null &&
+      (e as { userFacing?: unknown }).userFacing === true)
+  );
+}
+
+export type AuthStage =
+  | 'apple_request'
+  | 'apple_credential'
+  | 'firebase_exchange'
+  | 'post_signin';
+
+function describeError(e: unknown): { code: string; name: string; message: string } {
+  const obj = typeof e === 'object' && e !== null ? (e as Record<string, unknown>) : {};
+  return {
+    code: obj.code != null ? String(obj.code) : '',
+    name: e instanceof Error ? e.name : String(obj.name ?? ''),
+    message: e instanceof Error ? e.message : String(obj.message ?? e),
+  };
+}
+
+function reportAuthFailure(provider: string, stage: AuthStage, e: unknown): {
+  code: string;
+  name: string;
+  message: string;
+} {
+  const info = describeError(e);
+  lastAuthFailure = { stage, code: info.code, message: info.message };
+  track('auth_stage_failed', {
+    provider,
+    stage,
+    code: info.code || 'none',
+    name: info.name || 'none',
+    message: info.message.slice(0, 300),
+  });
+  if (__DEV__) {
+    // Separate arguments, not one template string: LogBox renders a lone
+    // concatenated string unreliably (it can surface as just "null"), whereas
+    // a label plus an object is always shown in full in Metro and the redbox.
+    // eslint-disable-next-line no-console
+    console.error(`[auth] ${provider} failed at stage: ${stage}`, {
+      stage,
+      provider,
+      code: info.code || '(none)',
+      name: info.name || '(none)',
+      message: info.message || '(none)',
+      raw: safeJson(e),
+    });
+  }
+  return info;
+}
+
+/**
+ * Last auth failure, for the dev-only detail line in the sign-in sheet.
+ *
+ * The console is not a reliable channel here — LogBox mangles long strings and
+ * Metro output is easy to miss — so in a dev build the sheet itself shows the
+ * stage and raw code. That is the difference between "something went wrong"
+ * and knowing exactly which of the four stages broke.
+ */
+let lastAuthFailure: { stage: AuthStage; code: string; message: string } | null = null;
+
+export function getLastAuthFailure(): typeof lastAuthFailure {
+  return lastAuthFailure;
+}
+
+function safeJson(e: unknown): string {
+  try {
+    return JSON.stringify(e, Object.getOwnPropertyNames(Object(e))).slice(0, 600);
+  } catch {
+    return '(unserialisable)';
+  }
+}
+
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 const LAST_EMAIL_KEY = 'diq:lastEmail';
@@ -134,7 +302,6 @@ async function sendVerifyLink(user: User): Promise<boolean> {
     track('auth_verification_email_sent');
     return true;
   } catch (e) {
-    console.warn('[auth] verification email failed', e);
     track('auth_verification_email_failed');
     return false;
   }
@@ -147,7 +314,6 @@ async function ensureAnonymousUser(): Promise<void> {
     await authApi.signInAnonymously(auth);
     track('auth_anonymous_started');
   } catch (e) {
-    console.warn('[auth] anonymous sign-in failed', e);
   }
 }
 
@@ -275,7 +441,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           run();
         } catch (e) {
-          console.warn('[auth] pending action failed', e);
         }
         if (kind) setCompletedAction(kind);
       }, SHEET_DISMISS_MS);
@@ -360,94 +525,225 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await api.signOut(a);
         }
         const cred = await api.signInWithEmailAndPassword(a, email, password);
-        await identifyFirebaseUser(cred.user);
-        track('auth_sign_in_succeeded');
-        const granted = await applyWaitlistOnAuth({
+        // Signed in. Bookkeeping below must never fail the sign-in.
+        await settleAfterSignIn('email_signin', [
+          () => identifyFirebaseUser(cred.user),
+          () => track('auth_sign_in_succeeded'),
+          async () => {
+            const granted = await applyWaitlistOnAuth({
           accountEmail: cred.user.email,
           waitlistEmail: waitlist?.waitlistEmail,
           claimToken: waitlist?.claimToken,
           source: 'email_signin',
-        });
-        if (granted) {
-          const { presentPremiumUnlock } = await import('@/services/subscription');
-          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-        }
-        await syncPremiumEntitlement();
+            });
+            if (granted) {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          },
+          () => syncPremiumEntitlement(),
+        ]);
       },
       loginWithApple: async (waitlist) => {
         const { a, api } = requireAuth();
         if (Platform.OS !== 'ios') {
-          throw new Error('Sign in with Apple is available on iPhone only.');
+          throw new AuthMessageError('Sign in with Apple is available on iPhone only.');
         }
         const isAvailable = await AppleAuthentication.isAvailableAsync();
         if (!isAvailable) {
-          throw new Error(
+          throw new AuthMessageError(
             'Apple sign-in is not available on this install. Use email, or open the TestFlight build.',
           );
         }
-        const appleCred = await AppleAuthentication.signInAsync({
-          requestedScopes: [
-            AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-            AppleAuthentication.AppleAuthenticationScope.EMAIL,
-          ],
-        });
+        // Nonce binds Apple's token to this one sign-in attempt, so a captured
+        // token cannot be replayed. Apple signs over the SHA-256 DIGEST and
+        // Firebase re-hashes the RAW value to check it, so each side must get a
+        // different one. Sending no nonce at all (the previous behaviour) left
+        // the exchange unbound and is the flow Firebase is least forgiving of.
+        // 32 random bytes as hex — the same shape as the known-working
+        // native-Apple implementation in strimy-app. More entropy than a UUID
+        // and no formatting characters to trip anything up.
+        const nonceBytes = await Crypto.getRandomBytesAsync(32);
+        const rawNonce = Array.from(nonceBytes, (b) =>
+          b.toString(16).padStart(2, '0'),
+        ).join('');
+        const hashedNonce = await Crypto.digestStringAsync(
+          Crypto.CryptoDigestAlgorithm.SHA256,
+          rawNonce,
+        );
+
+        let appleCred: AppleAuthentication.AppleAuthenticationCredential;
+        try {
+          appleCred = await AppleAuthentication.signInAsync({
+            requestedScopes: [
+              AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+              AppleAuthentication.AppleAuthenticationScope.EMAIL,
+            ],
+            nonce: hashedNonce,
+          });
+        } catch (e) {
+          // Cancelling is a choice, not a fault — do not log it as a failure.
+          if (!isUserCancelledAuth(e)) {
+            reportAuthFailure('apple', 'apple_request', e);
+          }
+          throw e;
+        }
+
         const identityToken = appleCred.identityToken;
         if (!identityToken) {
-          throw new Error('Apple sign-in token missing. Please try again.');
+          reportAuthFailure(
+            'apple',
+            'apple_credential',
+            new Error('Apple returned no identityToken'),
+          );
+          throw new AuthMessageError('Apple sign-in token missing. Please try again.');
         }
         const provider = new api.OAuthProvider('apple.com');
-        const firebaseCredential = provider.credential({ idToken: identityToken });
+        const firebaseCredential = provider.credential({
+          idToken: identityToken,
+          rawNonce,
+        });
+
+        const codeOf = (e: unknown): string =>
+          typeof e === 'object' && e !== null && 'code' in e
+            ? String((e as { code: unknown }).code)
+            : '';
 
         let nextUser: User;
-        if (a.currentUser?.isAnonymous) {
-          try {
-            const linked = await api.linkWithCredential(a.currentUser, firebaseCredential);
-            nextUser = linked.user;
-            track('auth_anonymous_upgraded', { provider: 'apple' });
-          } catch (e) {
-            const code =
-              typeof e === 'object' && e !== null && 'code' in e
-                ? String((e as { code: unknown }).code)
-                : '';
-            if (
-              code === 'auth/credential-already-in-use' ||
-              code === 'auth/email-already-in-use'
-            ) {
-              await api.signOut(a);
-              const signed = await api.signInWithCredential(a, firebaseCredential);
-              nextUser = signed.user;
-            } else {
-              throw e;
+        try {
+          if (a.currentUser?.isAnonymous) {
+            try {
+              // Browsing anonymously → upgrade that uid in place so saves and
+              // alerts carry over instead of starting a second account.
+              const linked = await withTimeout(
+                api.linkWithCredential(a.currentUser, firebaseCredential),
+                CREDENTIAL_EXCHANGE_MS,
+              );
+              nextUser = linked.user;
+              track('auth_anonymous_upgraded', { provider: 'apple' });
+            } catch (e) {
+              const code = codeOf(e);
+              if (
+                code === 'auth/credential-already-in-use' ||
+                code === 'auth/email-already-in-use' ||
+                code === 'auth/provider-already-linked'
+              ) {
+                // They already have a DriveIQ account for this Apple ID — sign
+                // into it rather than failing the tap.
+                //
+                // Signing out drops the anonymous session, so if the sign-in
+                // that follows fails we would strand the app with NO user at
+                // all — browse state gone and not signed in either. Put an
+                // anonymous session back before surfacing the error so the app
+                // is never left in that state.
+                await api.signOut(a);
+                try {
+                  const signed = await withTimeout(
+                    api.signInWithCredential(a, firebaseCredential),
+                    CREDENTIAL_EXCHANGE_MS,
+                  );
+                  nextUser = signed.user;
+                } catch (retryError) {
+                  await ensureAnonymousUser().catch(() => undefined);
+                  throw retryError;
+                }
+              } else {
+                throw e;
+              }
             }
+          } else {
+            const signed = await withTimeout(
+              api.signInWithCredential(a, firebaseCredential),
+              CREDENTIAL_EXCHANGE_MS,
+            );
+            nextUser = signed.user;
           }
-        } else {
-          const signed = await api.signInWithCredential(a, firebaseCredential);
-          nextUser = signed.user;
+        } catch (e) {
+          // Apple already succeeded if we are here — this is Firebase refusing
+          // the token. Tag the stage and dump the raw error so the cause is
+          // never a guess again.
+          const code = codeOf(e);
+          reportAuthFailure('apple', 'firebase_exchange', e);
+
+          if (e instanceof SignInTimeoutError) {
+            throw new AuthMessageError(
+              'Signing in with Apple timed out. Check your connection and try again, or use email.',
+            );
+          }
+          if (code === 'auth/network-request-failed' || code === 'auth/timeout') {
+            throw new AuthMessageError(
+              'Could not reach the sign-in service. Check your connection and try again.',
+            );
+          }
+          if (code === 'auth/operation-not-allowed') {
+            // Apple is not enabled as a sign-in provider on the Firebase
+            // project, so there is nothing for the token to authenticate
+            // against. Only a Console change fixes this — no amount of
+            // retrying, and nothing in the app, will.
+            throw new AuthMessageError(
+              __DEV__
+                ? 'Firebase has Apple DISABLED as a sign-in provider (auth/operation-not-allowed). Fix: Firebase Console → project driveiq-app → Authentication → Sign-in method → Apple → Enable. Nothing in the app can work around this.'
+                : 'Sign in with Apple is not switched on for DriveIQ yet. Use Google or email for now.',
+            );
+          }
+          if (
+            code === 'auth/invalid-credential' ||
+            code === 'auth/missing-or-invalid-nonce' ||
+            code === 'auth/internal-error'
+          ) {
+            // Apple handed us a valid token and Firebase refused it, so the
+            // failure is on the Firebase side, not the device's.
+            //
+            // A NATIVE Sign in with Apple token carries aud = the app's bundle
+            // id (driveiq.app). Firebase only accepts that audience if the
+            // project knows about it — i.e. an iOS app registered with that
+            // exact bundle id, plus the Apple provider enabled with its
+            // Services ID / Team ID / key. If the project only has a Web app,
+            // the audience is unrecognised and every native sign-in lands here.
+            //
+            // Retrying cannot help, so a dev build names the code and the check.
+            throw new AuthMessageError(
+              __DEV__
+                ? `Firebase rejected the Apple token (${code}). It is aud=driveiq.app from the native flow — confirm an iOS app with bundle id driveiq.app exists in Firebase project driveiq-app and that Apple is enabled with its Services ID / Team ID / key.`
+                : 'Could not finish Sign in with Apple. Please use Google or email for now.',
+            );
+          }
+          throw e;
         }
 
+        // Signed in. Everything below is bookkeeping and must not be able to
+        // turn a successful sign-in into an error — see settleAfterSignIn.
+        const signedInUser = nextUser;
         const fullName = [appleCred.fullName?.givenName, appleCred.fullName?.familyName]
           .filter(Boolean)
           .join(' ')
           .trim();
-        if (fullName && !nextUser.displayName) {
-          await api.updateProfile(nextUser, { displayName: fullName });
-        }
-        await identifyFirebaseUser({
-          ...nextUser,
-          displayName: fullName || nextUser.displayName,
-        });
-        track('auth_sign_in_succeeded', { provider: 'apple' });
-        const granted = await applyWaitlistOnAuth({
-          accountEmail: nextUser.email,
-          waitlistEmail: waitlist?.waitlistEmail,
-          claimToken: waitlist?.claimToken,
-          source: 'apple_signin',
-        });
-        if (granted) {
-          const { presentPremiumUnlock } = await import('@/services/subscription');
-          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-        }
-        await syncPremiumEntitlement();
+        await settleAfterSignIn('apple', [
+          async () => {
+            if (fullName && !signedInUser.displayName) {
+              await api.updateProfile(signedInUser, { displayName: fullName });
+            }
+          },
+          () =>
+            identifyFirebaseUser({
+              ...signedInUser,
+              displayName: fullName || signedInUser.displayName,
+            }),
+          () => track('auth_sign_in_succeeded', { provider: 'apple' }),
+          async () => {
+            const granted = await applyWaitlistOnAuth({
+              accountEmail: signedInUser.email,
+              waitlistEmail: waitlist?.waitlistEmail,
+              claimToken: waitlist?.claimToken,
+              source: 'apple_signin',
+            });
+            if (granted) {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          },
+          () => syncPremiumEntitlement(),
+        ]);
       },
       loginWithGoogle: async (waitlist) => {
         const { a, api } = requireAuth();
@@ -481,19 +777,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           nextUser = signed.user;
         }
 
-        await identifyFirebaseUser(nextUser);
-        track('auth_sign_in_succeeded', { provider: 'google' });
-        const granted = await applyWaitlistOnAuth({
+        // Signed in. Bookkeeping below must never fail the sign-in.
+        await settleAfterSignIn('google', [
+          () => identifyFirebaseUser(nextUser),
+          () => track('auth_sign_in_succeeded', { provider: 'google' }),
+          async () => {
+            const granted = await applyWaitlistOnAuth({
           accountEmail: nextUser.email,
           waitlistEmail: waitlist?.waitlistEmail,
           claimToken: waitlist?.claimToken,
           source: 'google_signin',
-        });
-        if (granted) {
-          const { presentPremiumUnlock } = await import('@/services/subscription');
-          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-        }
-        await syncPremiumEntitlement();
+            });
+            if (granted) {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          },
+          () => syncPremiumEntitlement(),
+        ]);
       },
       signup: async (name, email, password, waitlist) => {
         const { a, api } = requireAuth();
@@ -543,35 +844,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(nextUser);
         }
 
-        await identifyFirebaseUser({
-          ...nextUser,
-          displayName: trimmed || nextUser.displayName,
-        });
-        track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
-        track('signup_completed', { has_name: Boolean(trimmed) });
-        const granted = await applyWaitlistOnAuth({
-          accountEmail: nextUser.email ?? trimmedEmail,
-          waitlistEmail: waitlist?.waitlistEmail,
-          claimToken: waitlist?.claimToken,
-          source: 'email_signup',
-        });
-        if (granted) {
-          const { presentPremiumUnlock } = await import('@/services/subscription');
-          presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
-        }
-        await syncPremiumEntitlement();
-
-        const verificationSent = nextUser.emailVerified
-          ? null
-          : await sendVerifyLink(nextUser);
-        if (!granted) {
-          const { presentAccountReady } = await import('@/services/accountReady');
-          presentAccountReady({
-            name: trimmed,
-            email: nextUser.email ?? trimmedEmail,
-            verificationSent,
-          });
-        }
+        // Account created. Bookkeeping below must never fail the signup.
+        let granted = false;
+        await settleAfterSignIn('email_signup', [
+          () =>
+            identifyFirebaseUser({
+              ...nextUser,
+              displayName: trimmed || nextUser.displayName,
+            }),
+          () => {
+            track('auth_sign_up_succeeded', { has_name: Boolean(trimmed) });
+            track('signup_completed', { has_name: Boolean(trimmed) });
+          },
+          async () => {
+            granted = await applyWaitlistOnAuth({
+              accountEmail: nextUser.email ?? trimmedEmail,
+              waitlistEmail: waitlist?.waitlistEmail,
+              claimToken: waitlist?.claimToken,
+              source: 'email_signup',
+            });
+            if (granted) {
+              const { presentPremiumUnlock } = await import('@/services/subscription');
+              presentPremiumUnlock({ kind: 'waitlist', trialStarted: true });
+            }
+          },
+          () => syncPremiumEntitlement(),
+          async () => {
+            const verificationSent = nextUser.emailVerified
+              ? null
+              : await sendVerifyLink(nextUser);
+            if (!granted) {
+              const { presentAccountReady } = await import('@/services/accountReady');
+              presentAccountReady({
+                name: trimmed,
+                email: nextUser.email ?? trimmedEmail,
+                verificationSent,
+              });
+            }
+          },
+        ]);
       },
       logout: async () => {
         const { a, api } = requireAuth();
@@ -668,6 +979,32 @@ export function useAuth(): AuthContextValue {
 /**
  * Map raw Firebase Auth error codes to friendly, user-facing copy.
  */
+/**
+ * True when the user deliberately dismissed the provider's own sheet.
+ *
+ * A cancel is not an error — showing a red banner for "I changed my mind" is
+ * just noise. Callers should clear their loading state and say nothing.
+ */
+export function isUserCancelledAuth(e: unknown): boolean {
+  const code =
+    typeof e === 'object' && e !== null && 'code' in e
+      ? String((e as { code: unknown }).code)
+      : '';
+  const message =
+    typeof e === 'object' && e !== null && 'message' in e
+      ? String((e as { message: unknown }).message)
+      : '';
+  return (
+    code === 'ERR_REQUEST_CANCELED' ||
+    code === 'ERR_CANCELED' ||
+    code === '-5' ||
+    code === 'SIGN_IN_CANCELLED' ||
+    code === '12501' ||
+    message.includes('ERR_REQUEST_CANCELED') ||
+    message.includes('ERR_CANCELED')
+  );
+}
+
 export function friendlyAuthError(e: unknown): string {
   const code =
     typeof e === 'object' && e !== null && 'code' in e
@@ -677,10 +1014,9 @@ export function friendlyAuthError(e: unknown): string {
     typeof e === 'object' && e !== null && 'message' in e
       ? String((e as { message: unknown }).message)
       : '';
-  if (
-    code === 'ERR_REQUEST_CANCELED' ||
-    message.includes('ERR_REQUEST_CANCELED')
-  ) {
+  // Copy we wrote ourselves is already the best sentence available.
+  if (isUserFacing(e)) return e.message;
+  if (isUserCancelledAuth(e)) {
     return 'Sign-in was cancelled.';
   }
   if (

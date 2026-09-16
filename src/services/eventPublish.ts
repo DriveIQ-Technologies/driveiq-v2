@@ -78,7 +78,6 @@ export async function fetchPublishedEvents(): Promise<PublishedCatalogue | null>
     if (events.length < MIN_COUNT) return null;
     return { events, updatedAt };
   } catch (e) {
-    console.warn('[events] published catalogue unavailable', e);
     return null;
   }
 }

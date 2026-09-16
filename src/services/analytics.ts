@@ -90,7 +90,6 @@ function getClient(): PostHog | null {
   if (!POSTHOG_KEY) {
     if (!warnedMissingKey) {
       warnedMissingKey = true;
-      console.warn('[analytics] EXPO_PUBLIC_POSTHOG_KEY is missing; analytics disabled');
     }
     return null;
   }

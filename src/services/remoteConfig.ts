@@ -44,7 +44,6 @@ export async function getRuntimeConfig(): Promise<RuntimeConfig> {
     cached = { value, at: Date.now() };
     return value;
   } catch (e) {
-    console.warn('[remoteConfig] read failed', e);
     return cached?.value ?? FALLBACK;
   }
 }

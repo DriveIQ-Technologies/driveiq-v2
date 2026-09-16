@@ -171,11 +171,9 @@ export async function fetchAirportConnectionStatuses(): Promise<
   try {
     res = await fetch(url);
   } catch (e) {
-    console.warn('[airports] network error', e);
     return {};
   }
   if (!res.ok) {
-    console.warn('[airports] non-OK', res.status);
     return {};
   }
 

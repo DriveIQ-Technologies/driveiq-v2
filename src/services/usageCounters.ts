@@ -42,6 +42,5 @@ export async function incrementUsageCounter(
       { merge: true },
     );
   } catch (e) {
-    console.warn('[usage] counter update failed', { metric, error: e });
   }
 }

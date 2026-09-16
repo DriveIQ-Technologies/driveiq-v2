@@ -7,6 +7,7 @@
  * those rows so the app can pin them.
  */
 import type { Firestore } from 'firebase-admin/firestore';
+import { londonStampOr } from './londonTime.js';
 import { logger } from 'firebase-functions';
 
 const STOP = new Set([
@@ -115,11 +116,20 @@ function asCatalogueEvent(raw: Record<string, unknown>): CatalogueEvent | null {
 }
 
 function formatLine(e: CatalogueEvent): string {
-  const start = e.realStartAt || e.startsAt;
-  const finish = e.estimatedFinishAt || e.endsAt;
+  // These rows are presented to the model as verified DriveIQ feeds, so their
+  // times have to be right: London-local, never raw UTC. See londonTime.ts.
+  const start = londonStampOr(e.realStartAt || e.startsAt);
+  const finish = londonStampOr(e.estimatedFinishAt || e.endsAt, '');
   const turnout =
     e.turnoutMin != null && e.turnoutMax != null ? `turnout ${e.turnoutMin}-${e.turnoutMax}` : '';
-  return [e.title, e.venue, e.subCategory, `start ${start}`, `finish ${finish}`, turnout]
+  return [
+    e.title,
+    e.venue,
+    e.subCategory,
+    `start ${start} London`,
+    finish ? `finish ${finish} London` : '',
+    turnout,
+  ]
     .filter(Boolean)
     .join(' | ');
 }

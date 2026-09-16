@@ -171,7 +171,6 @@ export async function fetchRoutes(
     res = await fetch(buildUrl(origin, destination, true));
     data = (await res.json()) as RawDirectionsResponse;
   } catch (e) {
-    console.warn('[routing] network error', e);
     return { routes: [], error: 'Network error. Check your connection.' };
   }
 
@@ -180,7 +179,6 @@ export async function fetchRoutes(
       res = await fetch(buildUrl(origin, destination, false));
       data = (await res.json()) as RawDirectionsResponse;
     } catch (e) {
-      console.warn('[routing] fallback network error', e);
       return { routes: [], error: 'Network error. Check your connection.' };
     }
   }

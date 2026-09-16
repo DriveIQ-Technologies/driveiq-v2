@@ -157,11 +157,9 @@ export async function fetchLineStatuses(): Promise<LineStatus[]> {
   try {
     res = await fetch(url, { cache: 'no-store' });
   } catch (e) {
-    console.warn('[tfl-lines] network error', e);
     return allLinesCache?.data ?? [];
   }
   if (!res.ok) {
-    console.warn('[tfl-lines] non-OK', res.status);
     return allLinesCache?.data ?? [];
   }
 
@@ -170,7 +168,6 @@ export async function fetchLineStatuses(): Promise<LineStatus[]> {
 
   // Sort: worst-first so problems surface at the top of the panel.
   out.sort((a, b) => SEVERITY_RANK[a.severityBucket] - SEVERITY_RANK[b.severityBucket]);
-  console.log(`[tfl-lines] ${out.length} lines (${out.filter((l) => l.severityBucket !== 'good').length} disrupted)`);
   if (out.length > 0) allLinesCache = { at: Date.now(), data: out };
   return out.length > 0 ? out : allLinesCache?.data ?? [];
 }
@@ -202,11 +199,9 @@ export async function fetchLineStatusesByIds(
   try {
     res = await fetch(url, { cache: 'no-store' });
   } catch (e) {
-    console.warn('[tfl-lines] byIds network error', e);
     return cached?.data ?? [];
   }
   if (!res.ok) {
-    console.warn('[tfl-lines] byIds non-OK', res.status);
     return cached?.data ?? [];
   }
 
@@ -314,11 +309,9 @@ export async function fetchLineDetail(lineId: string): Promise<LineDetail | null
   try {
     res = await fetch(url, { cache: 'no-store' });
   } catch (e) {
-    console.warn('[tfl-lines] detail network error', e);
     return null;
   }
   if (!res.ok) {
-    console.warn('[tfl-lines] detail non-OK', res.status);
     return null;
   }
 

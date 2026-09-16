@@ -50,7 +50,6 @@ export async function syncUserProfile(patch: UserProfileSync): Promise<void> {
     if (patch.freeStationSlot) doc.freeStationSlot = patch.freeStationSlot;
     await fsApi.setDoc(fsApi.doc(db, 'users', uid), doc, { merge: true });
   } catch (e) {
-    console.warn('[userSync] profile sync failed', e);
   }
 }
 

@@ -168,13 +168,11 @@ const fetchVenueSchedule = async (venueId: number): Promise<TsdbEvent[]> => {
       headers: { 'X-API-KEY': PREMIUM_KEY },
     });
     if (!res.ok) {
-      console.warn('[sportsdb v2] non-OK', venueId, res.status);
       return [];
     }
     const json = (await res.json()) as TsdbResponse;
     return json.schedule ?? json.events ?? [];
   } catch (e) {
-    console.warn('[sportsdb v2] network error', venueId, e);
     return [];
   }
 };
@@ -214,7 +212,6 @@ const resolveVenueId = async (place: LondonPlace): Promise<number | null> => {
         return id;
       }
     } catch (e) {
-      console.warn('[sportsdb] venue-id lookup failed', place.venue, e);
     }
   }
   venueIdCache.set(place.venue, null);
@@ -236,19 +233,10 @@ const fetchPremiumByVenue = async (range: DateRange): Promise<AppEvent[]> => {
     .filter((r) => r.id == null && CRITICAL_VENUE_NAMES.has(r.place.venue))
     .map((r) => r.place.venue);
   if (unresolvedCritical.length > 0) {
-    console.warn(
-      `[sportsdb v2] CRITICAL venues with no SportsDB id: ${unresolvedCritical.join(', ')}`,
-    );
   }
 
-  console.log(
-    `[sportsdb v2] venue ids resolved for ${venuesWithIds.length}/${LONDON_VENUE_LIST.length} venues`,
-  );
 
   if (venuesWithIds.length === 0) {
-    console.warn(
-      '[sportsdb v2] no venue IDs could be resolved — venue loop skipped this fetch.',
-    );
     return [];
   }
 
@@ -281,15 +269,8 @@ const fetchPremiumByVenue = async (range: DateRange): Promise<AppEvent[]> => {
   }
 
   if (emptyCritical.length > 0) {
-    console.warn(
-      `[sportsdb v2] CRITICAL venues returned 0 in-range events: ${emptyCritical.join(', ')} — ` +
-        'verify against club fixtures; may be genuinely dark or a provider gap.',
-    );
   }
 
-  console.log(
-    `[sportsdb v2] ${venuesWithIds.length} venues queried, ${out.length} London events in range`,
-  );
   return out;
 };
 
@@ -301,13 +282,11 @@ const fetchLeagueNext = async (
   try {
     const res = await fetch(url);
     if (!res.ok) {
-      console.warn('[sportsdb v1] non-OK', leagueName, res.status);
       return [];
     }
     const json = (await res.json()) as TsdbResponse;
     return json.events ?? [];
   } catch (e) {
-    console.warn('[sportsdb v1] network error', leagueName, e);
     return [];
   }
 };
@@ -354,11 +333,6 @@ const fetchFreeTierByLeague = async (
     }
   }
 
-  console.log(
-    `[sportsdb v1] ${FREE_TIER_LEAGUES.length} leagues queried, ` +
-      `${totalRaw} raw fixtures → ${out.length} London events ` +
-      `(dropped: ${droppedNotLondon} non-London, ${droppedOutOfRange} out of range)`,
-  );
   return out;
 };
 
@@ -369,11 +343,6 @@ const fetchFreeTierByLeague = async (
  */
 export async function fetchSportsLondon(range: DateRange): Promise<AppEvent[]> {
   if (!PREMIUM_KEY) {
-    console.warn(
-      '[sportsdb] EXPO_PUBLIC_SPORTSDB_API_KEY not set — free-tier league fallback only. ' +
-        'Football home fixtures/friendlies still load via FotMob (no key). ' +
-        'Premium only needed for the all-sports venue loop.',
-    );
   }
 
   const out = PREMIUM_KEY

@@ -897,16 +897,6 @@ export function AISupportSheet({
               : [];
 
           const pro = await hasProAccess();
-          console.log('[agent] live context', {
-            question: trimmed,
-            mapEventCount: events?.length ?? 0,
-            pickedCount: picked.length,
-            placeHints: places,
-            sendingCount: clientEvents.length,
-            titles: clientEvents.slice(0, 8).map((e) => e.title),
-            featuredCount: source.filter((e) => e.source === 'featured').length,
-            premium: pro,
-          });
 
           const res = await askDriveiqAgent(trimmed, history, {
             events: clientEvents,
@@ -970,10 +960,6 @@ export function AISupportSheet({
               eventResult.offer.length > 0 &&
               looksLikeEmptyAgentReply(answer)
             ) {
-              console.warn('[agent] overriding refusal with local events', {
-                titles: eventResult.offer.map((e) => e.title),
-                answerPreview: answer.slice(0, 160),
-              });
               answer = eventResult.text;
             }
             // Only nudge missed big events for broad "what's on" scans — never
@@ -1028,7 +1014,6 @@ export function AISupportSheet({
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          console.warn('[agent] askDriveiqAgent failed', message, err);
           if (eventResult && eventResult.offer.length > 0) {
             const localSections = groupEventsByDay(
               cardsForReply(

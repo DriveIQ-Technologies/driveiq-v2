@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SheetOverlay, resetSheetPointers } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
@@ -76,10 +76,6 @@ export function LocationOnboarding({ open, onDone }: Props) {
     finish(null);
   };
 
-  const openSettings = () => {
-    void Linking.openSettings().catch(() => undefined);
-  };
-
   if (!visible) return null;
 
   return (
@@ -111,32 +107,26 @@ export function LocationOnboarding({ open, onDone }: Props) {
           </View>
 
           <Text style={styles.footer}>
-            You can change this later in your phone Settings, or tap Use my location
-            in AI chat.
+            iOS will ask next. You can say no, and you can change it any time in
+            your phone Settings.
           </Text>
 
-          <View style={styles.buttonRow}>
-            <Pressable
-              onPress={handleSkip}
-              style={styles.skipBtn}
-              accessibilityRole="button"
-              disabled={busy}
-            >
-              <Text style={styles.skipText}>Not now</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => void handleEnable()}
-              style={styles.enableBtn}
-              accessibilityRole="button"
-              disabled={busy}
-            >
-              <Text style={styles.enableText}>
-                {busy ? 'Asking…' : 'Allow location'}
-              </Text>
-            </Pressable>
-          </View>
-          <Pressable onPress={openSettings} hitSlop={8} style={styles.settingsLink}>
-            <Text style={styles.settingsLinkText}>Open phone Settings</Text>
+          {/*
+            App Review 5.1.1(iv). This card explains WHY we ask; it must not act
+            as a second, custom permission gate. So:
+              - the button says "Continue", not "Allow location" — the choice to
+                allow belongs to the system prompt, not to us, and
+              - there is no "Not now": every path through this card leads to the
+                system prompt, which is where the user actually decides.
+            Do not reintroduce a skip button here.
+          */}
+          <Pressable
+            onPress={() => void handleEnable()}
+            style={styles.enableBtn}
+            accessibilityRole="button"
+            disabled={busy}
+          >
+            <Text style={styles.enableText}>{busy ? 'Asking…' : 'Continue'}</Text>
           </Pressable>
         </View>
       </View>
@@ -216,23 +206,6 @@ const styles = StyleSheet.create({
     marginBottom: 18,
     fontStyle: 'italic',
   },
-  buttonRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  skipBtn: {
-    flex: 1,
-    paddingVertical: 13,
-    borderRadius: 12,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  skipText: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
-  },
   enableBtn: {
     flex: 1.4,
     paddingVertical: 13,
@@ -245,14 +218,5 @@ const styles = StyleSheet.create({
     color: colors.textOnPrimary,
     fontSize: 14,
     fontWeight: '800',
-  },
-  settingsLink: {
-    marginTop: 12,
-    alignItems: 'center',
-  },
-  settingsLinkText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.primary,
   },
 });

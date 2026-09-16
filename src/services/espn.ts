@@ -155,14 +155,12 @@ const fetchFeed = async (
       // now (off-season) or the slug isn't valid for the date range. Quiet
       // log rather than warn — too many feeds for noisy individual warnings.
       if (res.status !== 400 && res.status !== 404) {
-        console.warn('[espn]', feed.path, 'non-OK', res.status);
       }
       return [];
     }
     const json = (await res.json()) as EspnScoreboardResponse;
     return json.events ?? [];
   } catch (e) {
-    console.warn('[espn]', feed.path, 'network error', e);
     return [];
   }
 };
@@ -304,11 +302,6 @@ export async function fetchEspnLondon(range: DateRange): Promise<AppEvent[]> {
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => `${k}=${v}`)
       .join(', ') || 'none';
-  console.log(
-    `[espn] ${totalRaw} raw fixtures across ${SPORT_FEEDS.length} feeds ` +
-      `(${sportSummary}) → ${out.length} London events ` +
-      `(dropped: ${droppedNotLondon} non-London, ${droppedOutOfRange} out of range)`,
-  );
 
   // Per-feed breakdown — exposes broken slugs (consistent 0 returns in-
   // season) so we can tell which paths ESPN doesn't recognise.
@@ -319,11 +312,7 @@ export async function fetchEspnLondon(range: DateRange): Promise<AppEvent[]> {
     perFeedLines.push(`${feed.path}=${events.length}`);
     if (events.length === 0) deadFeeds.push(feed.path);
   }
-  console.log(`[espn] per-feed: ${perFeedLines.join(', ')}`);
   if (deadFeeds.length > 0) {
-    console.log(
-      `[espn] ${deadFeeds.length} feeds returned 0 (could be off-season or invalid slug): ${deadFeeds.join(', ')}`,
-    );
   }
 
   return out.sort(

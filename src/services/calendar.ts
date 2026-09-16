@@ -28,10 +28,6 @@ const getCalendar = (): any => {
   if (_probed) return _Calendar || null;
   _probed = true;
   if (!hasNativeCalendarModule()) {
-    console.warn(
-      '[calendar] expo-calendar native module not in this build — ' +
-        'add-to-calendar disabled. Run `bunx expo install expo-calendar` and rebuild.',
-    );
     return null;
   }
   try {
@@ -90,7 +86,6 @@ export async function addEventToCalendar(
     });
     return { ok: true };
   } catch (e) {
-    console.warn('[calendar] add failed', e);
     return { ok: false, reason: 'error' };
   }
 }

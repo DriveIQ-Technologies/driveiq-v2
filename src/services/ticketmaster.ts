@@ -311,13 +311,11 @@ async function fetchTicketmasterVenue(
   try {
     const res = await fetch(`${BASE_URL}?${params.toString()}`);
     if (!res.ok) {
-      console.warn('[ticketmaster] venue', venueId, 'non-OK', res.status);
       return [];
     }
     const json = (await res.json()) as TmResponse;
     return json._embedded?.events ?? [];
   } catch (e) {
-    console.warn('[ticketmaster] venue', venueId, 'network error', e);
     return [];
   }
 }
@@ -345,11 +343,9 @@ async function fetchTicketmasterPage(
   try {
     res = await fetch(`${BASE_URL}?${params.toString()}`);
   } catch (e) {
-    console.warn('[ticketmaster] network error (page', page, ')', e);
     return { events: [], totalPages: 0 };
   }
   if (!res.ok) {
-    console.warn('[ticketmaster] non-OK (page', page, ')', res.status);
     return { events: [], totalPages: 0 };
   }
 
@@ -362,7 +358,6 @@ async function fetchTicketmasterPage(
 
 export async function fetchTicketmasterLondon(range: DateRange): Promise<AppEvent[]> {
   if (!API_KEY) {
-    console.warn('[ticketmaster] EXPO_PUBLIC_TICKETMASTER_API_KEY not set — skipping');
     return [];
   }
 
@@ -427,10 +422,5 @@ export async function fetchTicketmasterLondon(range: DateRange): Promise<AppEven
   const venueSummary = priorityResults
     .map(({ v, events }) => `${v.name.split(',')[0]}=${events.length}`)
     .join(', ');
-  console.log(
-    `[ticketmaster] general ${generalRaw.length} raw (≤${lastPage} of ${first.totalPages} pages); ` +
-      `priority venues added ${priorityAdded} → ${out.length} total usable`,
-  );
-  console.log(`[ticketmaster] priority venue raw counts: ${venueSummary}`);
   return out;
 }

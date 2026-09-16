@@ -110,12 +110,10 @@ const fetchText = async (url: string): Promise<string | null> => {
   try {
     const res = await fetch(url);
     if (!res.ok) {
-      console.warn('[fotmob] non-OK', res.status, url);
       return null;
     }
     return await res.text();
   } catch (e) {
-    console.warn('[fotmob] network error', url, e);
     return null;
   }
 };
@@ -202,7 +200,6 @@ export async function fetchFotmobLondon(range: DateRange): Promise<AppEvent[]> {
     CLUBS.map(async (club) => {
       const place = findLondonPlace(club.venue);
       if (!place) {
-        console.warn('[fotmob] no coords for', club.venue);
         return [] as AppEvent[];
       }
       const body = await fetchText(FOTMOB_ICS(club.teamId));
@@ -220,6 +217,5 @@ export async function fetchFotmobLondon(range: DateRange): Promise<AppEvent[]> {
   );
 
   const perClub = CLUBS.map((c, i) => `${c.label}=${results[i].length}`).join(', ');
-  console.log(`[fotmob] ${all.length} home fixtures (${perClub})`);
   return all;
 }

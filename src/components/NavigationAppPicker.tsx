@@ -63,12 +63,10 @@ async function openExternal(
       return;
     }
   } catch (e) {
-    console.warn(`[nav-picker] canOpenURL failed for ${appName}`, e);
   }
   try {
     await Linking.openURL(fallbackUrl);
   } catch (e) {
-    console.warn(`[nav-picker] openURL fallback failed for ${appName}`, e);
     showDialog(
       `Couldn't open ${appName}`,
       `Make sure ${appName} is installed, or pick a different app.`,

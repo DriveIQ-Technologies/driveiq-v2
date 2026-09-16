@@ -212,7 +212,6 @@ export async function addReport(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.toLowerCase().includes('sign in')) throw e;
-    console.warn('[reports] submit failed, saving locally', e);
     const report: UserReport = {
       ...input,
       placeLabel,
@@ -270,12 +269,10 @@ export function subscribeReports(onChange: (reports: UserReport[]) => void): () 
         onChange(rows);
       },
       (err: unknown) => {
-        console.warn('[reports] snapshot failed', err);
         void loadReports().then(onChange);
       },
     );
   } catch (e) {
-    console.warn('[reports] subscribe failed', e);
     void loadReports().then(onChange);
     return () => undefined;
   }

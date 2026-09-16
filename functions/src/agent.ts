@@ -1,7 +1,13 @@
 import { HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions';
 import type { Firestore } from 'firebase-admin/firestore';
-import { askAgent, type AgentModel } from './anthropic.js';
+import {
+  askAgent,
+  askAgentStream,
+  type AgentModel,
+  type AnthropicUsage,
+} from './anthropic.js';
+import { londonStampOr } from './londonTime.js';
 import { AGENT_SYSTEM_ADDENDUM, AGENT_SYSTEM_PROMPT_VERBATIM } from './agentPrompt.js';
 import { lookupCatalogueMatches, type CatalogueEvent } from './agentCatalogue.js';
 
@@ -28,18 +34,32 @@ interface AskOutput {
   discoveredEvents?: CatalogueEvent[];
 }
 
+/**
+ * Phrases that genuinely need the reasoning model. Sonnet costs several times
+ * what Haiku does per token, so anything that lands here has to earn it.
+ *
+ * These are matched on WORD BOUNDARIES, not as substrings. The previous
+ * `q.includes('plan')` matched "plane", "planes" and "airplane", and
+ * `q.includes('big')` matched "Big Ben" — in a London flights app those are
+ * two of the most common words a user can type. "When does my plane land" and
+ * "traffic near Big Ben" were both being routed to the expensive model for no
+ * reason, on every single ask.
+ */
+const PLANNING_PATTERNS: RegExp[] = [
+  /\bwhere should i be\b/,
+  /\bplan\b/,
+  /\bplanning\b/,
+  /\bcompare\b/,
+  /\bbest route\b/,
+  /\bwhy\b/,
+  /\bbiggest\b/,
+  /\bthis week\b/,
+  /\bbusiest\b/,
+];
+
 function pickModel(question: string): AgentModel {
   const q = question.toLowerCase();
-  const planning =
-    q.includes('where should i be') ||
-    q.includes('plan') ||
-    q.includes('compare') ||
-    q.includes('best route') ||
-    q.includes('why') ||
-    q.includes('big') ||
-    q.includes('this week') ||
-    q.includes('busiest');
-  return planning ? 'sonnet' : 'haiku';
+  return PLANNING_PATTERNS.some((re) => re.test(q)) ? 'sonnet' : 'haiku';
 }
 
 function dayKeyLondon(now: Date = new Date()): string {
@@ -59,6 +79,8 @@ async function loadRuntime(db: Firestore): Promise<{
   modelHaiku: string;
   modelSonnet: string;
   maxTokens: number;
+  /** Server-side kill switch for streamed answers. Off unless explicitly on. */
+  streaming: boolean;
 }> {
   const snap = await db.doc('config/runtime').get();
   const data = snap.data() ?? {};
@@ -76,11 +98,15 @@ async function loadRuntime(db: Firestore): Promise<{
       : 'claude-sonnet-4-5-20250929';
   const maxTokensRaw = Number(data.aiMaxTokens);
   const maxTokens =
-    Number.isFinite(maxTokensRaw) && maxTokensRaw >= 80 && maxTokensRaw <= 800
+    Number.isFinite(maxTokensRaw) && maxTokensRaw >= 80 && maxTokensRaw <= 2000
       ? Math.floor(maxTokensRaw)
       : 500;
+  // Opt-in only: anything other than an explicit `true` leaves streaming off,
+  // so a missing or malformed config field can never switch it on by accident.
+  const streaming = data.aiStreaming === true;
   return {
     cap,
+    streaming,
     prompt:
       promptVersion >= CHAT_PROMPT_VERSION && p.length >= 40
         ? p
@@ -259,15 +285,22 @@ async function buildContextBlock(opts: {
       .map((e) => {
         const title = String(e.title ?? 'Event');
         const venue = String(e.venue ?? 'London');
-        const start = toIsoOrEmpty(e.realStartAt) || toIsoOrEmpty(e.listedStart);
-        const finish = toIsoOrEmpty(e.estimatedFinishAt) || toIsoOrEmpty(e.listedEnd);
+        // London-local, not UTC ISO. The model is told to quote London times;
+        // handing it UTC made it do the conversion itself, which is an hour
+        // wrong through BST.
+        const start = londonStampOr(
+          toIsoOrEmpty(e.realStartAt) || toIsoOrEmpty(e.listedStart),
+        );
+        const finish = londonStampOr(
+          toIsoOrEmpty(e.estimatedFinishAt) || toIsoOrEmpty(e.listedEnd),
+        );
         const turnoutMin = Number(e.turnoutMin);
         const turnoutMax = Number(e.turnoutMax);
         const turnout =
           Number.isFinite(turnoutMin) && Number.isFinite(turnoutMax)
             ? `${Math.floor(turnoutMin)}-${Math.floor(turnoutMax)}`
             : 'n/a';
-        return `${title} | ${venue} | start ${start || 'n/a'} | finish ${finish || 'n/a'} | turnout ${turnout}`;
+        return `${title} | ${venue} | start ${start} London | finish ${finish} London | turnout ${turnout}`;
       });
   }
 
@@ -381,6 +414,13 @@ async function buildContextBlock(opts: {
 export async function handleAskAgent(opts: {
   db: Firestore;
   apiKey: string | undefined;
+  /**
+   * When supplied AND the `aiStreaming` runtime flag is on, the answer is
+   * streamed and each fragment handed to this callback as it arrives. Any
+   * streaming failure falls back to the normal request, so the caller always
+   * gets a complete answer either way.
+   */
+  onDelta?: (text: string) => void;
   request: {
     auth?: { uid: string } | null;
     data?: AskInput;
@@ -424,7 +464,13 @@ export async function handleAskAgent(opts: {
   let prompt = AGENT_SYSTEM_PROMPT_VERBATIM;
   let modelHaiku = 'claude-haiku-4-5-20251001';
   let modelSonnet = 'claude-sonnet-4-5-20250929';
-  let maxTokens = 500;
+  // 500 was too tight: "what's on tonight and how do I get there" routinely
+  // ran past it and the answer was returned cut off mid-sentence, with nothing
+  // telling the user (or us) that it had been. Output tokens are only billed
+  // for what is actually generated, so a higher ceiling costs nothing on short
+  // answers and stops clipping the long ones.
+  let maxTokens = 1200;
+  let streamingEnabled = false;
   try {
     const runtime = await loadRuntime(opts.db);
     cap = runtime.cap;
@@ -432,6 +478,7 @@ export async function handleAskAgent(opts: {
     modelHaiku = runtime.modelHaiku;
     modelSonnet = runtime.modelSonnet;
     maxTokens = runtime.maxTokens;
+    streamingEnabled = runtime.streaming;
   } catch (e) {
     logger.warn('agent.runtime_fail', { error: e instanceof Error ? e.message : 'error' });
   }
@@ -578,15 +625,36 @@ ${question}`;
 
   let answer = '';
   if (opts.apiKey) {
-    const res = await askAgent({
+    const askArgs = {
       apiKey: opts.apiKey,
       system,
       prompt: combinedPrompt,
       model,
       modelId: model === 'sonnet' ? modelSonnet : modelHaiku,
       maxTokens,
-    });
+    };
+
+    let res: { text: string | null; usage: AnthropicUsage | null; truncated: boolean };
+    const wantStream = streamingEnabled && typeof opts.onDelta === 'function';
+    if (wantStream) {
+      try {
+        res = await askAgentStream({ ...askArgs, onDelta: opts.onDelta! });
+      } catch (e) {
+        // Streaming is an optimisation, never a dependency: on any failure fall
+        // straight back to the normal request so the user still gets an answer.
+        logger.warn('agent.stream_fallback', {
+          error: e instanceof Error ? e.message : 'error',
+        });
+        res = await askAgent(askArgs);
+      }
+    } else {
+      res = await askAgent(askArgs);
+    }
     answer = res.text?.trim() ?? '';
+    if (res.truncated && answer) {
+      // Say so rather than pretending a clipped answer is the whole answer.
+      answer += '\n\n(Answer cut short — ask me to continue for the rest.)';
+    }
     try {
       await opts.db.collection('aiCostLog').add({
         uid,
@@ -595,6 +663,7 @@ ${question}`;
         model,
         inputTokens: res.usage?.input_tokens ?? null,
         outputTokens: res.usage?.output_tokens ?? null,
+        truncated: res.truncated,
         questionChars: question.length,
         createdAt: new Date().toISOString(),
       });

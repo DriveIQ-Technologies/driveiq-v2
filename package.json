@@ -28,6 +28,7 @@
     "expo-build-properties": "~55.0.14",
     "expo-calendar": "~55.0.19",
     "expo-constants": "~55.0.16",
+    "expo-crypto": "~55.0.19",
     "expo-linking": "~55.0.15",
     "expo-location": "~55.1.10",
     "expo-notifications": "~55.0.23",

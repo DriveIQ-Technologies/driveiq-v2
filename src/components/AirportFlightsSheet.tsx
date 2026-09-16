@@ -100,7 +100,11 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
   const [flightsLoading, setFlightsLoading] = useState(false);
   const [flightsError, setFlightsError] = useState<string | null>(null);
   const [direction, setDirection] = useState<FlightDirection>('departure');
-  const [isPro, setIsPro] = useState(false);
+  // null = not resolved yet. Defaulting to `false` meant every premium user
+  // briefly rendered as free: the upgrade banner flashed, and the flights
+  // effect below fired once with fullDay:false and then AGAIN when the real
+  // value landed — two AeroDataBox calls per open, on a quota-limited API.
+  const [isPro, setIsPro] = useState<boolean | null>(null);
   const [saved, setSaved] = useState<SavedFlightMap>({});
   const [selectedFlight, setSelectedFlight] = useState<AirportFlight | null>(null);
 
@@ -138,6 +142,9 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
   // Live flights for this airport. Premium always gets the full local day.
   useEffect(() => {
     if (!airport) return;
+    // Wait for the tier. Fetching before it is known doubles the API calls and
+    // shows the wrong board for a beat.
+    if (isPro === null) return;
     let cancelled = false;
     setFlightsLoading(true);
     setFlightsError(null);
@@ -179,15 +186,20 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
 
   // Only relevant flights: drop anything more than 30 min in the past so we
   // never show flights that left/landed hours ago. Sorted soonest-first.
+  //
+  // Windows key off `effectiveMs` (revised time when the feed has one), not the
+  // scheduled time. A flight scheduled an hour ago but delayed to tonight has
+  // not left — filtering on the schedule dropped it off the board while it was
+  // still sitting at the gate, which is exactly the flight a driver cares about.
   const [shownFlights, lockedFlights] = useMemo(() => {
     const cutoff = Date.now() - 30 * 60 * 1000;
     const list = flights
       .filter((f) => f.direction === direction)
-      .filter((f) => f.scheduledMs === 0 || f.scheduledMs >= cutoff);
+      .filter((f) => f.effectiveMs === 0 || f.effectiveMs >= cutoff);
     if (isPro) return [list, []] as const;
     const horizon = Date.now() + FREE_WINDOW_HOURS * 60 * 60 * 1000;
-    const visible = list.filter((f) => f.scheduledMs === 0 || f.scheduledMs <= horizon);
-    const locked = list.filter((f) => f.scheduledMs > horizon);
+    const visible = list.filter((f) => f.effectiveMs === 0 || f.effectiveMs <= horizon);
+    const locked = list.filter((f) => f.effectiveMs > horizon);
     return [visible, locked] as const;
   }, [flights, direction, isPro]);
 
@@ -334,25 +346,25 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
             ))
           )}
 
-          {/* ── Live flights ── */}
-          <Pressable style={styles.proBanner} onPress={upgrade} accessibilityRole="button">
-            <Ionicons name="star" size={16} color={colors.primaryDark} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.proTitle}>
-                {isPro ? 'DriveIQ Premium' : 'DriveIQ Premium'}
-              </Text>
-              <Text style={styles.proBody}>
-                {isPro
-                  ? 'Full-day arrivals and departures with unlimited watched flights.'
-                  : `Free: next ${FREE_WINDOW_HOURS}h with ${FREE_WATCH_LIMIT} watched flight. Premium: full day with unlimited watched flights.`}
-              </Text>
-            </View>
-            {!isPro ? (
+          {/* ── Live flights ──
+              Upgrade pitch is for free users only. This used to render for
+              everyone — a paying user got a "DriveIQ Premium" banner that
+              opened the paywall when tapped, which is just an ad for something
+              they already bought. Premium simply gets the full board. */}
+          {isPro === false ? (
+            <Pressable style={styles.proBanner} onPress={upgrade} accessibilityRole="button">
+              <Ionicons name="star" size={16} color={colors.primaryDark} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.proTitle}>DriveIQ Premium</Text>
+                <Text style={styles.proBody}>
+                  {`Free: next ${FREE_WINDOW_HOURS}h with ${FREE_WATCH_LIMIT} watched flight. Premium: full day with unlimited watched flights.`}
+                </Text>
+              </View>
               <View style={styles.proCta}>
                 <Text style={styles.proCtaText}>Upgrade</Text>
               </View>
-            ) : null}
-          </Pressable>
+            </Pressable>
+          ) : null}
 
           <View style={styles.segment}>
             {(['departure', 'arrival'] as FlightDirection[]).map((d) => {
@@ -379,7 +391,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
             })}
           </View>
 
-          {flightsLoading && (
+          {(flightsLoading || isPro === null) && (
             <View style={styles.loading}>
               <ActivityIndicator color={colors.primary} />
               <Text style={styles.loadingText}>Loading flights…</Text>

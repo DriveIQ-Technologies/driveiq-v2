@@ -138,9 +138,6 @@ export async function fetchFootballDataLondon(
   range: DateRange,
 ): Promise<AppEvent[]> {
   if (!API_KEY) {
-    console.warn(
-      '[football-data] EXPO_PUBLIC_FOOTBALLDATA_API_KEY not set — skipping',
-    );
     return [];
   }
 
@@ -151,10 +148,6 @@ export async function fetchFootballDataLondon(
 
   const errors = results.filter((r) => r.error).map((r) => r.error!);
   if (errors.length) {
-    console.warn(
-      `[football-data] ${errors.length}/${chunks.length} chunks failed:`,
-      errors.slice(0, 3).join(' | '),
-    );
   }
 
   // Merge + dedupe by match id (chunks shouldn't overlap, but be safe).
@@ -200,14 +193,10 @@ export async function fetchFootballDataLondon(
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => `${k}=${v}`)
       .join(', ');
-    console.log(`[football-data] competitions in feed: ${compSummary}`);
     if (english.length > 0) {
-      console.log(`[football-data] ${english.length} English fixtures detected:`);
       for (const e of english.slice(0, 10)) {
-        console.log(`  • ${e.date} ${e.comp}: ${e.home} vs ${e.away}`);
       }
     } else {
-      console.log('[football-data] no English fixtures in this window');
     }
   }
 
@@ -278,9 +267,5 @@ export async function fetchFootballDataLondon(
   // Same diagnostics-friendly log shape as the sportsdb free-tier fallback,
   // so the console immediately tells you whether the API returned nothing,
   // returned non-London fixtures, or returned fixtures outside the range.
-  console.log(
-    `[football-data] ${matches.length} raw fixtures → ${out.length} London events ` +
-      `(dropped: ${droppedNotLondon} non-London, ${droppedOutOfRange} out of range)`,
-  );
   return out;
 }

@@ -16,7 +16,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
-import { friendlyAuthError, useAuth } from '@/providers/AuthProvider';
+import {
+  friendlyAuthError,
+  getLastAuthFailure,
+  isUserCancelledAuth,
+  useAuth,
+} from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { auth } from '@/services/firebase';
 import {
@@ -61,7 +66,15 @@ export function AuthSheet({
   const [isNewUser, setIsNewUser] = useState(initialMode === 'signup');
   const [waitlistCode, setWaitlistCode] = useState('');
   const [showWaitlistCode, setShowWaitlistCode] = useState(false);
-  const [busy, setBusy] = useState(false);
+  /**
+   * Which action is in flight — not just "something is". A single boolean put
+   * a spinner on BOTH social buttons at once, so tapping Apple made it look
+   * like Google was working too. Every button still disables while any action
+   * runs (two concurrent sign-ins would be worse), but only the one you
+   * actually tapped shows the spinner.
+   */
+  const [pending, setPending] = useState<'apple' | 'google' | 'email' | null>(null);
+  const busy = pending !== null;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -139,7 +152,7 @@ export function AuthSheet({
       return;
     }
     try {
-      setBusy(true);
+      setPending('email');
       track('auth_submit_started', { mode: 'signin' });
       await login(email.trim(), password, waitlistHints());
       setPassword('');
@@ -148,7 +161,7 @@ export function AuthSheet({
       track('auth_submit_failed', { mode: 'signin' });
       setError(friendlyAuthError(e));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
@@ -163,7 +176,7 @@ export function AuthSheet({
       return;
     }
     try {
-      setBusy(true);
+      setPending('email');
       track('auth_submit_started', { mode: 'signup' });
       await signup(name.trim(), email.trim(), password, waitlistHints());
       setPassword('');
@@ -172,24 +185,38 @@ export function AuthSheet({
       track('auth_submit_failed', { mode: 'signup' });
       setError(friendlyAuthError(e));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
+  };
+
+  /**
+   * In a dev build, append the stage and raw code to whatever friendly message
+   * we show. The console is easy to miss and LogBox truncates; the sheet is
+   * right in front of you. Production copy is untouched.
+   */
+  const withDevDetail = (message: string): string => {
+    if (!__DEV__) return message;
+    const last = getLastAuthFailure();
+    if (!last) return message;
+    return `${message}\n\n[dev] stage=${last.stage} code=${last.code || 'none'}\n${last.message}`;
   };
 
   const submitApple = async () => {
     setError(null);
     Keyboard.dismiss();
     try {
-      setBusy(true);
+      setPending('apple');
       track('auth_submit_started', { provider: 'apple' });
       await loginWithApple(waitlistHints());
       onClose();
-      void (auth?.currentUser?.email ?? '');
     } catch (e) {
+      // A deliberate dismiss of the provider sheet is not a failure: drop the
+      // spinner and leave the form as it was, with no red banner.
+      if (isUserCancelledAuth(e)) return;
       track('auth_submit_failed', { provider: 'apple' });
-      setError(friendlyAuthError(e));
+      setError(withDevDetail(friendlyAuthError(e)));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
@@ -201,15 +228,18 @@ export function AuthSheet({
       return;
     }
     try {
-      setBusy(true);
+      setPending('google');
       track('auth_submit_started', { provider: 'google' });
       await loginWithGoogle(waitlistHints());
       onClose();
     } catch (e) {
+      // A deliberate dismiss of the provider sheet is not a failure: drop the
+      // spinner and leave the form as it was, with no red banner.
+      if (isUserCancelledAuth(e)) return;
       track('auth_submit_failed', { provider: 'google' });
-      setError(friendlyGoogleSignInError(e));
+      setError(withDevDetail(friendlyGoogleSignInError(e)));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
@@ -221,7 +251,7 @@ export function AuthSheet({
       return;
     }
     try {
-      setBusy(true);
+      setPending('email');
       await sendReset(email.trim());
       track('auth_reset_requested');
       setNotice('Reset email sent — check your inbox.');
@@ -229,7 +259,7 @@ export function AuthSheet({
       track('auth_reset_failed');
       setError(friendlyAuthError(e));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   };
 
@@ -323,7 +353,7 @@ export function AuthSheet({
                     disabled={busy}
                     style={[styles.socialBtn, busy && styles.btnDisabled]}
                   >
-                    {busy ? (
+                    {pending === 'apple' ? (
                       <ActivityIndicator color={colors.textPrimary} size="small" />
                     ) : (
                       <>
@@ -343,7 +373,7 @@ export function AuthSheet({
                     busy && styles.btnDisabled,
                   ]}
                 >
-                  {busy ? (
+                  {pending === 'google' ? (
                     <ActivityIndicator color={colors.textPrimary} size="small" />
                   ) : (
                     <>
@@ -527,7 +557,7 @@ export function AuthSheet({
               disabled={busy}
               style={[styles.primaryBtn, busy && styles.btnDisabled]}
             >
-              {busy && step !== 'email' ? (
+              {pending === 'email' && step !== 'email' ? (
                 <ActivityIndicator color={colors.textOnPrimary} />
               ) : (
                 <>

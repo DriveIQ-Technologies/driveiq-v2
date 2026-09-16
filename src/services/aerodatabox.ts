@@ -41,8 +41,19 @@ export interface AirportFlight {
   /** Raw local time strings from AeroDataBox (kept for display). */
   scheduledLocal?: string;
   revisedLocal?: string;
-  /** Scheduled time as ms epoch (from the UTC field) for sorting. */
+  /** Scheduled time as ms epoch (from the UTC field). Display + "sched" label. */
   scheduledMs: number;
+  /** Revised (expected) time as ms epoch, when the feed has one. */
+  revisedMs?: number;
+  /**
+   * When this flight actually expects to move: revised if the feed has one,
+   * otherwise scheduled. This is what the board must sort and filter on — a
+   * flight scheduled 20:00 but revised to 23:00 belongs at 23:00, and a
+   * flight whose scheduled time has passed is still upcoming if its revised
+   * time has not. Sorting or windowing on `scheduledMs` alone put delayed
+   * flights in the wrong place and dropped some off the board entirely.
+   */
+  effectiveMs: number;
   status: string;
   cancelled: boolean;
   delayed: boolean;
@@ -126,6 +137,12 @@ function normalizeOne(
     scheduledLocal: m.scheduledTime?.local,
     revisedLocal: m.revisedTime?.local,
     scheduledMs: Number.isFinite(schedMs) ? schedMs : 0,
+    revisedMs: Number.isFinite(revMs) ? revMs : undefined,
+    effectiveMs: Number.isFinite(revMs)
+      ? revMs
+      : Number.isFinite(schedMs)
+        ? schedMs
+        : 0,
     status: (f.status ?? '').trim() || 'Scheduled',
     cancelled,
     delayed,
@@ -148,7 +165,7 @@ export function normalizeFids(raw: AdbFidsResponse): AirportFlight[] {
     if (f.isCargo) return;
     out.push(normalizeOne(f, 'departure', i));
   });
-  return out.sort((a, b) => a.scheduledMs - b.scheduledMs);
+  return out.sort((a, b) => a.effectiveMs - b.effectiveMs);
 }
 
 /** Pad a number to 2 digits. */
@@ -189,12 +206,10 @@ export async function fetchAirportFlights(
   }
 
   if (!API_KEY) {
-    console.warn('[aerodatabox] EXPO_PUBLIC_AERODATABOX_API_KEY not set — skipping');
     return { flights: [], error: 'no-key' };
   }
   const icao = AIRPORT_ICAO[airportId];
   if (!icao) {
-    console.warn('[aerodatabox] no ICAO mapping for', airportId);
     return { flights: [], error: 'http' };
   }
 
@@ -229,21 +244,13 @@ export async function fetchAirportFlights(
   }
 
   const flights = Array.from(byId.values()).sort(
-    (a, b) => a.scheduledMs - b.scheduledMs,
+    (a, b) => a.effectiveMs - b.effectiveMs,
   );
 
   if (flights.length === 0 && lastError) {
     return { flights: [], error: lastError, status: lastStatus };
   }
 
-  console.log(
-    `[aerodatabox] ${icao}: ${flights.length} flights ` +
-      `(${flights.filter((f) => f.direction === 'arrival').length} arr, ` +
-      `${flights.filter((f) => f.direction === 'departure').length} dep, ` +
-      `${flights.filter((f) => f.delayed).length} delayed, ` +
-      `${flights.filter((f) => f.cancelled).length} cancelled` +
-      `${opts.fullDay ? ', full-day' : ''})`,
-  );
   return { flights };
 }
 
@@ -274,12 +281,10 @@ async function fetchAirportFlightsWindow(
       },
     });
   } catch (e) {
-    console.warn('[aerodatabox] network error', e);
     return { flights: [], error: 'network' };
   }
 
   if (res.status === 429) {
-    console.warn('[aerodatabox] rate limited (429)');
     return { flights: [], error: 'rate-limited' };
   }
   if (!res.ok) {
@@ -289,7 +294,6 @@ async function fetchAirportFlightsWindow(
     } catch {
       body = '(no body)';
     }
-    console.warn(`[aerodatabox] non-OK ${res.status} for ${icao}: ${body}`);
     return { flights: [], error: 'http', status: res.status };
   }
 

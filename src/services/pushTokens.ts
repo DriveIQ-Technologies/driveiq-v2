@@ -56,10 +56,8 @@ export async function registerPushToken(): Promise<boolean> {
     );
     registeredToken = token;
     registeredUid = uid;
-    console.log('[push] token saved on users/' + uid);
     return true;
   } catch (e) {
-    console.warn('[push] token registration failed', e);
     return false;
   }
 }

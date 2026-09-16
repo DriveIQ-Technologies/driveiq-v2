@@ -130,7 +130,6 @@ const fetchJson = async <T>(url: string): Promise<T | null> => {
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch (e) {
-    console.warn('[cricinfo] network error', url, e);
     return null;
   }
 };
@@ -148,7 +147,6 @@ const discoverLeagueIds = async (): Promise<{ id: string; name: string }[]> => {
     out.push({ id, name: l.name ?? 'Cricket' });
   }
   if (out.length > 0) return out;
-  console.warn('[cricinfo] header empty/unreachable — using fallback league list');
   return FALLBACK_LEAGUES;
 };
 
@@ -249,7 +247,6 @@ export async function fetchCricinfoLondon(
 ): Promise<AppEvent[]> {
   const leagues = await discoverLeagueIds();
   if (leagues.length === 0) {
-    console.warn('[cricinfo] no cricket series available');
     return [];
   }
 
@@ -290,10 +287,6 @@ export async function fetchCricinfoLondon(
     }),
   );
 
-  console.log(
-    `[cricinfo] ${rawMatches} raw cricket fixtures across ${leagues.length} series → ${out.length} London events ` +
-      `(dropped: ${droppedNotLondon} non-London, ${droppedOutOfRange} out of range)`,
-  );
   return out.sort(
     (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
   );

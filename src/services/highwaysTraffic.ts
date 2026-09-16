@@ -60,11 +60,9 @@ export async function fetchHighwaysIncidents(): Promise<TrafficIncident[]> {
   try {
     res = await fetch('https://www.trafficengland.com/api/events');
   } catch (e) {
-    console.warn('[highways] network error', e);
     return [];
   }
   if (!res.ok) {
-    console.warn('[highways] non-OK', res.status);
     return [];
   }
 
@@ -72,7 +70,6 @@ export async function fetchHighwaysIncidents(): Promise<TrafficIncident[]> {
   try {
     data = await res.json();
   } catch (e) {
-    console.warn('[highways] parse error', e);
     return [];
   }
 
@@ -107,6 +104,5 @@ export async function fetchHighwaysIncidents(): Promise<TrafficIncident[]> {
       hasClosures: category === 'Closure' || (r.eventCategory ?? '').toLowerCase().includes('closure'),
     });
   }
-  console.log(`[highways] ${out.length} motorway incidents`);
   return out;
 }

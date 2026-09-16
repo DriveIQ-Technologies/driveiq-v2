@@ -118,6 +118,20 @@ export async function clearWaitlistCache(): Promise<void> {
     removeItem(TRIAL_UID_KEY),
     removeItem(TRIAL_TOKEN_KEY),
   ]);
+  await invalidatePremiumCache();
+}
+
+/**
+ * Dropping the cached premium source lives behind a dynamic import because
+ * subscription.ts imports this module — a static import would be circular.
+ */
+async function invalidatePremiumCache(): Promise<void> {
+  try {
+    const { invalidatePremiumSource } = await import('./subscription');
+    invalidatePremiumSource();
+  } catch {
+    /* subscription module unavailable — nothing cached to clear */
+  }
 }
 
 export async function setPendingWaitlistToken(token: string): Promise<void> {
@@ -235,7 +249,6 @@ export async function syncWaitlistEntitlementFromFirestore(): Promise<{
     }
     return { premiumUntil: null, waitlistEmail: null };
   } catch (e) {
-    console.warn('[waitlist] entitlement sync failed', e);
     return null;
   }
 }
@@ -294,6 +307,9 @@ async function applyClaimResult(result: WaitlistClaimResponse): Promise<boolean>
     result.premiumUntil
   ) {
     await cacheWaitlistGrant(result.premiumUntil, result.waitlistEmail ?? null);
+    // A waitlist week is an entitlement change, and it does not go through
+    // RevenueCat — drop the cached premium source so the UI sees it at once.
+    await invalidatePremiumCache();
     await refreshUserTraits({ tier: 'premium', waitlist_week: true });
     if (result.status === 'granted') {
       track('waitlist_premium_week_granted', { days: 7, via: 'token', token: result.token });
@@ -397,7 +413,6 @@ export async function applyWaitlistOnAuth(opts: {
       }
     }
   } catch (e) {
-    console.warn('[auth] waitlist auto-claim failed', opts.source, e);
   }
   return false;
 }

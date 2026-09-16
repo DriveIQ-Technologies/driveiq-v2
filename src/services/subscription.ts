@@ -21,6 +21,7 @@ import {
   hasRevenueCatPremium,
   isPurchasesNativeAvailable,
   purchasesUnavailableMessage,
+  subscribePremiumChanges,
 } from './purchases';
 
 const UNLOCK_KEY = 'driveiq.pro.unlock';
@@ -61,7 +62,38 @@ export type PremiumSource =
   | 'dev_unlock';
 
 /** Which path unlocked Premium — for UI labels and debugging. */
-export async function getPremiumSource(): Promise<PremiumSource> {
+/**
+ * Entitlement reads are cached and de-duplicated.
+ *
+ * Every `hasProAccess()` used to run the whole chain — a storage read, a
+ * waitlist check and a `Purchases.getCustomerInfo()` native round trip. There
+ * are call sites in the map screen, the sidebar, the flights sheet, the station
+ * hub, AI quota and analytics, and several fire on mount, so opening the app
+ * produced a burst of identical native calls (the repeated "Vending
+ * CustomerInfo from cache" lines). `syncPremiumEntitlement` even resolved twice
+ * on its own: once directly and once inside `refreshUserTraits`.
+ *
+ * `inFlight` collapses concurrent callers onto one resolve; `cachedAt` keeps a
+ * short TTL for the ones that arrive just after. Anything that can CHANGE
+ * entitlement calls `invalidatePremiumSource()`, so this never serves a stale
+ * answer to someone who just subscribed, restored, or claimed a waitlist week.
+ */
+const PREMIUM_SOURCE_TTL_MS = 20_000;
+let cachedSource: PremiumSource | null = null;
+let cachedAt = 0;
+let inFlight: Promise<PremiumSource> | null = null;
+
+/** Drop the cached entitlement. Call whenever Premium may have changed. */
+export function invalidatePremiumSource(): void {
+  cachedSource = null;
+  cachedAt = 0;
+  inFlight = null;
+}
+
+// RevenueCat tells us on purchase, restore, logIn and its own refreshes.
+subscribePremiumChanges(() => invalidatePremiumSource());
+
+async function resolvePremiumSource(): Promise<PremiumSource> {
   if (process.env.EXPO_PUBLIC_PRO_PREVIEW === '1') return 'preview';
   const v = await getItem(UNLOCK_KEY);
   if (v === '1') return 'dev_unlock';
@@ -74,6 +106,24 @@ export async function getPremiumSource(): Promise<PremiumSource> {
   return 'none';
 }
 
+export async function getPremiumSource(): Promise<PremiumSource> {
+  if (cachedSource !== null && Date.now() - cachedAt < PREMIUM_SOURCE_TTL_MS) {
+    return cachedSource;
+  }
+  if (inFlight) return inFlight;
+
+  inFlight = resolvePremiumSource()
+    .then((source) => {
+      cachedSource = source;
+      cachedAt = Date.now();
+      return source;
+    })
+    .finally(() => {
+      inFlight = null;
+    });
+  return inFlight;
+}
+
 export async function hasProAccess(): Promise<boolean> {
   return (await getPremiumSource()) !== 'none';
 }
@@ -81,6 +131,7 @@ export async function hasProAccess(): Promise<boolean> {
 /** Dev / review helper — not shown in production UI. */
 export async function setProAccessForTesting(on: boolean): Promise<void> {
   await setItem(UNLOCK_KEY, on ? '1' : '0');
+  invalidatePremiumSource();
   await refreshUserTraits({ tier: on ? 'premium' : 'free' });
   track('pro_access_toggled_for_testing', { enabled: on });
   await syncPremiumEntitlement();
@@ -97,7 +148,6 @@ export async function syncPremiumEntitlement(): Promise<void> {
     const pro = await hasProAccess();
     await refreshUserTraits({ tier: pro ? 'premium' : 'free' });
   } catch (e) {
-    console.warn('[subscription] entitlement sync failed', e);
   }
 }
 
