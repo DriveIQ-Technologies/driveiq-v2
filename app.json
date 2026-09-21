@@ -3,7 +3,7 @@
     "name": "DriveIQ",
     "slug": "driveiq-91cbfgcslw1jeepr9yba",
     "scheme": "driveiq",
-    "version": "6.2.3",
+    "version": "6.2.7",
     "orientation": "portrait",
     "icon": "./assets/driveiq-app-icon-1024.png",
     "userInterfaceStyle": "light",
@@ -16,13 +16,15 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "driveiq.app",
-      "buildNumber": "22",
+      "buildNumber": "27",
       "usesAppleSignIn": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "DriveIQ uses your location while the app is open to show where you are on the map, nearby events in AI chat, distances to venues, and directions. We do not track you in the background.",
         "NSCalendarsUsageDescription": "DriveIQ adds saved events to your calendar with the start and finish times.",
         "NSCalendarsFullAccessUsageDescription": "DriveIQ adds saved events to your calendar with the start and finish times.",
-        "UIBackgroundModes": ["remote-notification"]
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
       }
     },
     "android": {
@@ -37,7 +39,7 @@
         "POST_NOTIFICATIONS",
         "RECEIVE_BOOT_COMPLETED"
       ],
-      "versionCode": 26
+      "versionCode": 31
     },
     "web": {
       "bundler": "metro"

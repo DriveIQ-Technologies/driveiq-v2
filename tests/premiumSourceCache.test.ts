@@ -13,12 +13,20 @@ const revenueCatPremium = vi.fn<() => Promise<boolean>>();
 const getItemMock = vi.fn<(key: string) => Promise<string | null>>();
 const waitlistActiveMock = vi.fn<() => Promise<boolean>>();
 
+const premiumListeners = new Set<() => void>();
+function emitPremiumChange() {
+  for (const l of premiumListeners) l();
+}
+
 vi.mock('@/services/purchases', () => ({
   configurePurchases: vi.fn(),
   hasRevenueCatPremium: () => revenueCatPremium(),
   isPurchasesNativeAvailable: () => true,
   purchasesUnavailableMessage: () => '',
-  subscribePremiumChanges: () => () => undefined,
+  subscribePremiumChanges: (l: () => void) => {
+    premiumListeners.add(l);
+    return () => premiumListeners.delete(l);
+  },
 }));
 vi.mock('@/services/storage', () => ({
   getItem: (k: string) => getItemMock(k),
@@ -39,6 +47,7 @@ async function load() {
 }
 
 beforeEach(() => {
+  premiumListeners.clear();
   revenueCatPremium.mockReset().mockResolvedValue(false);
   getItemMock.mockReset().mockResolvedValue(null);
   waitlistActiveMock.mockReset().mockResolvedValue(false);
@@ -81,6 +90,23 @@ describe('getPremiumSource caching', () => {
     invalidatePremiumSource();
     expect(await getPremiumSource()).toBe('revenuecat');
     expect(revenueCatPremium).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers from a premature false once RevenueCat finishes configuring', async () => {
+    // The real regression: AirportFlightsSheet resolved entitlement at app
+    // start, before configurePurchases() had run. hasRevenueCatPremium()
+    // returns false when the SDK is not configured, so a paying user was
+    // pinned to "free" and shown "Upgrade to Premium" on their flights board.
+    const { getPremiumSource } = await load();
+
+    revenueCatPremium.mockResolvedValue(false); // SDK not configured yet
+    expect(await getPremiumSource()).toBe('none');
+
+    // configurePurchases() completes and RevenueCat reports the entitlement.
+    revenueCatPremium.mockResolvedValue(true);
+    emitPremiumChange();
+
+    expect(await getPremiumSource()).toBe('revenuecat');
   });
 
   it('does not cache across a failed read', async () => {

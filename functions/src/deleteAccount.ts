@@ -6,6 +6,8 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { logger } from 'firebase-functions';
 
+import { deleteBrevoContact } from './brevo.js';
+
 async function deleteCollectionDocs(
   db: Firestore,
   path: string,
@@ -28,9 +30,25 @@ async function deleteCollectionDocs(
 export async function handleDeleteAccount(opts: {
   db: Firestore;
   uid: string;
+  /** Brevo key, when available, so the marketing contact goes too. */
+  brevoApiKey?: string;
 }): Promise<{ ok: true }> {
   const { db, uid } = opts;
   if (!uid) throw new Error('missing_uid');
+
+  // Read the address before the user doc goes, so the Brevo copy of the
+  // contact does not outlive the account it belongs to.
+  let contactEmail: string | null = null;
+  try {
+    const snap = await db.doc(`users/${uid}`).get();
+    const stored = snap.data()?.email;
+    if (typeof stored === 'string' && stored.trim()) contactEmail = stored.trim();
+  } catch (e) {
+    logger.warn('delete_account.email_lookup_fail', {
+      uid,
+      message: e instanceof Error ? e.message : 'error',
+    });
+  }
 
   const subpaths = [
     `users/${uid}/entitlements`,
@@ -65,7 +83,19 @@ export async function handleDeleteAccount(opts: {
     });
   }
 
+  if (contactEmail && opts.brevoApiKey) {
+    try {
+      await deleteBrevoContact({ apiKey: opts.brevoApiKey, email: contactEmail });
+    } catch (e) {
+      // Non-fatal: never leave the Auth record behind because Brevo was down.
+      logger.warn('delete_account.brevo_delete_fail', {
+        uid,
+        message: e instanceof Error ? e.message : 'error',
+      });
+    }
+  }
+
   await getAuth().deleteUser(uid);
-  logger.info('delete_account.done', { uid });
+  logger.info('delete_account.done', { uid, brevoContactRemoved: Boolean(contactEmail) });
   return { ok: true };
 }

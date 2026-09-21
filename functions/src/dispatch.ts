@@ -202,6 +202,8 @@ export async function dispatchPushNotifications(opts: {
         payloads.push({
           title,
           body,
+          // The app matches incidentId against the incidents it already holds
+          // (which carry coordinates) to focus the map on tap.
           data: { kind: 'road-accident', incidentId: inc.id },
         });
       }
@@ -264,13 +266,29 @@ export async function dispatchPushNotifications(opts: {
         payloads.push({
           title,
           body,
-          data: { kind: 'saved-flight', flightId: next.id },
+          // airportId so the tap opens the right airport's flight list.
+          data: {
+            kind: 'saved-flight',
+            flightId: next.id,
+            airportId: prev.airportId,
+          },
         });
       }
     }
 
+    const deadTokens = new Set<string>();
     for (const p of payloads.slice(0, 5)) {
-      await sendPushToTokens(tokens, p);
+      const result = await sendPushToTokens(tokens, p);
+      for (const t of result.invalidTokens) deadTokens.add(t);
+    }
+    // Expo told us these devices are gone (app deleted, token rotated). Drop
+    // them so we stop sending into the void on every cycle.
+    if (deadTokens.size > 0) {
+      const keep = tokens.filter((t) => !deadTokens.has(t));
+      await userDoc.ref
+        .set({ fcmTokens: keep }, { merge: true })
+        .catch(() => undefined);
+      logger.info('dispatch.pruned_dead_tokens', { uid, removed: deadTokens.size });
     }
 
     const nextIncidents: Record<string, IncidentSnapshot> = {};

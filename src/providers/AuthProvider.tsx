@@ -31,6 +31,7 @@ import {
 } from '@/services/analytics';
 import { auth, authApi } from '@/services/firebase';
 import { configureGoogleSignIn, getGoogleSignInIdToken } from '@/services/googleSignIn';
+import { registerAccount } from '@/services/accountRegistration';
 import { applyWaitlistOnAuth, type WaitlistClaimHints } from '@/services/waitlist';
 import { syncPremiumEntitlement } from '@/services/subscription';
 import { identifyPurchasesUser } from '@/services/purchases';
@@ -542,6 +543,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           },
           () => syncPremiumEntitlement(),
+          // Existing account signing in: backfill the server fields, no welcome.
+          () => registerAccount({ isNewAccount: false }),
         ]);
       },
       loginWithApple: async (waitlist) => {
@@ -610,6 +613,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             : '';
 
         let nextUser: User;
+        // Gates the welcome email. Upgrading an anonymous browse session is a
+        // new account from our side even though the uid already existed.
+        let appleIsNewAccount = false;
         try {
           if (a.currentUser?.isAnonymous) {
             try {
@@ -620,6 +626,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 CREDENTIAL_EXCHANGE_MS,
               );
               nextUser = linked.user;
+              appleIsNewAccount = true;
               track('auth_anonymous_upgraded', { provider: 'apple' });
             } catch (e) {
               const code = codeOf(e);
@@ -643,6 +650,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     CREDENTIAL_EXCHANGE_MS,
                   );
                   nextUser = signed.user;
+                  // Reached only because the Apple ID already has an account.
+                  appleIsNewAccount = false;
                 } catch (retryError) {
                   await ensureAnonymousUser().catch(() => undefined);
                   throw retryError;
@@ -657,6 +666,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               CREDENTIAL_EXCHANGE_MS,
             );
             nextUser = signed.user;
+            appleIsNewAccount = api.getAdditionalUserInfo(signed)?.isNewUser ?? false;
           }
         } catch (e) {
           // Apple already succeeded if we are here — this is Firebase refusing
@@ -743,6 +753,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           },
           () => syncPremiumEntitlement(),
+          // Last: the updateProfile step above has already landed, so the
+          // server sees Apple's fullName (given on first authorisation only).
+          () => registerAccount({ isNewAccount: appleIsNewAccount }),
         ]);
       },
       loginWithGoogle: async (waitlist) => {
@@ -751,10 +764,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const firebaseCredential = api.GoogleAuthProvider.credential(idToken);
 
         let nextUser: User;
+        // Gates the welcome email — see the Apple path for why an upgrade counts.
+        let googleIsNewAccount = false;
         if (a.currentUser?.isAnonymous) {
           try {
             const linked = await api.linkWithCredential(a.currentUser, firebaseCredential);
             nextUser = linked.user;
+            googleIsNewAccount = true;
             track('auth_anonymous_upgraded', { provider: 'google' });
           } catch (e) {
             const code =
@@ -768,6 +784,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               await api.signOut(a);
               const signed = await api.signInWithCredential(a, firebaseCredential);
               nextUser = signed.user;
+              // Reached only because the Google account already has one.
+              googleIsNewAccount = false;
             } else {
               throw e;
             }
@@ -775,6 +793,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else {
           const signed = await api.signInWithCredential(a, firebaseCredential);
           nextUser = signed.user;
+          googleIsNewAccount = api.getAdditionalUserInfo(signed)?.isNewUser ?? false;
         }
 
         // Signed in. Bookkeeping below must never fail the sign-in.
@@ -794,6 +813,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           },
           () => syncPremiumEntitlement(),
+          () => registerAccount({ isNewAccount: googleIsNewAccount }),
         ]);
       },
       signup: async (name, email, password, waitlist) => {
@@ -869,6 +889,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           },
           () => syncPremiumEntitlement(),
+          // After updateProfile above, so the welcome email can use the name.
+          () => registerAccount({ isNewAccount: true }),
           async () => {
             const verificationSent = nextUser.emailVerified
               ? null

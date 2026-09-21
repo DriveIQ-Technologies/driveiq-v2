@@ -1082,22 +1082,65 @@ export default function MapScreen() {
 
   useEffect(() => {
     setNotificationOpenHandler((data) => {
-      if (data.kind !== 'community-report') return;
       const lat = Number(data.lat);
       const lng = Number(data.lng);
-      const id = typeof data.reportId === 'string' ? data.reportId : '';
-      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+      const focusMap = () => {
+        if (!hasCoords) return;
         mapRef.current?.animateToRegion(
           { latitude: lat, longitude: lng, latitudeDelta: 0.04, longitudeDelta: 0.04 },
           500,
         );
-      }
-      if (id) {
-        setSelectedReport((cur) => reports.find((r) => r.id === id) ?? cur);
+      };
+
+      // A tapped alert should land on the thing it is about, not just open the
+      // app. The server puts the id of the subject in the payload for exactly
+      // this (see dispatchPushNotifications).
+      switch (data.kind) {
+        case 'community-report': {
+          const id = typeof data.reportId === 'string' ? data.reportId : '';
+          focusMap();
+          if (id) setSelectedReport((cur) => reports.find((r) => r.id === id) ?? cur);
+          return;
+        }
+        case 'road-accident': {
+          const id = typeof data.incidentId === 'string' ? data.incidentId : '';
+          setRoadsOpen(true);
+          // The incident we already hold carries the coordinates, so the
+          // payload does not need to repeat them.
+          const match = id ? incidents.find((i) => i.id === id) : undefined;
+          if (match) {
+            setSelectedIncident(match);
+            mapRef.current?.animateToRegion(
+              {
+                latitude: match.latitude,
+                longitude: match.longitude,
+                latitudeDelta: 0.04,
+                longitudeDelta: 0.04,
+              },
+              500,
+            );
+          }
+          return;
+        }
+        case 'line-closure': {
+          // Connections panel is the rail/line status list.
+          setConnectionsOpen(true);
+          return;
+        }
+        case 'saved-flight': {
+          const airportId = typeof data.airportId === 'string' ? data.airportId : '';
+          const airport = AIRPORTS.find((a) => a.id === airportId);
+          if (airport) setFlightsAirport(airport);
+          else setAirportsOpen(true);
+          return;
+        }
+        default:
+          return;
       }
     });
     return () => setNotificationOpenHandler(null);
-  }, [reports]);
+  }, [reports, incidents]);
 
   const startReportFlow = useCallback(() => {
     requireAccount('report', () => {

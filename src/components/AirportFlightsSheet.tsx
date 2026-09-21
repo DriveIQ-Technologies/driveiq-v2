@@ -28,6 +28,7 @@ import {
 } from '@/services/savedFlights';
 import { track, trackScreen } from '@/services/analytics';
 import { hasProAccess, showPremiumPaywall } from '@/services/subscription';
+import { subscribePremiumChanges } from '@/services/purchases';
 import { colors } from '@/theme/colors';
 import { ensurePermission, loadPrefs } from '@/services/notifications';
 
@@ -109,9 +110,36 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
   const [selectedFlight, setSelectedFlight] = useState<AirportFlight | null>(null);
 
   useEffect(() => {
-    hasProAccess().then(setIsPro);
     loadSavedFlights().then(setSaved);
   }, []);
+
+  /**
+   * Resolve entitlement when the sheet OPENS, and keep following it.
+   *
+   * This used to run once on mount with empty deps — but the sheet is rendered
+   * unconditionally by the map screen (its `if (!airport) return null` sits
+   * below the hooks), so that fired at app start, before RevenueCat had
+   * finished configuring. `hasRevenueCatPremium()` returns false when the SDK
+   * is not configured yet, so a paying user got `isPro = false` pinned for the
+   * entire session and was shown "Upgrade to Premium" on their own flights
+   * board. Re-resolving on open fixes the common case; the subscription covers
+   * a purchase or restore that lands while the sheet is already up.
+   */
+  useEffect(() => {
+    if (!airport) return;
+    let cancelled = false;
+    const resolve = () => {
+      void hasProAccess().then((pro) => {
+        if (!cancelled) setIsPro(pro);
+      });
+    };
+    resolve();
+    const unsubscribe = subscribePremiumChanges(resolve);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [airport]);
 
   useEffect(() => {
     if (!airport) return;
@@ -153,24 +181,12 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
       .then((res) => {
         if (cancelled) return;
         setFlights(res.flights);
-        if (res.error === 'no-key') {
-          setFlightsError('Live flights need an AeroDataBox API key (set EXPO_PUBLIC_AERODATABOX_API_KEY).');
-        } else if (res.error === 'rate-limited') {
-          setFlightsError('Flight data is rate limited right now. Try again shortly.');
-        } else if (res.error === 'http') {
-          if (res.status === 401 || res.status === 403) {
-            setFlightsError(
-              'AeroDataBox rejected the request (HTTP ' +
-                res.status +
-                '). The RapidAPI key likely isn’t subscribed to AeroDataBox, or your plan doesn’t include the airport flights endpoint. Subscribe to AeroDataBox on RapidAPI and try again.',
-            );
-          } else if (res.status === 404) {
-            setFlightsError('Flights endpoint not found (404). The airport code or request format needs a tweak.');
-          } else {
-            setFlightsError('Couldn’t load flights (HTTP ' + (res.status ?? '?') + '). Open again to retry.');
-          }
-        } else if (res.error === 'network') {
-          setFlightsError('Couldn’t reach the flights service. Check your connection and open again.');
+        if (res.error === 'no-cache') {
+          // The app no longer calls AeroDataBox directly — boards come from the
+          // server cache, so "nothing yet" is the only failure mode here.
+          setFlightsError(
+            'Live flights aren’t available right now. They refresh every few minutes — open again shortly.',
+          );
         }
       })
       .catch(() => {

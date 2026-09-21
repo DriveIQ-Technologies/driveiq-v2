@@ -40,14 +40,20 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - ExpoAdapterGoogleSignIn (16.1.4):
+  - ExpoAdapterGoogleSignIn (16.1.5):
     - ExpoModulesCore
     - GoogleSignIn (~> 9.0)
     - GoogleUtilities/Environment
     - GoogleUtilities/UserDefaults
     - React-Core
     - RecaptchaInterop
+  - ExpoAppleAuthentication (55.0.17):
+    - ExpoModulesCore
   - ExpoAsset (55.0.20):
+    - ExpoModulesCore
+  - ExpoCalendar (55.0.19):
+    - ExpoModulesCore
+  - ExpoCrypto (55.0.19):
     - ExpoModulesCore
   - ExpoDomWebView (55.0.6):
     - ExpoModulesCore
@@ -2130,7 +2136,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - RNGoogleSignin (16.1.4):
+  - RNGoogleSignin (16.1.5):
     - GoogleSignIn (~> 9.0)
     - hermes-engine
     - RCTRequired
@@ -2369,7 +2375,10 @@ DEPENDENCIES:
   - EXConstants (from `../node_modules/expo-constants/ios`)
   - Expo (from `../node_modules/expo`)
   - "ExpoAdapterGoogleSignIn (from `../node_modules/@react-native-google-signin/google-signin/expo/ios`)"
+  - ExpoAppleAuthentication (from `../node_modules/expo-apple-authentication/ios`)
   - ExpoAsset (from `../node_modules/expo-asset/ios`)
+  - ExpoCalendar (from `../node_modules/expo-calendar/ios`)
+  - ExpoCrypto (from `../node_modules/expo-crypto/ios`)
   - "ExpoDomWebView (from `../node_modules/@expo/dom-webview/ios`)"
   - ExpoFileSystem (from `../node_modules/expo-file-system/ios`)
   - ExpoFont (from `../node_modules/expo-font/ios`)
@@ -2504,8 +2513,14 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo"
   ExpoAdapterGoogleSignIn:
     :path: "../node_modules/@react-native-google-signin/google-signin/expo/ios"
+  ExpoAppleAuthentication:
+    :path: "../node_modules/expo-apple-authentication/ios"
   ExpoAsset:
     :path: "../node_modules/expo-asset/ios"
+  ExpoCalendar:
+    :path: "../node_modules/expo-calendar/ios"
+  ExpoCrypto:
+    :path: "../node_modules/expo-crypto/ios"
   ExpoDomWebView:
     :path: "../node_modules/@expo/dom-webview/ios"
   ExpoFileSystem:
@@ -2710,8 +2725,11 @@ SPEC CHECKSUMS:
   EXApplication: 093f79372a8ebd9ef65a5255d25818ce2feb0492
   EXConstants: dd0b0af9c628c00bc5ce556964210c4465ac9ffe
   Expo: a8cf7d3e88951f83c8ffbb9ec8f25ebb39123328
-  ExpoAdapterGoogleSignIn: ffd94547d3561123147fa70f2e3ca2f053325b10
+  ExpoAdapterGoogleSignIn: 98ac18f2a53d1bd61b1e25237c866c455cf1b846
+  ExpoAppleAuthentication: ab3d5d027724c02652f5be78bf81e43ac0e684c6
   ExpoAsset: 64ff088f684d008431f518c0d40fccefb9cda593
+  ExpoCalendar: a7a69834ae80b68ed20dd97fe589567f1729e78c
+  ExpoCrypto: 139bf434edb3c2a94267c70e306b04a7ceb8dc50
   ExpoDomWebView: 317a0d188cfdb850fc6fd2a43a2fc132dfd171ee
   ExpoFileSystem: 7874fb1de3cd3f866cb8dd7dbe05361c5c278ef6
   ExpoFont: 21550be2946ea5bbf50f1a20b31facd19ba4150c
@@ -2819,7 +2837,7 @@ SPEC CHECKSUMS:
   RevenueCatUI: 9e9a56493980e8186af3344022a81835b4553413
   RNCAsyncStorage: 0574155b95b96b89a51717c4dd42fb6057926bbc
   RNGestureHandler: 66318d89b6d6663e8c31060a523d73c0e5950bce
-  RNGoogleSignin: ba5b81eec7da155aa9ee69d95b11e81788638199
+  RNGoogleSignin: 8a84ba2a5d66b4253450a7e814660076d61a12c9
   RNPaywalls: 48b56c1bf4f0594ee4f6e6ddb04e7986266b6ca2
   RNPurchases: b772aeb6f252a7818d975e14372c8e6b13f040fe
   RNReanimated: 47f895fbfed87f671535d256c22c15489e5d0a25

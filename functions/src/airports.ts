@@ -233,3 +233,87 @@ export async function ingestAirports(
   }
   await Promise.all(tasks);
 }
+
+/**
+ * Full-day board (00:00–24:00 local) cached server-side.
+ *
+ * Premium's all-day board used to call AeroDataBox directly from every device,
+ * bypassing the cache entirely — two calls per open, per user, uncapped. That
+ * scales linearly with users and was the main quota risk. Polling it here once
+ * costs the same whether one person or ten thousand read it.
+ *
+ * AeroDataBox caps a window at 12 hours, so a day is two calls. This runs far
+ * less often than the near-term poll: the tail of the day is schedule data that
+ * barely moves, while `ingestAirport` keeps the next few hours fresh.
+ */
+export async function ingestAirportDay(
+  db: Firestore,
+  apiKey: string,
+  airportId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const icao = AIRPORT_IDS[airportId];
+  if (!icao) return 0;
+
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const mid = new Date(start);
+  mid.setHours(12, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  const byId = new Map<string, CachedFlight>();
+  for (const w of [
+    { from: start, to: mid },
+    { from: mid, to: end },
+  ]) {
+    const chunk = await fetchWindow(apiKey, icao, w.from, w.to);
+    for (const f of chunk) byId.set(f.id, f);
+  }
+
+  const flights = Array.from(byId.values()).sort(
+    (a, b) => a.effectiveMs - b.effectiveMs,
+  );
+
+  // Separate doc from airportCache: a full day at Heathrow is far more rows,
+  // and keeping it apart leaves the near-term doc (and the free board that
+  // reads it) well clear of Firestore's 1 MB document limit.
+  await db.doc(`airportCacheDay/${icao}`).set(
+    {
+      airportId,
+      icao,
+      flights,
+      flightCount: flights.length,
+      dayStartMs: start.getTime(),
+      updatedAt: new Date().toISOString(),
+      updatedAtMs: Date.now(),
+    },
+    { merge: true },
+  );
+  logger.info('ingest.airport_day', { airportId, count: flights.length });
+  return flights.length;
+}
+
+/** Full-day refresh for every airport the app can show. */
+export async function ingestAirportDays(
+  db: Firestore,
+  apiKey: string | undefined,
+): Promise<void> {
+  if (!apiKey?.trim()) {
+    logger.warn('ingest.airport_days_no_key');
+    return;
+  }
+  const now = new Date();
+  // Sequential: five airports x two windows in parallel would spike the
+  // per-second rate limit for no real gain on an hourly job.
+  for (const airportId of Object.keys(AIRPORT_IDS)) {
+    try {
+      await ingestAirportDay(db, apiKey, airportId, now);
+    } catch (e) {
+      logger.warn('ingest.airport_day_fail', {
+        airportId,
+        error: e instanceof Error ? e.message : 'error',
+      });
+    }
+  }
+}

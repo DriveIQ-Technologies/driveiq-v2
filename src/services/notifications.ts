@@ -380,9 +380,24 @@ const alertTypeFromKind = (kind: string): string => {
 
 type NotificationOpenHandler = (data: Record<string, unknown>) => void;
 let _openHandler: NotificationOpenHandler | null = null;
+/**
+ * A cold-start tap arrives before the screen has registered its handler, so it
+ * is held here and replayed the moment one is set. Without this, tapping an
+ * alert while the app is killed would launch the app on the default view
+ * instead of the thing the alert was about.
+ */
+let _pendingOpen: Record<string, unknown> | null = null;
 
 export function setNotificationOpenHandler(fn: NotificationOpenHandler | null): void {
   _openHandler = fn;
+  if (fn && _pendingOpen) {
+    const data = _pendingOpen;
+    _pendingOpen = null;
+    try {
+      fn(data);
+    } catch (e) {
+    }
+  }
 }
 
 /**
@@ -408,7 +423,33 @@ export function startNotificationOpenTracking(): void {
         type: alertTypeFromKind(kind),
         minutes_since_sent: minutesSinceSent,
       });
-      _openHandler?.(data);
+      if (_openHandler) _openHandler(data);
+      else _pendingOpen = data;
+    });
+  } catch (e) {
+  }
+
+  // Cold start: the tap that launched the app is not delivered to the listener
+  // above, it has to be asked for.
+  try {
+    void N.getLastNotificationResponseAsync?.().then((response: any) => {
+      if (!response) return;
+      // Only act on a genuinely recent tap. This call can keep returning the
+      // same old response on later launches, which would otherwise yank the
+      // user somewhere unexpected when they open the app normally.
+      const tappedAt = Number(response?.notification?.date ?? 0);
+      if (Number.isFinite(tappedAt) && tappedAt > 0 && Date.now() - tappedAt > 120_000) {
+        return;
+      }
+      const data = (response?.notification?.request?.content?.data ?? {}) as Record<
+        string,
+        unknown
+      >;
+      if (!data || typeof data.kind !== 'string') return;
+      const kind = data.kind;
+      track('alert_opened', { type: alertTypeFromKind(kind), cold_start: true });
+      if (_openHandler) _openHandler(data);
+      else _pendingOpen = data;
     });
   } catch (e) {
   }

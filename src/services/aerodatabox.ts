@@ -7,14 +7,12 @@
  * Docs: https://rapidapi.com/aedbx-aedbx/api/aerodatabox
  * Endpoint: /flights/airports/icao/{icao}/{fromLocal}/{toLocal}
  *
- * The HTTP layer (`fetchAirportFlights`) is thin; all the brittle parsing is in
- * the pure `normalizeFids` function so it can be unit-tested without a network
- * or API key (see scripts/test-aerodatabox.ts).
+ * The app does NOT call this API. Cloud Functions poll it and write the boards
+ * to Firestore; `fetchAirportFlights` here reads that cache. The brittle
+ * parsing lives in the pure `normalizeFids` function so it stays unit-testable
+ * without a network or API key (see scripts/test-aerodatabox.ts).
  */
 
-const API_KEY = process.env.EXPO_PUBLIC_AERODATABOX_API_KEY ?? '';
-const HOST = 'aerodatabox.p.rapidapi.com';
-const BASE = `https://${HOST}`;
 
 /** Airport id (matches AIRPORTS in airports.ts) → ICAO code AeroDataBox uses. */
 export const AIRPORT_ICAO: Record<string, string> = {
@@ -171,132 +169,66 @@ export function normalizeFids(raw: AdbFidsResponse): AirportFlight[] {
 /** Pad a number to 2 digits. */
 const p2 = (n: number) => String(n).padStart(2, '0');
 
-/** AeroDataBox wants local datetime as "YYYY-MM-DDTHH:mm". */
-function formatLocal(d: Date): string {
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(
-    d.getHours(),
-  )}:${p2(d.getMinutes())}`;
-}
 
 export interface AirportFlightsResult {
   flights: AirportFlight[];
-  error?: 'no-key' | 'rate-limited' | 'network' | 'http';
-  /** HTTP status when error === 'http', for precise diagnostics. */
-  status?: number;
+  /**
+   * 'no-cache' — the server has not written a board for this airport yet, or
+   * the last one is too old to show. There is no client-side fallback by
+   * design: see the note on fetchAirportFlights.
+   */
+  error?: 'no-cache';
+  /** Age of the cache that produced these flights, for a staleness caption. */
+  ageMs?: number;
+  stale?: boolean;
 }
 
 /**
- * Fetch arrivals + departures for one airport.
+ * Arrivals + departures for one airport, read from the server-side cache.
  *
- * Default window: ~1h back → 10h ahead (free / standard board).
- * `fullDay: true` (Premium): two chunked calls covering local midnight → midnight
- * (AeroDataBox caps each request at 12h).
+ * This never calls AeroDataBox. It used to: the free board read the cache, but
+ * Premium's `fullDay` board bypassed it and made two live calls on every open,
+ * per device. That scaled linearly with users and was the bulk of the quota
+ * risk — and it required shipping the RapidAPI key inside the app, where it can
+ * be extracted. Cloud Functions now poll once and every user reads the result,
+ * so API usage is flat at any number of users and the key stays server-side.
+ *
+ * `fullDay: true` (Premium) reads the 24h doc and overlays the near-term doc on
+ * top, so the hours that actually change stay as fresh as the frequent poll.
  */
 export async function fetchAirportFlights(
   airportId: string,
-  now: Date = new Date(),
+  _now: Date = new Date(),
   opts: { fullDay?: boolean } = {},
 ): Promise<AirportFlightsResult> {
+  const { readAirportCache, readAirportDayCache } = await import('./airportCache');
+
   if (!opts.fullDay) {
-    const { readAirportCache } = await import('./airportCache');
     const cached = await readAirportCache(airportId);
-    if (cached?.flights?.length) {
-      return { flights: cached.flights };
-    }
+    if (!cached || cached.flights.length === 0) return { flights: [], error: 'no-cache' };
+    return { flights: cached.flights, ageMs: cached.ageMs, stale: cached.stale };
   }
 
-  if (!API_KEY) {
-    return { flights: [], error: 'no-key' };
-  }
-  const icao = AIRPORT_ICAO[airportId];
-  if (!icao) {
-    return { flights: [], error: 'http' };
+  const [day, near] = await Promise.all([
+    readAirportDayCache(airportId),
+    readAirportCache(airportId),
+  ]);
+
+  // Neither doc: nothing to show.
+  if (!day?.flights.length && !near?.flights.length) {
+    return { flights: [], error: 'no-cache' };
   }
 
-  const windows: { from: Date; to: Date }[] = [];
-  if (opts.fullDay) {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const mid = new Date(start);
-    mid.setHours(12, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    windows.push({ from: start, to: mid }, { from: mid, to: end });
-  } else {
-    windows.push({
-      from: new Date(now.getTime() - 1 * 60 * 60 * 1000),
-      to: new Date(now.getTime() + 10 * 60 * 60 * 1000),
-    });
-  }
-
+  // Day doc is the base; the fresher near-term rows win on id so delays and
+  // cancellations in the next few hours are not held back by the hourly poll.
   const byId = new Map<string, AirportFlight>();
-  let lastError: AirportFlightsResult['error'];
-  let lastStatus: number | undefined;
-
-  for (const w of windows) {
-    const chunk = await fetchAirportFlightsWindow(icao, w.from, w.to);
-    if (chunk.error) {
-      lastError = chunk.error;
-      lastStatus = chunk.status;
-      continue;
-    }
-    for (const f of chunk.flights) byId.set(f.id, f);
-  }
+  for (const f of day?.flights ?? []) byId.set(f.id, f);
+  for (const f of near?.flights ?? []) byId.set(f.id, f);
 
   const flights = Array.from(byId.values()).sort(
     (a, b) => a.effectiveMs - b.effectiveMs,
   );
-
-  if (flights.length === 0 && lastError) {
-    return { flights: [], error: lastError, status: lastStatus };
-  }
-
-  return { flights };
-}
-
-async function fetchAirportFlightsWindow(
-  icao: string,
-  from: Date,
-  to: Date,
-): Promise<AirportFlightsResult> {
-  const params = new URLSearchParams({
-    direction: 'Both',
-    withLeg: 'false',
-    withCancelled: 'true',
-    withCodeshared: 'false',
-    withCargo: 'false',
-    withPrivate: 'false',
-    withLocation: 'false',
-  });
-  const url = `${BASE}/flights/airports/icao/${icao}/${formatLocal(
-    from,
-  )}/${formatLocal(to)}?${params.toString()}`;
-
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      headers: {
-        'x-rapidapi-key': API_KEY,
-        'x-rapidapi-host': HOST,
-      },
-    });
-  } catch (e) {
-    return { flights: [], error: 'network' };
-  }
-
-  if (res.status === 429) {
-    return { flights: [], error: 'rate-limited' };
-  }
-  if (!res.ok) {
-    let body = '';
-    try {
-      body = (await res.text()).slice(0, 300);
-    } catch {
-      body = '(no body)';
-    }
-    return { flights: [], error: 'http', status: res.status };
-  }
-
-  const json = (await res.json()) as AdbFidsResponse;
-  return { flights: normalizeFids(json) };
+  // Report the age of the near-term data: it is what drives the live columns.
+  const ageMs = near?.ageMs ?? day?.ageMs;
+  return { flights, ageMs, stale: near?.stale ?? day?.stale ?? false };
 }

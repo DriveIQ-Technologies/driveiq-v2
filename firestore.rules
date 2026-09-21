@@ -46,6 +46,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Full-day board for Premium. Written only by Cloud Functions, same as
+    // airportCache — the app reads it instead of calling AeroDataBox itself.
+    match /airportCacheDay/{icao} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /roadCache/corridors/{id} {
       allow read: if true;
       allow write: if false;

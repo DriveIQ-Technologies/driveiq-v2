@@ -22,7 +22,7 @@ import { phraseAndStore, loadSystemPrompt } from './copy.js';
 import { ingestLiveFeeds } from './ingest.js';
 import { publishLondonEvents } from './events.js';
 import { ensureAgentRuntimeDefaults, handleAskAgent } from './agent.js';
-import { ingestAirports } from './airports.js';
+import { ingestAirports, ingestAirportDays } from './airports.js';
 import { ingestEventsRaw } from './eventsIngest.js';
 import { isAirportPollWindow } from './londonTime.js';
 import {
@@ -41,6 +41,7 @@ import {
   handleSubmitCommunityReport,
 } from './communityReports.js';
 import { handleDeleteAccount } from './deleteAccount.js';
+import { handleRegisterAccount } from './accountLifecycle.js';
 
 initializeApp();
 const db = getFirestore();
@@ -157,19 +158,6 @@ export const writeQueuedCopy = onSchedule(
     const apiKey = await keyOrEmpty(anthropicKey);
     await processCopyQueue(apiKey);
 
-    if (isAirportPollWindow()) {
-      try {
-        await ingestAirports(db, await keyOrEmpty(aerodataboxKey), {
-          major: true,
-          regional: false,
-        });
-      } catch (e) {
-        logger.warn('ingest.airports_major_fail', {
-          error: e instanceof Error ? e.message : 'error',
-        });
-      }
-    }
-
     try {
       const lineRes = await fetch(
         'https://api.tfl.gov.uk/Line/Mode/tube,overground,dlr,elizabeth-line,tram,national-rail/Status',
@@ -186,6 +174,62 @@ export const writeQueuedCopy = onSchedule(
       await dispatchSavedEventReminders({ db });
     } catch (e) {
       logger.warn('dispatch.fail', { error: e instanceof Error ? e.message : 'error' });
+    }
+  },
+);
+
+/**
+ * LHR / LGW near-term board, every 10 minutes during the poll window.
+ *
+ * Was every 5 minutes, riding along inside writeQueuedCopy. Halving the rate
+ * saves ~7k AeroDataBox calls a month and flight boards do not move
+ * meaningfully inside ten minutes. Kept above the client's cache-age limit so
+ * the app never has a reason to call the API itself.
+ */
+export const ingestMajorAirports = onSchedule(
+  {
+    schedule: 'every 10 minutes',
+    timeoutSeconds: 180,
+    ...london,
+    secrets: [aerodataboxKey],
+  },
+  async () => {
+    if (!isAirportPollWindow()) return;
+    try {
+      await ingestAirports(db, await keyOrEmpty(aerodataboxKey), {
+        major: true,
+        regional: false,
+      });
+    } catch (e) {
+      logger.warn('ingest.airports_major_fail', {
+        error: e instanceof Error ? e.message : 'error',
+      });
+    }
+  },
+);
+
+/**
+ * Full-day boards for all five airports, hourly.
+ *
+ * Feeds Premium's all-day view, which previously called AeroDataBox straight
+ * from each device. Two calls per airport, so this is deliberately infrequent —
+ * the near-term jobs above keep the hours that actually change up to date.
+ */
+export const ingestAirportDaysHourly = onSchedule(
+  {
+    schedule: 'every 60 minutes',
+    timeoutSeconds: 540,
+    ...london,
+    secrets: [aerodataboxKey],
+  },
+  async () => {
+    if (!isAirportPollWindow()) return;
+    try {
+      await ingestAirportDays(db, await keyOrEmpty(aerodataboxKey));
+    } catch (e) {
+      logger.warn('ingest.airport_days_fail', {
+        error: e instanceof Error ? e.message : 'error',
+      });
     }
   },
 );
@@ -868,7 +912,11 @@ export const deleteAccountHttp = onRequest(
     }
     try {
       const uid = await uidFromBearer(req);
-      const result = await handleDeleteAccount({ db, uid });
+      const result = await handleDeleteAccount({
+        db,
+        uid,
+        brevoApiKey: await keyOrEmpty(brevoApiKey),
+      });
       res.status(200).json({ result });
     } catch (e) {
       logger.error('delete_account.fail', {
@@ -885,6 +933,69 @@ export const deleteAccountHttp = onRequest(
           status: 'INTERNAL',
         },
       });
+    }
+  },
+);
+
+/**
+ * Called by the app after a real (non-anonymous) sign-in.
+ *
+ * Writes the account fields every lifecycle email depends on, syncs the Brevo
+ * contact, and sends the welcome email once. Idempotent — the client may call
+ * it on every sign-in.
+ */
+export const registerAccountHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 60,
+    cors: true,
+    invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
+    secrets: [brevoApiKey, brevoSenderEmail, brevoSenderName],
+  },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { message: 'POST required', status: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const uid = await uidFromBearer(req);
+      const authUser = await getAuth().getUser(uid);
+      const body = (req.body ?? {}) as { data?: { isNewAccount?: unknown } };
+      const result = await handleRegisterAccount({
+        db,
+        isNewAccount: body.data?.isNewAccount === true,
+        user: {
+          uid,
+          email: authUser.email ?? null,
+          displayName: authUser.displayName ?? null,
+          emailVerified: authUser.emailVerified,
+          providerData: authUser.providerData.map((p) => ({ providerId: p.providerId })),
+        },
+        brevo: {
+          apiKey: await keyOrEmpty(brevoApiKey),
+          senderEmail: await keyOrEmpty(brevoSenderEmail),
+          senderName: await keyOrEmpty(brevoSenderName),
+        },
+      });
+      res.status(200).json({ result });
+    } catch (e) {
+      logger.error('account_register.fail', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      if (e instanceof Error && e.message === 'UNAUTHENTICATED') {
+        res.status(401).json({ error: { message: 'Sign in required', status: 'UNAUTHENTICATED' } });
+        return;
+      }
+      // Never block the app on this: the client treats a failure as retryable.
+      res.status(200).json({ error: { message: 'Could not register account', status: 'INTERNAL' } });
     }
   },
 );
