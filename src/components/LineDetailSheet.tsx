@@ -11,13 +11,13 @@ import {
   View,
 } from 'react-native';
 
+import { SeverityPill } from '@/components/ui/SeverityPill';
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import { track, trackScreen } from '@/services/analytics';
 import {
   fetchLineDetail,
   SEVERITY_COLOR,
-  SEVERITY_LABEL,
   type LineDetail,
   type LineSeverityBucket,
 } from '@/services/tflLines';
@@ -147,16 +147,7 @@ export function LineDetailSheet({
 
         {/* Status pill row */}
         <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.statusPill,
-              { backgroundColor: SEVERITY_COLOR[severity] },
-            ]}
-          >
-            <Text style={styles.statusText}>
-              {detail?.statusDescription ?? SEVERITY_LABEL[severity]}
-            </Text>
-          </View>
+          <SeverityPill bucket={severity} />
           {detail ? (
             <Text style={styles.timestamp}>
               Updated {formatTimestamp(detail.fetchedAt)}
@@ -306,17 +297,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 12,
-  },
-  statusPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: colors.textOnPrimary,
-    letterSpacing: 0.3,
   },
   timestamp: {
     fontSize: 12,

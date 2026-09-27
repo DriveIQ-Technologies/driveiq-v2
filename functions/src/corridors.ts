@@ -106,15 +106,23 @@ export function buildCorridorBuckets(incidents: TrafficIncident[]): CorridorBuck
   return ROAD_CORRIDORS.map((c) => byId.get(c.id)!);
 }
 
+/** Firestore document for one corridor's cached status. */
+export function corridorDocPath(corridorId: string): string {
+  return `roadCorridors/${corridorId}`;
+}
+
 export async function ingestCorridorRoads(
   db: Firestore,
   incidents: TrafficIncident[],
 ): Promise<void> {
   const buckets = buildCorridorBuckets(incidents);
   const writes = buckets.map(async (bucket) => {
-    const prevSnap = await db.doc(`roadCache/corridors/${bucket.corridor.id}`).get();
+    // `roadCache/corridors/{id}` was three segments — a collection path, not a
+    // document — so Firestore rejected every write and this never worked.
+    const ref = db.doc(corridorDocPath(bucket.corridor.id));
+    const prevSnap = await ref.get();
     const prevStatus = String(prevSnap.data()?.status ?? 'clear');
-    await db.doc(`roadCache/corridors/${bucket.corridor.id}`).set(
+    await ref.set(
       {
         id: bucket.corridor.id,
         label: bucket.corridor.label,

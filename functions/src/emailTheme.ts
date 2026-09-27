@@ -101,6 +101,9 @@ export function brandFooter(): string {
       Real-time London demand for drivers.<br />
       Questions? Reply to this email or write to hello@driveiq.app
     </p>
+    <p style="margin:8px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;color:${BRAND.muted};">
+      &copy; ${new Date().getFullYear()} DriveIQ Technologies LTD. All rights reserved.
+    </p>
   </td>
 </tr>`;
 }

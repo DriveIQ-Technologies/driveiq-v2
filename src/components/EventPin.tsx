@@ -3,7 +3,7 @@ import { Marker } from 'react-native-maps';
 
 import { EventMarker } from '@/components/EventMarker';
 import type { AppEvent } from '@/types/event';
-import { pinDescriptorFor } from '@/utils/eventIcons';
+import { isCuratedEvent, pinDescriptorFor } from '@/utils/eventIcons';
 
 interface EventPinProps {
   event: AppEvent;
@@ -101,7 +101,7 @@ function EventPinBase({ event, selected, onPress, rasterEpoch = 0 }: EventPinPro
       // Featured pins (Wimbledon, Ascot, …) sit above cluster bubbles
       // (zIndex 15) so a count bubble can never cover them; airports (20)
       // stay on top of everything.
-      zIndex={event.source === 'featured' ? 18 : 10}
+      zIndex={isCuratedEvent(event) ? 18 : 10}
     >
       <EventMarker descriptor={descriptor} selected={selected} onReady={freezeSoon} />
     </Marker>

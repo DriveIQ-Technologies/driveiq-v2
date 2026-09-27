@@ -8,12 +8,6 @@ import { getAiQuota } from '@/services/aiQuota';
 import { loadSavedFlights } from '@/services/savedFlights';
 import { loadSavedStations } from '@/services/savedStations';
 import { showPremiumPaywall } from '@/services/subscription';
-import {
-  hasSeenWaitlistTrialEnd,
-  markWaitlistTrialEndSeen,
-  getWaitlistTrialEnds,
-  waitlistTrialActive,
-} from '@/services/waitlist';
 import { colors } from '@/theme/colors';
 
 interface Props {
@@ -84,6 +78,8 @@ export function WaitlistTrialEndSheet({ visible, onClose }: Props) {
           style={styles.primary}
           onPress={() => {
             track('waitlist_trial_end_upgrade');
+            // Close first so the paywall isn't left with this sheet behind it.
+            onClose();
             showPremiumPaywall('Continue Premium after waitlist week', {
               source: 'waitlist_day8',
               inline: true,
@@ -92,10 +88,7 @@ export function WaitlistTrialEndSheet({ visible, onClose }: Props) {
         >
           <Text style={styles.primaryText}>Continue with Premium</Text>
         </Pressable>
-        <Pressable onPress={() => {
-          void markWaitlistTrialEndSeen();
-          onClose();
-        }} style={styles.secondary}>
+        <Pressable onPress={onClose} style={styles.secondary}>
           <Text style={styles.secondaryText}>Not now</Text>
         </Pressable>
       </View>
@@ -103,20 +96,10 @@ export function WaitlistTrialEndSheet({ visible, onClose }: Props) {
   );
 }
 
-/** True when trial ended in the last 48h and sheet not yet dismissed. */
-export async function shouldShowWaitlistTrialEnd(): Promise<boolean> {
-  if (await hasSeenWaitlistTrialEnd()) return false;
-  const active = await waitlistTrialActive();
-  if (active) return false;
-  const ends = await getWaitlistTrialEnds();
-  if (!ends) return false;
-  const endMs = Date.parse(ends);
-  if (!Number.isFinite(endMs)) return false;
-  const now = Date.now();
-  return now > endMs && now - endMs < 48 * 60 * 60 * 1000;
-}
-
-export { markWaitlistTrialEndSeen };
+// When to show this sheet is decided by services/waitlistEnded.ts. The old
+// check here only fired within 48h of the week ending, only on a cold start,
+// could run before waitlist state had loaded, and would have told a paying
+// subscriber their week had ended.
 
 const styles = StyleSheet.create({
   sheet: {

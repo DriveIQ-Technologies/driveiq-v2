@@ -17,7 +17,10 @@ export interface AppEvent {
     | 'ticketmaster'
     | 'venue-site'
     | 'sample'
-    | 'featured';
+    | 'featured'
+    /** Added by hand on the events admin page (server manualEvents). Treated
+     *  like `featured`: someone checked it, so it wins over feed copies. */
+    | 'manual';
   category: EventCategory;
   title: string;
   /** ISO-8601 start time. */

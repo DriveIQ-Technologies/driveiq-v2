@@ -9,6 +9,7 @@ import { db, fsApi } from './firebase';
 
 const FRESH_MS = 36 * 60 * 60 * 1000;
 const MIN_COUNT = 20;
+const CATALOGUE_LIMIT = 2000;
 
 export interface PublishedCatalogue {
   events: AppEvent[];
@@ -69,7 +70,9 @@ export async function fetchPublishedEvents(): Promise<PublishedCatalogue | null>
         fsApi.collection(db, 'eventsPublished'),
         fsApi.where('startsAt', '>=', cutoff),
         fsApi.orderBy('startsAt', 'asc'),
-        fsApi.limit(800),
+        // Was 800 with ~1,000 upcoming published: the last two days of the
+        // week (225 events, sports included) never reached the map.
+        fsApi.limit(CATALOGUE_LIMIT),
       ),
     );
     const events = snap.docs

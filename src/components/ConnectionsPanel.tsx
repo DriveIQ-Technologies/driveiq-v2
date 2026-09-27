@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { SeverityPill } from '@/components/ui/SeverityPill';
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { track, trackScreen } from '@/services/analytics';
 import { MAJOR_STATIONS, type MajorStation } from '@/services/stations';
@@ -18,6 +19,8 @@ import {
   fetchLineStatuses,
   SEVERITY_COLOR,
   SEVERITY_LABEL,
+  lineDetailText,
+  modeLabel,
   type LineStatus,
 } from '@/services/tflLines';
 
@@ -46,24 +49,7 @@ const modeIcon = (mode: string): React.ComponentProps<typeof Ionicons>['name'] =
   }
 };
 
-const modeLabel = (mode: string): string => {
-  switch (mode) {
-    case 'tube':
-      return 'Underground';
-    case 'overground':
-      return 'Overground';
-    case 'dlr':
-      return 'DLR';
-    case 'elizabeth-line':
-      return 'Elizabeth line';
-    case 'tram':
-      return 'Tram';
-    case 'national-rail':
-      return 'National Rail';
-    default:
-      return mode;
-  }
-};
+
 
 export function ConnectionsPanel({ visible, onClose, onOpenStation }: Props) {
   const [lines, setLines] = useState<LineStatus[]>([]);
@@ -130,7 +116,7 @@ export function ConnectionsPanel({ visible, onClose, onOpenStation }: Props) {
         <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           <Text style={styles.hubSectionLabel}>Major stations</Text>
           <Text style={styles.hubHint}>
-            Tap a terminus for every line serving it. Tube, Elizabeth line,
+            Tap a station for every line serving it. Tube, Elizabeth line,
             Overground and National Rail statuses are live.
           </Text>
           {MAJOR_STATIONS.map((s) => {
@@ -200,22 +186,14 @@ export function ConnectionsPanel({ visible, onClose, onOpenStation }: Props) {
                       <View style={{ flex: 1 }}>
                         <Text style={styles.lineName}>{l.name}</Text>
                         <Text style={styles.lineMode}>{modeLabel(l.modeName)}</Text>
-                        {l.reason ? (
-                          <Text style={styles.lineReason} numberOfLines={2}>
-                            {l.reason.replace(/https?:\/\/\S+/gi, '').trim() ||
-                              'Tap for full details'}
+                        {lineDetailText(l) ? (
+                          <Text style={styles.lineReason} numberOfLines={3}>
+                            {lineDetailText(l)}
                           </Text>
                         ) : null}
                       </View>
                       <View style={styles.trailing}>
-                        <View
-                          style={[
-                            styles.statusPill,
-                            { backgroundColor: SEVERITY_COLOR[l.severityBucket] },
-                          ]}
-                        >
-                          <Text style={styles.statusText}>{l.statusDescription}</Text>
-                        </View>
+                        <SeverityPill bucket={l.severityBucket} />
                         <Ionicons
                           name="chevron-forward"
                           size={18}
@@ -325,17 +303,4 @@ const styles = StyleSheet.create({
   lineName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
   lineMode: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   lineReason: { fontSize: 12, color: colors.textPrimary, marginTop: 6, lineHeight: 17 },
-  statusPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    alignSelf: 'flex-start',
-    maxWidth: 130,
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.textOnPrimary,
-    textAlign: 'center',
-  },
 });

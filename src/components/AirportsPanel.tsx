@@ -9,6 +9,8 @@ import {
   View,
 } from 'react-native';
 
+import { SeverityPill } from '@/components/ui/SeverityPill';
+import { lineDetailText } from '@/services/tflLines';
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { colors } from '@/theme/colors';
 import {
@@ -25,13 +27,6 @@ interface Props {
   onPickAirport?: (lat: number, lon: number) => void;
   onNavigate?: (airport: { id: string; name: string; latitude: number; longitude: number }) => void;
 }
-
-const SEVERITY_COLOR: Record<ConnectionStatus['severityBucket'], string> = {
-  good: '#26C281',
-  minor: '#FACC15',
-  severe: '#F97316',
-  closed: '#DC2626',
-};
 
 export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: Props) {
   const [statuses, setStatuses] = useState<Record<string, ConnectionStatus[]>>({});
@@ -160,22 +155,14 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
                         <View style={{ flex: 1 }}>
                           <Text style={styles.connLabel}>{c.label}</Text>
                           {c.note ? <Text style={styles.connNote}>{c.note}</Text> : null}
-                          {c.reason ? (
-                            <Text style={styles.connReason} numberOfLines={2}>
-                              {c.reason.replace(/https?:\/\/\S+/gi, '').trim() ||
-                                'Tap for full details'}
-                            </Text>
-                          ) : null}
+                          {lineDetailText(c) ? (
+                  <Text style={styles.connReason} numberOfLines={2}>
+                    {lineDetailText(c)}
+                  </Text>
+                ) : null}
                         </View>
                         <View style={styles.connTrailing}>
-                          <View
-                            style={[
-                              styles.statusPill,
-                              { backgroundColor: SEVERITY_COLOR[c.severityBucket] },
-                            ]}
-                          >
-                            <Text style={styles.statusText}>{c.statusDescription}</Text>
-                          </View>
+                          <SeverityPill bucket={c.severityBucket} />
                           <Ionicons
                             name="chevron-forward"
                             size={16}
@@ -273,19 +260,6 @@ const styles = StyleSheet.create({
   connLabel: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
   connNote: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontStyle: 'italic' },
   connReason: { fontSize: 12, color: colors.textPrimary, marginTop: 6, lineHeight: 17 },
-  statusPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    alignSelf: 'flex-start',
-    maxWidth: 130,
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.textOnPrimary,
-    textAlign: 'center',
-  },
   directionsBtn: {
     flexDirection: 'row',
     alignItems: 'center',

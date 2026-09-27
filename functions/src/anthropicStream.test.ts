@@ -31,7 +31,17 @@ function mockFetch(body: string, size: number) {
 }
 
 const FRAMES = [
-  { type: 'message_start', message: { usage: { input_tokens: 1200, output_tokens: 0 } } },
+  {
+    type: 'message_start',
+    message: {
+      usage: {
+        input_tokens: 1200,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 1100,
+      },
+    },
+  },
   { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Arsenal play ' } },
   { type: 'content_block_delta', delta: { type: 'text_delta', text: 'at 19:30 London' } },
   { type: 'content_block_delta', delta: { type: 'text_delta', text: ' tonight.' } },
@@ -76,6 +86,31 @@ describe('askAgentStream', () => {
     expect(res.truncated).toBe(false);
     expect(res.usage?.input_tokens).toBe(1200);
     expect(res.usage?.output_tokens).toBe(42);
+    expect(res.usage?.cache_read_input_tokens).toBe(1100);
+  });
+
+  it('sends an explicit system cache breakpoint', async () => {
+    const fetchMock = mockFetch(sse(FRAMES), 4096);
+    vi.stubGlobal('fetch', fetchMock);
+    await askAgentStream({
+      apiKey: 'k',
+      system: 's',
+      prompt: 'p',
+      model: 'haiku',
+      onDelta: () => undefined,
+    });
+    const posted = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      system: unknown;
+      stream: boolean;
+    };
+    expect(posted.stream).toBe(true);
+    expect(posted.system).toEqual([
+      {
+        type: 'text',
+        text: 's',
+        cache_control: { type: 'ephemeral', ttl: '1h' },
+      },
+    ]);
   });
 
   it('flags a truncated answer', async () => {

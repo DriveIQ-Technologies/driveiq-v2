@@ -157,7 +157,8 @@ export function PremiumPaywallSheet({
     [packages, selectedId],
   );
 
-  const hasTrial = selected ? packageHasFreeTrial(selected) : true;
+  // Never promise a trial before the store has confirmed one.
+  const hasTrial = selected ? packageHasFreeTrial(selected) : false;
   const ctaLabel = hasTrial
     ? 'Start 7 days free'
     : selected

@@ -32,11 +32,12 @@ import { findLondonPlace } from '@/data/londonVenues';
 const PERFORMANCE_GAP_MS = 150 * 60 * 1000;
 
 /**
- * Provider trust for kick-off times and naming, best first. `featured` is
- * hand-curated so it wins outright; after that it depends on the category —
+ * Provider trust for kick-off times and naming, best first. `manual` and
+ * `featured` are hand-curated so they win outright; after that it depends on the category —
  * football-data is the official fixture list, Ticketmaster owns ticketed music.
  */
 const SPORTS_PRIORITY: AppEvent['source'][] = [
+  'manual',
   'featured',
   'football-data',
   'espn',
@@ -48,6 +49,7 @@ const SPORTS_PRIORITY: AppEvent['source'][] = [
 ];
 
 const OTHER_PRIORITY: AppEvent['source'][] = [
+  'manual',
   'featured',
   'venue-site',
   'ticketmaster',

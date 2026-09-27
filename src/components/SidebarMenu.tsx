@@ -19,7 +19,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
 import { showConfirm } from '@/services/dialog';
-import { restorePurchases } from '@/services/purchases';
+import {
+  getCurrentOffering,
+  premiumTrialAvailable,
+  restorePurchases,
+} from '@/services/purchases';
 import { showPurchaseFailure } from '@/services/premiumPurchaseFlow';
 import {
   getPremiumSource,
@@ -112,6 +116,8 @@ export function SidebarMenu({
     'revenuecat' | 'waitlist' | 'preview' | 'dev_unlock' | 'none'
   >('none');
   const [waitlistDays, setWaitlistDays] = useState<number | null>(null);
+  // From the store: only true when this Apple ID can actually get the trial.
+  const [trialAvailable, setTrialAvailable] = useState(() => premiumTrialAvailable());
 
   useEffect(() => {
     if (visible) {
@@ -125,6 +131,10 @@ export function SidebarMenu({
         setIsPremium(pro);
         setPremiumSource(source);
         setWaitlistDays(source === 'waitlist' ? waitlistDaysLeft(ends) : null);
+        if (!pro) {
+          await getCurrentOffering();
+          setTrialAvailable(premiumTrialAvailable());
+        }
       })();
     }
     Animated.timing(slide, {
@@ -314,7 +324,7 @@ export function SidebarMenu({
         {
           key: 'upgrade',
           icon: 'rocket',
-          label: 'Upgrade to Premium',
+          label: trialAvailable ? 'Try Premium free for 7 days' : 'Upgrade to Premium',
           body: 'Full-day flights, all stations, unlimited AI',
           badge: 'Free plan',
           handler: () => {

@@ -3,6 +3,7 @@
  * Ticketmaster does not carry league fixtures — this is the sports backbone.
  */
 import { logger } from 'firebase-functions';
+import { typicalFinishAt } from './eventDurations.js';
 import { addDaysYmd, londonYmd, ukOffset } from './londonTime.js';
 import type { PublishedEvent } from './eventNormalise.js';
 import { FOTMOB_CLUBS, findSportsPlace, resolveSportsPlace } from './londonSportsVenues.js';
@@ -26,7 +27,17 @@ const ESPN_FEEDS: { path: string; label: string; sub: string }[] = [
   { path: 'soccer/eng.charity', label: 'Community Shield', sub: 'Football' },
   { path: 'soccer/eng.w.1', label: 'Women’s Super League', sub: 'Football' },
   { path: 'soccer/eng.w.fa', label: 'Women’s FA Cup', sub: 'Football' },
+  { path: 'soccer/eng.trophy', label: 'EFL Trophy', sub: 'Football' },
+  { path: 'soccer/eng.w.league_cup', label: 'Women’s League Cup', sub: 'Football' },
   { path: 'soccer/fifa.friendly', label: 'International Friendlies', sub: 'Football' },
+  // England home games at Wembley. Only friendlies were listed, so a sold-out
+  // England v Spain (Nations League) never reached the app.
+  { path: 'soccer/uefa.nations', label: 'UEFA Nations League', sub: 'Football' },
+  { path: 'soccer/uefa.w.nations', label: 'UEFA Women’s Nations League', sub: 'Football' },
+  { path: 'soccer/uefa.euroq', label: 'Euro Qualifier', sub: 'Football' },
+  { path: 'soccer/fifa.worldq.uefa', label: 'World Cup Qualifier', sub: 'Football' },
+  { path: 'soccer/uefa.europa.conf', label: 'UEFA Conference League', sub: 'Football' },
+  { path: 'soccer/uefa.super_cup', label: 'UEFA Super Cup', sub: 'Football' },
   { path: 'soccer/club.friendly', label: 'Pre-season Friendly', sub: 'Football' },
   { path: 'soccer/uefa.champions', label: 'UEFA Champions League', sub: 'Football' },
   { path: 'soccer/uefa.europa', label: 'UEFA Europa League', sub: 'Football' },
@@ -58,19 +69,7 @@ function yyyymmdd(d: Date): string {
   return londonYmd(d).replace(/-/g, '');
 }
 
-function addHours(iso: string, hours: number): string {
-  return new Date(Date.parse(iso) + hours * 3600 * 1000).toISOString();
-}
 
-function durationHours(sub: string): number {
-  if (sub.includes('Test')) return 8;
-  if (sub.includes('ODI')) return 7;
-  if (sub.includes('T20')) return 4;
-  if (sub.includes('Rugby')) return 2.5;
-  if (sub.includes('Boxing') || sub.includes('MMA')) return 4;
-  if (sub.includes('NFL') || sub.includes('American')) return 3.5;
-  return 2.5;
-}
 
 function parseIcsDateTime(raw: string): number | null {
   const compact = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
@@ -126,7 +125,8 @@ async function fetchFotmob(): Promise<PublishedEvent[]> {
             category: 'sports',
             title: title || `${club.label} home fixture`,
             startsAt,
-            endsAt: addHours(startsAt, 2.5),
+            endsAt: typicalFinishAt(startsAt, { kind: 'sports', subCategory: 'Football' }),
+            endIsEstimated: true,
             venue: place.venue,
             latitude: place.latitude,
             longitude: place.longitude,
@@ -146,21 +146,50 @@ async function fetchFotmob(): Promise<PublishedEvent[]> {
   return Array.from(byId.values());
 }
 
+/** Run `fn` over `items` with at most `limit` in flight. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 async function fetchEspn(): Promise<PublishedEvent[]> {
   const range = horizon();
-  const dates = `${yyyymmdd(range.start)}-${yyyymmdd(range.end)}`;
-  const results = await Promise.all(
-    ESPN_FEEDS.map(async (feed) => {
-      try {
-        const res = await fetch(`${ESPN_BASE}/${feed.path}/scoreboard?dates=${dates}&limit=200`);
-        if (!res.ok) return { feed, events: [] as Record<string, unknown>[] };
-        const json = (await res.json()) as { events?: Record<string, unknown>[] };
-        return { feed, events: json.events ?? [] };
-      } catch {
+  // One day per request. ESPN now rejects a date range ("dates=A-B" returns
+  // 400 "Failed to get events endpoint"), and this code used to swallow that
+  // as "no fixtures" — so every ESPN league (rugby, the EFL, NFL, NBA, boxing)
+  // silently returned nothing and nothing ever reported it.
+  const days: string[] = [];
+  for (let t = range.start.getTime(); t <= range.end.getTime(); t += 24 * 60 * 60 * 1000) {
+    days.push(yyyymmdd(new Date(t)));
+  }
+  const jobs = ESPN_FEEDS.flatMap((feed) => days.map((day) => ({ feed, day })));
+  const failures = new Map<string, string>();
+  const results = await mapLimit(jobs, 8, async ({ feed, day }) => {
+    try {
+      const res = await fetch(`${ESPN_BASE}/${feed.path}/scoreboard?dates=${day}`);
+      if (!res.ok) {
+        failures.set(feed.path, `http ${res.status}`);
         return { feed, events: [] as Record<string, unknown>[] };
       }
-    }),
-  );
+      const json = (await res.json()) as { events?: Record<string, unknown>[] };
+      return { feed, events: json.events ?? [] };
+    } catch (e) {
+      failures.set(feed.path, e instanceof Error ? e.message : 'error');
+      return { feed, events: [] as Record<string, unknown>[] };
+    }
+  });
+  if (failures.size > 0) {
+    // Loud on purpose: a feed going quiet must be visible, not look like an empty week.
+    logger.warn('events.espn_feed_failures', { feeds: Object.fromEntries(failures) });
+  }
 
   const out: PublishedEvent[] = [];
   const seen = new Set<string>();
@@ -208,7 +237,12 @@ async function fetchEspn(): Promise<PublishedEvent[]> {
         category: 'sports',
         title,
         startsAt,
-        endsAt: addHours(startsAt, durationHours(feed.sub)),
+        endsAt: typicalFinishAt(startsAt, {
+          kind: 'sports',
+          subCategory: feed.sub,
+          description: feed.label,
+        }),
+        endIsEstimated: true,
         venue: place.venue,
         latitude: place.latitude,
         longitude: place.longitude,
@@ -301,7 +335,12 @@ async function fetchCricket(): Promise<PublishedEvent[]> {
                 ? `${homeName} vs ${awayName}`
                 : String(e.shortName ?? e.name ?? 'Cricket'),
             startsAt: e.date,
-            endsAt: addHours(e.date, durationHours(sub)),
+            endsAt: typicalFinishAt(e.date, {
+              kind: 'sports',
+              subCategory: sub,
+              description: league.name,
+            }),
+            endIsEstimated: true,
             venue: place.venue,
             latitude: place.latitude,
             longitude: place.longitude,

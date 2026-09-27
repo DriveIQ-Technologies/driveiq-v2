@@ -183,3 +183,10 @@ export const FOTMOB_CLUBS: {
   { teamId: 8346, venue: 'Kenilworth Road', locationMatch: ['kenilworth'], label: 'Luton Town' },
   { teamId: 8645, venue: 'Stadium MK', locationMatch: ['stadium mk', 'stadium:mk'], label: 'MK Dons' },
 ];
+
+/** Every distinct venue in the table, A–Z, for pickers. */
+export function knownSportsVenues(): SportsPlace[] {
+  const byName = new Map<string, SportsPlace>();
+  for (const p of Object.values(PLACES)) if (!byName.has(p.venue)) byName.set(p.venue, p);
+  return [...byName.values()].sort((a, b) => a.venue.localeCompare(b.venue));
+}

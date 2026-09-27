@@ -60,6 +60,7 @@ import { reminderChatDialogMessage } from '@/services/eventReminders';
 import { SuggestionChips } from '@/components/ai/SuggestionChips';
 import { areaLabelFor, getForegroundLocationStatus, requestForegroundLocation } from '@/services/deviceLocation';
 import { distanceKm, type LatLng } from '@/utils/distance';
+import { isCuratedEvent } from '@/utils/eventIcons';
 
 interface Props {
   visible: boolean;
@@ -509,7 +510,7 @@ function eventsForAgent(question: string, all: AppEvent[]): AppEvent[] {
     ? inWindow.filter(
         (e) =>
           eventStatus(e) !== 'finished' ||
-          e.source === 'featured' ||
+          isCuratedEvent(e) ||
           demandScore(e) >= 15000,
       )
     : inWindow;
@@ -867,7 +868,7 @@ export function AISupportSheet({
               endsAt: londonStamp(eventDisplayEnd(e)),
               doorsAt: e.doorsAt ? londonStamp(e.doorsAt) : undefined,
               turnout: turnoutLabel(e),
-              featured: e.source === 'featured',
+              featured: isCuratedEvent(e),
               copy: e.copyLine?.slice(0, 140),
               status: eventStatus(e),
               latitude: e.latitude,
@@ -971,7 +972,7 @@ export function AISupportSheet({
               !looksLikeBigQuery(trimmed.toLowerCase());
             if (broadScan) {
               const leaders = source
-                .filter((e) => e.source === 'featured' || demandScore(e) >= 15000)
+                .filter((e) => isCuratedEvent(e) || demandScore(e) >= 15000)
                 .slice(0, 3);
               if (leaders.length > 0 && !leaders.some((e) => mentionsEvent(answer, e))) {
                 const extra = leaders

@@ -58,6 +58,17 @@ function mapHighwayCategory(cat: string | undefined): string {
   return 'Other';
 }
 
+/** A feed's body as a list, or an empty list (logged) when it isn't one. */
+function asList<T>(body: unknown, feed: string): T[] {
+  if (Array.isArray(body)) return body as T[];
+  logger.warn('ingest.not_a_list', {
+    feed,
+    got: body === null ? 'null' : typeof body,
+    preview: JSON.stringify(body ?? null).slice(0, 160),
+  });
+  return [];
+}
+
 export async function fetchHighwaysIncidents(): Promise<TrafficIncident[]> {
   try {
     const res = await fetch('https://www.trafficengland.com/api/events');
@@ -81,7 +92,11 @@ export async function ingestLiveFeeds(db: Firestore): Promise<TrafficIncident[]>
   const [roadRes, lineRes, nhIncidents] = await Promise.all([
     fetch('https://api.tfl.gov.uk/Road/all/Disruption'),
     fetch(
-      'https://api.tfl.gov.uk/Line/Mode/tube,overground,dlr,elizabeth-line,tram,national-rail/Status',
+      // national-rail dropped: TfL reports every operator as a permanent
+      // "Special Service" with no detail, so the model was asked every 5
+      // minutes to phrase a record with nothing in it — and billed for
+      // replying that it could not. National Rail comes from railCache now.
+      'https://api.tfl.gov.uk/Line/Mode/tube,overground,dlr,elizabeth-line,tram/Status',
     ),
     fetchHighwaysIncidents(),
   ]);
@@ -89,7 +104,10 @@ export async function ingestLiveFeeds(db: Firestore): Promise<TrafficIncident[]>
   const allIncidents: TrafficIncident[] = [...nhIncidents];
 
   if (roadRes.ok) {
-    const rows = (await roadRes.json()) as RoadRow[];
+    // TfL occasionally answers 200 with an error object instead of a list.
+    // `for…of` on that threw, and one bad response discarded the whole road
+    // feed — Highways England incidents included — for that run.
+    const rows = asList<RoadRow>(await roadRes.json(), 'roads');
     for (const r of rows) {
       allIncidents.push({
         id: String(r.id ?? 'road').replace(/\//g, '_').slice(0, 80),
@@ -126,7 +144,7 @@ export async function ingestLiveFeeds(db: Firestore): Promise<TrafficIncident[]>
   }
 
   if (lineRes.ok) {
-    const rows = (await lineRes.json()) as LineRow[];
+    const rows = asList<LineRow>(await lineRes.json(), 'lines');
     const disrupted = rows
       .map((l) => {
         const worst = (l.lineStatuses ?? []).sort(
@@ -153,6 +171,13 @@ export async function ingestLiveFeeds(db: Firestore): Promise<TrafficIncident[]>
     logger.warn('ingest.rails_http', { status: lineRes.status });
   }
 
-  await ingestCorridorRoads(db, allIncidents);
+  // The corridor cache is a side output. It must never cost us the incidents:
+  // when it threw, this function never returned, the dispatcher got an empty
+  // list and no road alert could be sent at all.
+  try {
+    await ingestCorridorRoads(db, allIncidents);
+  } catch (e) {
+    logger.warn('ingest.corridors_fail', { error: e instanceof Error ? e.message : 'error' });
+  }
   return allIncidents;
 }

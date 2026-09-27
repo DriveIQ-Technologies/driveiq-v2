@@ -1,16 +1,20 @@
 /**
  * London events ingest: Ticketmaster + featured Proms + league sports
- * (FotMob home football, ESPN scoreboards, cricket). Ticketmaster does not
+ * (FotMob home football, ESPN scoreboards, cricket) + events added by hand
+ * on the events admin page (manualEvents). Ticketmaster does not
  * carry Premier League / Championship / rugby fixtures — sports come from
  * those feeds, not from the chat agent inventing them.
  * Writes raw rows, then publishLondonEvents normalises, phrases, and publishes.
  */
 import { logger } from 'firebase-functions';
+import { type EventKind, typicalFinishAt } from './eventDurations.js';
 import type { Firestore } from 'firebase-admin/firestore';
 import { addDaysYmd, londonYmd } from './londonTime.js';
 import type { PublishedEvent } from './eventNormalise.js';
 import { featuredPromsEvents } from './featuredProms.js';
 import { fetchLondonSports } from './sportsIngest.js';
+import { dedupeSportsEvents } from './sportsDedupe.js';
+import { loadManualEvents, manualToPublished } from './manualEvents.js';
 
 const TM_BASE = 'https://app.ticketmaster.com/discovery/v2/events.json';
 const LONDON_MARKET_ID = '202';
@@ -32,6 +36,7 @@ const PRIORITY_VENUES: { name: string; venueId: string }[] = [
   { name: 'Alexandra Palace', venueId: 'KovZpZAn61lA' },
   { name: 'Victoria Park London', venueId: 'KovZ9177Mvf' },
   { name: 'The National Bowl', venueId: 'KovZ9177BnV' },
+  { name: 'Gtech Community Stadium', venueId: 'KovZ9177MIf' },
 ];
 
 interface TmVenue {
@@ -50,7 +55,11 @@ interface TmEvent {
     start?: { dateTime?: string; localDate?: string; localTime?: string };
     end?: { dateTime?: string };
   };
-  classifications?: Array<{ segment?: { name?: string }; genre?: { name?: string } }>;
+  classifications?: Array<{
+    segment?: { name?: string };
+    genre?: { name?: string };
+    subGenre?: { name?: string };
+  }>;
   _embedded?: { venues?: TmVenue[] };
 }
 
@@ -74,6 +83,29 @@ function horizon(): { start: Date; end: Date } {
   };
 }
 
+/**
+ * Ticketmaster names sport the American way: "Football" is the NFL and
+ * "Soccer" is football. The rest of the app (and FotMob / ESPN) uses UK names,
+ * so translate here — otherwise an NFL game gets a football match's length.
+ */
+function sportsGenre(genre: string, subGenre: string, segment: string): string {
+  if (segment.toLowerCase() !== 'sports') return genre;
+  const g = genre.toLowerCase();
+  if (g === 'football' || /\bnfl\b/i.test(subGenre)) return 'American Football';
+  if (g === 'soccer') return 'Football';
+  if (/horse racing/i.test(subGenre)) return 'Horse Racing';
+  return genre;
+}
+
+function kindForSegment(segment?: string): EventKind {
+  const s = (segment ?? '').toLowerCase();
+  if (s === 'music') return 'music';
+  if (s === 'arts & theatre') return 'theatre';
+  if (s === 'film') return 'film';
+  if (s === 'sports') return 'sports';
+  return 'other';
+}
+
 function classify(segment?: string, genre?: string): { category: 'sports' | 'other'; sub?: string } {
   const s = (segment ?? '').toLowerCase();
   if (s === 'music') return { category: 'other', sub: genre || 'Music' };
@@ -83,13 +115,19 @@ function classify(segment?: string, genre?: string): { category: 'sports' | 'oth
   return { category: 'other', sub: genre || segment || 'Other' };
 }
 
-const ENTERTAINMENT_SPORTS = ['wrestling', 'darts', 'e-sports', 'esports'];
-
 function toPublished(e: TmEvent): PublishedEvent | null {
   const seg = e.classifications?.[0]?.segment?.name ?? '';
-  const genre = e.classifications?.[0]?.genre?.name ?? '';
-  const isSports = seg.toLowerCase() === 'sports';
-  if (isSports && !ENTERTAINMENT_SPORTS.some((k) => genre.toLowerCase().includes(k))) return null;
+  // Ticketmaster sports used to be dropped wholesale on the assumption the
+  // league feeds (FotMob / ESPN) covered sport. They don't: in one month that
+  // discarded 42 London events — the Laver Cup at the O2, NFL London at
+  // Tottenham and Wembley, Red Roses at Twickenham, WSL at Stamford Bridge —
+  // even at venues we scan by name. Keep them; fetchLondonEvents drops any
+  // that duplicate a league fixture.
+  const genre = sportsGenre(
+    e.classifications?.[0]?.genre?.name ?? '',
+    e.classifications?.[0]?.subGenre?.name ?? '',
+    seg,
+  );
 
   const venue = e._embedded?.venues?.[0];
   const lat = Number.parseFloat(venue?.location?.latitude ?? '');
@@ -104,7 +142,11 @@ function toPublished(e: TmEvent): PublishedEvent | null {
   const plausibleEnd =
     rawEnd != null && Number.isFinite(rawEndMs) && rawEndMs > startMs && rawEndMs - startMs <= 16 * 3600 * 1000;
   const { category, sub } = classify(seg, genre);
-  const endsAt = plausibleEnd ? rawEnd! : new Date(startMs + 3 * 3600 * 1000).toISOString();
+  // Ticketmaster rarely publishes an end. When it does not, estimate from the
+  // kind of event rather than a flat +3h, and say it is an estimate.
+  const endsAt = plausibleEnd
+    ? rawEnd!
+    : typicalFinishAt(startsAt, { kind: kindForSegment(seg), subCategory: sub, title: e.name });
 
   return {
     id: `ticketmaster-${e.id}`,
@@ -113,6 +155,7 @@ function toPublished(e: TmEvent): PublishedEvent | null {
     title: e.name,
     startsAt,
     endsAt,
+    endIsEstimated: !plausibleEnd,
     venue: venue?.name ?? venue?.city?.name ?? 'London',
     latitude: lat,
     longitude: lon,
@@ -219,7 +262,9 @@ export async function fetchLondonEvents(apiKey: string | undefined): Promise<Pub
   const sports = await fetchLondonSports();
   for (const e of sports) if (!byId.has(e.id)) byId.set(e.id, e);
 
-  const out = Array.from(byId.values());
+  // Ticketmaster sport now comes through, so one fixture can arrive from a
+  // league feed and from Ticketmaster (often twice, with a hospitality copy).
+  const out = dedupeSportsEvents(Array.from(byId.values()));
   logger.info('events.london_fetched', {
     count: out.length,
     sports: sports.length,
@@ -232,7 +277,9 @@ export async function ingestEventsRaw(
   db: Firestore,
   apiKey: string | undefined,
 ): Promise<PublishedEvent[]> {
-  const events = await fetchLondonEvents(apiKey);
+  // Hand-added events go in first so they win any duplicate check.
+  const manual = (await loadManualEvents(db)).map(({ docId, doc }) => manualToPublished(docId, doc));
+  const events = dedupeSportsEvents([...manual, ...(await fetchLondonEvents(apiKey))]);
   const writer = db.bulkWriter();
   for (const event of events) {
     const id = event.id.replace(/\//g, '_');
@@ -245,6 +292,11 @@ export async function ingestEventsRaw(
         title: event.title,
         startsAt: event.startsAt,
         endsAt: event.endsAt,
+        // Written explicitly (undefined is dropped): the normaliser needs to
+        // know an end was estimated so it never treats it as published.
+        ...(typeof event.endIsEstimated === 'boolean'
+          ? { endIsEstimated: event.endIsEstimated }
+          : {}),
         venue: event.venue,
         latitude: event.latitude,
         longitude: event.longitude,
@@ -257,6 +309,24 @@ export async function ingestEventsRaw(
     );
   }
   await writer.close();
-  logger.info('events.raw_ingested', { count: events.length });
+
+  // eventsRaw was never pruned, and the normaliser reads a capped number of
+  // docs — so past events would eventually crowd real upcoming ones out of the
+  // app. Drop anything that finished more than 36h ago (same rule the
+  // published catalogue uses).
+  const cutoff = Date.now() - 36 * 60 * 60 * 1000;
+  const old = await db.collection('eventsRaw').limit(5000).get();
+  const prune = db.bulkWriter();
+  let pruned = 0;
+  for (const doc of old.docs) {
+    const ends = Date.parse(String(doc.data().endsAt ?? doc.data().startsAt ?? ''));
+    if (Number.isFinite(ends) && ends < cutoff) {
+      prune.delete(doc.ref);
+      pruned += 1;
+    }
+  }
+  await prune.close();
+
+  logger.info('events.raw_ingested', { count: events.length, pruned, rawTotal: old.size });
   return events;
 }

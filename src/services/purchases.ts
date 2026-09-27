@@ -15,6 +15,7 @@
 import { Platform } from 'react-native';
 
 import { track } from './analytics';
+import { showFreeTrial } from '@/utils/trialEligibility';
 import {
   DEFAULT_PREMIUM_ENTITLEMENT_ID,
   hasActivePremiumEntitlement,
@@ -62,6 +63,8 @@ let nativeUnavailableLogged = false;
 let lastCustomerInfo: CustomerInfo | null = null;
 let cachedOffering: PurchasesOffering | null = null;
 let offeringsPrefetch: Promise<PurchasesOffering | null> | null = null;
+/** productId → RevenueCat INTRO_ELIGIBILITY_STATUS, for this Apple ID. */
+const trialEligibility = new Map<string, number>();
 const listeners = new Set<(pro: boolean) => void>();
 
 /** True when the RNPurchases native module is compiled into this binary. */
@@ -245,6 +248,7 @@ export async function prefetchOfferings(force = false): Promise<PurchasesOfferin
         packages: pkgs.length,
       });
       lastStorefront = await readStorefront(P);
+      await refreshTrialEligibility(P, pkgs);
       for (const pkg of pkgs) {
         const product = pkg.product as PurchasesPackage['product'] & {
           pricePerMonth?: number | null;
@@ -273,6 +277,26 @@ export async function prefetchOfferings(force = false): Promise<PurchasesOfferin
   })();
 
   return offeringsPrefetch;
+}
+
+async function refreshTrialEligibility(
+  P: PurchasesModule['default'],
+  pkgs: PurchasesPackage[],
+): Promise<void> {
+  if (Platform.OS !== 'ios' || pkgs.length === 0) return;
+  try {
+    const ids = pkgs.map((p) => p.product.identifier);
+    const result = await P.checkTrialOrIntroductoryPriceEligibility(ids);
+    for (const id of ids) {
+      const status = result[id]?.status;
+      if (typeof status === 'number') trialEligibility.set(id, status);
+    }
+    track('purchases_trial_eligibility', {
+      statuses: ids.map((id) => `${id}:${trialEligibility.get(id) ?? 'none'}`).join(','),
+    });
+  } catch {
+    // Unknown eligibility → the trial is not advertised (see showFreeTrial).
+  }
 }
 
 /** Sync peek at packages warmed at launch — no network. */
@@ -310,9 +334,16 @@ export function preferredPremiumPackage(
 }
 
 export function packageHasFreeTrial(pkg: PurchasesPackage): boolean {
-  const intro = pkg.product.introPrice;
-  if (!intro) return false;
-  return intro.price === 0;
+  return showFreeTrial({
+    platform: Platform.OS,
+    introPrice: pkg.product.introPrice?.price ?? null,
+    eligibility: trialEligibility.get(pkg.product.identifier),
+  });
+}
+
+/** Any Premium plan this user can start with a free trial (cached, no network). */
+export function premiumTrialAvailable(): boolean {
+  return getCachedPremiumPackages().some(packageHasFreeTrial);
 }
 
 export function packageTrialLabel(pkg: PurchasesPackage): string | null {

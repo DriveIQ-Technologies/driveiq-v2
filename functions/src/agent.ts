@@ -10,6 +10,12 @@ import {
 import { londonStampOr } from './londonTime.js';
 import { AGENT_SYSTEM_ADDENDUM, AGENT_SYSTEM_PROMPT_VERBATIM } from './agentPrompt.js';
 import { lookupCatalogueMatches, type CatalogueEvent } from './agentCatalogue.js';
+import {
+  classifyAgentIntent,
+  wantsCatalogueLookup,
+  wantsEventContext,
+  wantsFlightContext,
+} from './agentIntent.js';
 
 const CHAT_PROMPT_VERSION = 3;
 
@@ -179,9 +185,10 @@ function parseClientEvents(raw: unknown): string[] {
     const kind = typeof x.kind === 'string' && x.kind.trim() ? x.kind.trim() : '';
     const turnout = typeof x.turnout === 'string' && x.turnout.trim() ? `turnout ${x.turnout.trim()}` : '';
     const featured = x.featured === true ? 'FEATURED' : '';
-    const copy = typeof x.copy === 'string' && x.copy.trim() ? x.copy.trim() : '';
     const status = typeof x.status === 'string' && x.status.trim() ? x.status.trim() : '';
     const kmAway = typeof x.kmAway === 'number' && Number.isFinite(x.kmAway) ? `${x.kmAway}km` : '';
+    // Skip copyLine — it duplicates title/venue/times and was the fattest
+    // per-row field on what's-on asks (up to 80 × 140 chars).
     lines.push(
       [
         featured,
@@ -194,7 +201,6 @@ function parseClientEvents(raw: unknown): string[] {
         `finish ${finish || 'n/a'}`,
         turnout,
         kmAway ? `distance ${kmAway}` : '',
-        copy,
       ]
         .filter(Boolean)
         .join(' | '),
@@ -242,6 +248,7 @@ async function buildContextBlock(opts: {
   db: Firestore;
   uid: string;
   premium: boolean;
+  intent: ReturnType<typeof classifyAgentIntent>;
   clientEvents?: string[];
   clientRoads?: string[];
   clientRails?: string[];
@@ -254,11 +261,14 @@ async function buildContextBlock(opts: {
   const tomorrowEnd = new Date(nowMs + 36 * 60 * 60 * 1000);
   const weekEnd = new Date(nowMs + 7 * 24 * 60 * 60 * 1000);
   const liveMap = opts.clientEvents ?? [];
+  const includeEvents = wantsEventContext(opts.intent);
+  const includeFlights = wantsFlightContext(opts.intent);
   // Live map already has doors/start/finish after on-device normalisation.
   // Firestore eventRecords is a nightly copy and will contradict (Proms +30,
-  // RAH 22:30 clamp). Only use it when the phone sent nothing.
+  // RAH 22:30 clamp). Only use it when the phone sent nothing — and never
+  // on a travel question, where an empty live list means "omit events".
   let events: string[] = [];
-  if (liveMap.length === 0) {
+  if (includeEvents && liveMap.length === 0) {
     const eventsSnap = await opts.db
       .collection('eventsPublished')
       .orderBy('startsAt', 'asc')
@@ -304,40 +314,46 @@ async function buildContextBlock(opts: {
       });
   }
 
-  const roadSnap = await opts.db
-    .collection('copy')
-    .doc('road')
-    .collection('lines')
-    .orderBy('updatedAt', 'desc')
-    .limit(10)
-    .get()
-    .catch(() => null);
+  const roadSnap = opts.clientRoads?.length
+    ? null
+    : await opts.db
+        .collection('copy')
+        .doc('road')
+        .collection('lines')
+        .orderBy('updatedAt', 'desc')
+        .limit(10)
+        .get()
+        .catch(() => null);
   const roads = (roadSnap?.docs ?? [])
     .map((d) => String((d.data() as Record<string, unknown>).line ?? '').trim())
     .filter(Boolean)
     .slice(0, 8);
 
-  const railSnap = await opts.db
-    .collection('copy')
-    .doc('rail')
-    .collection('lines')
-    .orderBy('updatedAt', 'desc')
-    .limit(10)
-    .get()
-    .catch(() => null);
+  const railSnap = opts.clientRails?.length
+    ? null
+    : await opts.db
+        .collection('copy')
+        .doc('rail')
+        .collection('lines')
+        .orderBy('updatedAt', 'desc')
+        .limit(10)
+        .get()
+        .catch(() => null);
   const rails = (railSnap?.docs ?? [])
     .map((d) => String((d.data() as Record<string, unknown>).line ?? '').trim())
     .filter(Boolean)
     .slice(0, 8);
 
-  const flightSnap = await opts.db
-    .collection('copy')
-    .doc('flight')
-    .collection('lines')
-    .orderBy('updatedAt', 'desc')
-    .limit(24)
-    .get()
-    .catch(() => null);
+  const flightSnap = includeFlights
+    ? await opts.db
+        .collection('copy')
+        .doc('flight')
+        .collection('lines')
+        .orderBy('updatedAt', 'desc')
+        .limit(24)
+        .get()
+        .catch(() => null)
+    : null;
   const flightsRaw = (flightSnap?.docs ?? [])
     .map((d) => d.data() as Record<string, unknown>)
     .filter((x) => {
@@ -349,9 +365,11 @@ async function buildContextBlock(opts: {
       return Number.isFinite(t) && t >= Date.parse(nowIso) && t <= Date.parse(nowIso) + 3 * 60 * 60 * 1000;
     })
     .slice(0, opts.premium ? 20 : 8);
-  const flights = flightsRaw
-    .map((x) => String(x.line ?? '').trim())
-    .filter(Boolean);
+  const flights = includeFlights
+    ? flightsRaw
+        .map((x) => String(x.line ?? '').trim())
+        .filter(Boolean)
+    : [];
 
   let saved: Record<string, unknown> | undefined;
   try {
@@ -373,14 +391,20 @@ async function buildContextBlock(opts: {
     `tier_data_window: ${opts.premium ? 'premium_full_context' : 'free_tonight_tomorrow_plus_3h_flights'}`,
     '',
     'LIVE MAP EVENTS (authoritative — use these when present):',
-    ...(liveMap.length ? liveMap : ['none from live map']),
+    ...(includeEvents
+      ? liveMap.length
+        ? liveMap
+        : ['none from live map']
+      : ['omitted — travel question']),
     '',
     'FIRESTORE EVENTS:',
-    ...(liveMap.length
-      ? ['skipped — live map is the source of truth']
-      : events.length
-        ? events
-        : ['none in firestore']),
+    ...(includeEvents
+      ? liveMap.length
+        ? ['skipped — live map is the source of truth']
+        : events.length
+          ? events
+          : ['none in firestore']
+      : ['omitted — travel question']),
     '',
     'RAIL STATUS LINES (live map first):',
     ...(opts.clientRails?.length
@@ -397,7 +421,11 @@ async function buildContextBlock(opts: {
         : ['none in context']),
     '',
     'FLIGHT STATUS LINES:',
-    ...(flights.length ? flights : ['none in context']),
+    ...(includeFlights
+      ? flights.length
+        ? flights
+        : ['none in context']
+      : ['omitted — events question']),
     '',
     'USER SAVED HINTS:',
     ...savedHints,
@@ -437,6 +465,7 @@ export async function handleAskAgent(opts: {
   }
 
   const history = parseHistory(opts.request.data?.history);
+  const intent = classifyAgentIntent(question);
   const clientEvents = parseClientEvents(opts.request.data?.clientEvents);
   const clientRoads = parseClientLines(opts.request.data?.clientRoads);
   const clientRails = parseClientLines(opts.request.data?.clientRails);
@@ -449,6 +478,7 @@ export async function handleAskAgent(opts: {
 
   logger.info('agent.parsed_client_data', {
     uid,
+    intent,
     clientEventCount: clientEvents.length,
     clientEventSample: clientEvents.slice(0, 2),
     clientRoadCount: clientRoads.length,
@@ -550,6 +580,7 @@ export async function handleAskAgent(opts: {
       db: opts.db,
       uid,
       premium,
+      intent,
       clientEvents,
       clientRoads,
       clientRails,
@@ -557,6 +588,7 @@ export async function handleAskAgent(opts: {
     });
     logger.info('agent.context_built', {
       uid,
+      intent,
       premium,
       firestorePremium,
       clientPremium,
@@ -588,34 +620,38 @@ export async function handleAskAgent(opts: {
         .map((h) => `${h.role === 'assistant' ? 'assistant' : 'user'}: ${h.text}`)
         .join('\n')}`
     : '';
-  const liveCount = clientEvents.length;
+  const liveCount = wantsEventContext(intent) ? clientEvents.length : 0;
   let catalogueEvents: CatalogueEvent[] = [];
-  try {
-    const catalogue = await lookupCatalogueMatches({
-      db: opts.db,
-      question,
-      liveEventLines: clientEvents,
-    });
-    catalogueEvents = catalogue.events;
-    contextBlock += `\n\nSERVER CATALOGUE MATCHES (verified DriveIQ feeds, not model memory):\n${
-      catalogue.lines.length ? catalogue.lines.join('\n') : 'none for this question'
-    }\n\nVALIDATION:\n${catalogue.validation.join('\n')}`;
-    logger.info('agent.catalogue_lookup', {
-      uid,
-      tokens: catalogue.tokens,
-      matchLines: catalogue.lines.length,
-      discovered: catalogueEvents.length,
-    });
-  } catch (e) {
-    logger.warn('agent.catalogue_lookup_fail', {
-      error: e instanceof Error ? e.message : 'error',
-    });
+  if (wantsCatalogueLookup(intent)) {
+    try {
+      const catalogue = await lookupCatalogueMatches({
+        db: opts.db,
+        question,
+        liveEventLines: clientEvents,
+      });
+      catalogueEvents = catalogue.events;
+      contextBlock += `\n\nSERVER CATALOGUE MATCHES (verified DriveIQ feeds, not model memory):\n${
+        catalogue.lines.length ? catalogue.lines.join('\n') : 'none for this question'
+      }\n\nVALIDATION:\n${catalogue.validation.join('\n')}`;
+      logger.info('agent.catalogue_lookup', {
+        uid,
+        tokens: catalogue.tokens,
+        matchLines: catalogue.lines.length,
+        discovered: catalogueEvents.length,
+      });
+    } catch (e) {
+      logger.warn('agent.catalogue_lookup_fail', {
+        error: e instanceof Error ? e.message : 'error',
+      });
+    }
+  } else {
+    contextBlock +=
+      '\n\nSERVER CATALOGUE MATCHES:\nomitted — travel question\n\nVALIDATION:\nTravel question. Answer from RAIL / ROAD / FLIGHT only. Do not mention events.';
   }
 
   const combinedPrompt = `${tierLine}
-LONDON_CLOCK: ${clockLondon} Europe/London. The driver's phone may show a different time zone. Always say "London HH:mm". Today and tonight mean the London calendar day, not the phone's day.
-DATA RULE: LIVE MAP EVENTS has ${liveCount} row(s) from the open map. SERVER CATALOGUE MATCHES are extra verified rows from DriveIQ feeds. If they name a club or venue, use matching LIVE MAP or CATALOGUE rows. Never invent a fixture from memory. If both lists are empty for that name, say you do not have it. For trains, tube, roads, traffic, travel or flights, answer from RAIL STATUS / ROAD STATUS (and flights if present). You may mention both travel AND events when they asked for both. If DRIVER LOCATION is present, use it for near me / my area.
-PRODUCT: Waitlist Premium is a free 7-day week (full-day flights, every station hub, weeks-ahead calendar by demand, unlimited AI). Disruption alerts on every plan. After day 7 it ends unless they subscribe.
+LONDON_CLOCK: ${clockLondon} Europe/London.
+INTENT: ${intent}. LIVE MAP EVENTS rows: ${liveCount}.
 
 CONTEXT BLOCK:
 ${contextBlock}${historyBlock}
@@ -661,10 +697,14 @@ ${question}`;
         day,
         premium,
         model,
+        intent,
         inputTokens: res.usage?.input_tokens ?? null,
         outputTokens: res.usage?.output_tokens ?? null,
+        cacheCreationTokens: res.usage?.cache_creation_input_tokens ?? null,
+        cacheReadTokens: res.usage?.cache_read_input_tokens ?? null,
         truncated: res.truncated,
         questionChars: question.length,
+        contextChars: contextBlock.length,
         createdAt: new Date().toISOString(),
       });
     } catch (e) {

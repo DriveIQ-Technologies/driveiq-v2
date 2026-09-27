@@ -50,6 +50,11 @@ export function categoryFilterFor(event: AppEvent): CategoryFilterKey {
   return 'other';
 }
 
+/** Hand-curated (built-in featured list) or hand-added on the admin page. */
+export function isCuratedEvent(event: Pick<AppEvent, 'source'>): boolean {
+  return event.source === 'featured' || event.source === 'manual';
+}
+
 export type PinDescriptor =
   | { kind: 'logo'; color: string; featured?: boolean }
   | { kind: 'glyph'; icon: string; color: string; featured?: boolean };
@@ -66,7 +71,7 @@ export type PinDescriptor =
  * - Everything else → DriveIQ logo mark coloured by category accent.
  */
 export function pinDescriptorFor(event: AppEvent): PinDescriptor {
-  const featured = event.source === 'featured';
+  const featured = isCuratedEvent(event);
   const accent = featured ? colors.featured : colors.sports;
 
   if (event.category === 'sports') {

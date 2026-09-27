@@ -53,7 +53,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    match /roadCache/corridors/{id} {
+    // National Rail operator status, written only by Cloud Functions. Public
+    // read so the app never needs the Rail Data Marketplace key.
+    match /railCache/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /roadCorridors/{id} {
       allow read: if true;
       allow write: if false;
     }

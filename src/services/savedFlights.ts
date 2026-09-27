@@ -8,6 +8,7 @@
 import type { AirportFlight } from './aerodatabox';
 import { getJSON, setJSON } from './storage';
 import { incrementUsageCounter } from './usageCounters';
+import { isWatchActive } from '@/utils/watchedFlights';
 
 const STORAGE_KEY = 'driveiq.savedFlights.v1';
 
@@ -20,8 +21,37 @@ export interface SavedFlight extends AirportFlight {
 
 export type SavedFlightMap = Record<string, SavedFlight>;
 
+/** Only flights that are still happening, with finished ones cleared out. */
 export async function loadSavedFlights(): Promise<SavedFlightMap> {
-  return getJSON<SavedFlightMap>(STORAGE_KEY, {});
+  const map = await getJSON<SavedFlightMap>(STORAGE_KEY, {});
+  const now = Date.now();
+  const live: SavedFlightMap = {};
+  for (const [id, f] of Object.entries(map)) {
+    if (f && isWatchActive(f, now)) live[id] = f;
+  }
+  if (Object.keys(live).length !== Object.keys(map).length) {
+    await setJSON(STORAGE_KEY, live);
+    // Keep the server in step so it stops alerting on finished flights too.
+    void syncFlightsProfile(live);
+  }
+  return live;
+}
+
+/**
+ * Watch `flight` and nothing else. Used when a free user is at their limit, so
+ * the limit is a choice — swap to this flight — rather than a dead end.
+ */
+export async function replaceWatchedFlights(
+  airportId: string,
+  flight: AirportFlight,
+): Promise<SavedFlightMap> {
+  const map: SavedFlightMap = {
+    [flight.id]: { ...flight, airportId, savedAt: Date.now() },
+  };
+  await setJSON(STORAGE_KEY, map);
+  void incrementUsageCounter('flightsTracked');
+  void syncFlightsProfile(map);
+  return map;
 }
 
 export async function saveFlight(

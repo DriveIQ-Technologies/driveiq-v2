@@ -14,6 +14,57 @@ export type AgentModel = CopyModel;
 export interface AnthropicUsage {
   input_tokens: number;
   output_tokens: number;
+  /** Tokens written into the prompt cache on this call (1.25× / 2× input). */
+  cache_creation_input_tokens: number;
+  /** Tokens read from cache (0.1× input). Zero means the prefix was too short or cold. */
+  cache_read_input_tokens: number;
+}
+
+/**
+ * Cache only the system prompt. Top-level automatic `cache_control` would
+ * breakpoint on the unique user message and never hit. 1h TTL: agent traffic
+ * is shared across users but often more than 5 minutes apart.
+ */
+const SYSTEM_CACHE_CONTROL = { type: 'ephemeral', ttl: '1h' } as const;
+
+function cachedSystem(system: string) {
+  return [
+    {
+      type: 'text',
+      text: system,
+      cache_control: SYSTEM_CACHE_CONTROL,
+    },
+  ];
+}
+
+export function anthropicRequestBody(opts: {
+  model: string;
+  maxTokens: number;
+  system: string;
+  userText: string;
+  stream?: boolean;
+}): Record<string, unknown> {
+  return {
+    model: opts.model,
+    max_tokens: opts.maxTokens,
+    system: cachedSystem(opts.system),
+    messages: [{ role: 'user', content: opts.userText }],
+    ...(opts.stream ? { stream: true } : {}),
+  };
+}
+
+export function parseAnthropicUsage(raw: unknown): AnthropicUsage | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const u = raw as Record<string, unknown>;
+  const input = Number(u.input_tokens);
+  const output = Number(u.output_tokens);
+  if (!Number.isFinite(input) && !Number.isFinite(output)) return null;
+  return {
+    input_tokens: Number.isFinite(input) ? input : 0,
+    output_tokens: Number.isFinite(output) ? output : 0,
+    cache_creation_input_tokens: Number(u.cache_creation_input_tokens) || 0,
+    cache_read_input_tokens: Number(u.cache_read_input_tokens) || 0,
+  };
 }
 
 const MODEL_ID: Record<CopyModel, string> = {
@@ -59,18 +110,28 @@ async function callAnthropic(opts: {
         'x-api-key': opts.apiKey,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify({
-        model: opts.modelId || MODEL_ID[opts.model],
-        max_tokens: opts.maxTokens,
-        system: opts.system,
-        messages: [{ role: 'user', content: opts.userText }],
-      }),
+      body: JSON.stringify(
+        anthropicRequestBody({
+          model: opts.modelId || MODEL_ID[opts.model],
+          maxTokens: opts.maxTokens,
+          system: opts.system,
+          userText: opts.userText,
+        }),
+      ),
     });
     if (!res.ok) {
-      logger.warn('anthropic.http_error', { status: res.status, model: opts.model });
+      // The body says why (credit balance, bad model id, rate limit). Without
+      // it, weeks of 400s were indistinguishable from each other in the logs.
+      const detail = await res.text().catch(() => '');
+      logger.warn('anthropic.http_error', {
+        status: res.status,
+        model: opts.model,
+        detail: detail.slice(0, 300),
+      });
       return null;
     }
-    return (await res.json()) as AnthropicResponse;
+    const json = (await res.json()) as AnthropicResponse;
+    return { ...json, usage: parseAnthropicUsage(json.usage) ?? json.usage };
   } catch (e) {
     logger.warn('anthropic.failed', {
       model: opts.model,
@@ -121,7 +182,7 @@ export async function askAgent(opts: {
     maxTokens: opts.maxTokens ?? 320,
   });
   const text = json?.content?.find((b) => b.type === 'text')?.text?.trim() ?? null;
-  const usage = json?.usage ?? null;
+  const usage = parseAnthropicUsage(json?.usage) ?? json?.usage ?? null;
   const truncated = json?.stop_reason === 'max_tokens';
   if (truncated) {
     logger.warn('anthropic.answer_truncated', {
@@ -168,13 +229,15 @@ export async function askAgentStream(opts: {
         'x-api-key': opts.apiKey,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify({
-        model: opts.modelId || MODEL_ID[opts.model],
-        max_tokens: opts.maxTokens ?? 320,
-        system: opts.system,
-        messages: [{ role: 'user', content: opts.prompt }],
-        stream: true,
-      }),
+      body: JSON.stringify(
+        anthropicRequestBody({
+          model: opts.modelId || MODEL_ID[opts.model],
+          maxTokens: opts.maxTokens ?? 320,
+          system: opts.system,
+          userText: opts.prompt,
+          stream: true,
+        }),
+      ),
     });
     if (!res.ok || !res.body) {
       throw new Error(`anthropic stream http ${res.status}`);
@@ -219,8 +282,9 @@ export async function askAgentStream(opts: {
               usage.output_tokens = u.output_tokens;
             }
           } else if (type === 'message_start') {
-            const msg = evt.message as { usage?: AnthropicUsage } | undefined;
-            if (msg?.usage) usage = { ...msg.usage };
+            const msg = evt.message as { usage?: unknown } | undefined;
+            const parsed = parseAnthropicUsage(msg?.usage);
+            if (parsed) usage = parsed;
           } else if (type === 'error') {
             throw new Error(`anthropic stream error: ${payload.slice(0, 200)}`);
           }

@@ -2,30 +2,33 @@
  * Default event duration by sub-category, used to compute an `endsAt` when
  * the upstream provider only returns a start time (which is most of them).
  *
- * Values are minutes from start. Chosen to match how the event actually
+ * Values are minutes from start, to when the crowd comes out. Kept in step
+ * with functions/src/eventDurations.ts, which the server uses for the same
+ * job; this table only applies when the phone fetches events itself because
+ * the server catalogue is missing or thin. Chosen to match how the event actually
  * occupies the user's evening — a Cricket Test "ends" at end of play not
  * end of match, a Premier League match includes typical half-time + added
  * time, theatre includes interval + curtain.
  */
 const DEFAULT_DURATION_MINUTES: Record<string, number> = {
   // ── Sports ───────────────────────────────────────
-  Football: 120,            // 90' + 15' HT + injury time
-  Rugby: 120,               // 80' + 15' HT + stoppages
-  Cricket: 480,             // Test = full day's play (~10:30→18:30)
-  'Cricket T20': 240,       // ~3.5h game + travel/parking buffer
+  Football: 115,            // 90' + 15' HT + ~10' stoppage — crowd out ~1h55 after KO
+  Rugby: 105,               // 80' + 10' HT + stoppages
+  Cricket: 420,             // a full day's play (County Championship, one-day)
+  'Cricket T20': 200,       // ~3h20; the Hundred is shorter still
   'Cricket ODI': 420,       // ~7h game
-  'Cricket Test': 480,
+  'Cricket Test': 420,
   Tennis: 180,              // Best-of-3 average
-  Basketball: 150,          // 48 game-mins + breaks
-  'American Football': 210, // 3.5h average NFL game
+  Basketball: 135,          // 48 game-mins + breaks
+  'American Football': 195, // ~3h15 London NFL game
   Boxing: 240,              // undercard + main event
   MMA: 240,                 // multiple fights on a card
   Hockey: 180,
   Motorsport: 120,
-  Darts: 180,
+  Darts: 240,               // a full evening session
   Golf: 480,                // a day's tournament play
   'Horse Racing': 360,      // gates → last race, ~6h (e.g. 12:00–18:00)
-  Wrestling: 240,           // WWE-style card
+  Wrestling: 180,           // WWE-style card
   eSports: 240,
   Running: 300,             // marathon / mass-participation race
   Equestrian: 360,
@@ -33,9 +36,9 @@ const DEFAULT_DURATION_MINUTES: Record<string, number> = {
   // ── Non-sports (Ticketmaster) ────────────────────
   Music: 180,               // concert + opener
   Concert: 180,
-  Theatre: 180,             // 2h show + interval + curtain
+  Theatre: 160,             // West End show incl. interval
   Arts: 180,
-  Comedy: 150,
+  Comedy: 120,              // incl. support act and interval
   Film: 150,
   Family: 120,
   Other: 180,

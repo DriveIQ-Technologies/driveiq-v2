@@ -10,7 +10,10 @@
  */
 
 const APP_KEY = process.env.EXPO_PUBLIC_TFL_APP_KEY ?? '';
-const MODES = 'tube,overground,dlr,elizabeth-line,tram,national-rail';
+// national-rail deliberately dropped: TfL reports it as a permanent "Special
+// Service" with no live severity. It now comes from National Rail's own
+// Service Indicator feed via railCache — see services/railStatus.ts.
+const MODES = 'tube,overground,dlr,elizabeth-line,tram';
 const ENDPOINT = `https://api.tfl.gov.uk/Line/Mode/${MODES}/Status`;
 
 export type LineSeverityBucket = 'good' | 'minor' | 'severe' | 'closed';
@@ -96,10 +99,6 @@ const effectiveSeverity = (
 ): number => {
   const sev = status?.statusSeverity ?? 10;
   const desc = status?.statusSeverityDescription?.trim().toLowerCase() ?? '';
-  // TfL uses "Special Service" for many National Rail operator notices. These
-  // are often altered-service advisories, not hard closures, so showing them as
-  // "Closed / suspended" is too aggressive and was causing false alarms.
-  if (modeName === 'national-rail' && desc === 'special service') return 9;
   return sev;
 };
 
@@ -108,9 +107,6 @@ const effectiveStatusDescription = (
   status: Pick<RawLineStatus, 'statusSeverityDescription'> | null,
 ): string => {
   const desc = status?.statusSeverityDescription?.trim();
-  if (modeName === 'national-rail' && desc === 'Special Service') {
-    return 'Operator notice';
-  }
   return desc || 'Good service';
 };
 
@@ -120,6 +116,45 @@ const bucket = (sev: number): LineSeverityBucket => {
   if (sev <= 6) return 'severe';
   return 'minor';
 };
+
+/** "Underground", "National Rail"… for the line under its name. */
+export function modeLabel(mode: string): string {
+  switch (mode) {
+    case 'tube':
+      return 'Underground';
+    case 'overground':
+      return 'Overground';
+    case 'dlr':
+      return 'DLR';
+    case 'elizabeth-line':
+      return 'Elizabeth line';
+    case 'tram':
+      return 'Tram';
+    case 'national-rail':
+      return 'National Rail';
+    default:
+      return mode;
+  }
+}
+
+/**
+ * The detail text under a line's name, shared by every list of lines.
+ *
+ * The coloured pill holds only the short status ("Severe disruption"); the
+ * wording goes here. National Rail puts its wording in the status and a bare
+ * URL in `reason`; TfL is the other way round. Use whichever actually says
+ * something, never a URL, and never repeat the pill.
+ */
+export function lineDetailText(l: Pick<LineStatus, 'severityBucket' | 'reason' | 'statusDescription'>): string {
+  const label = SEVERITY_LABEL[l.severityBucket];
+  const reason = (l.reason ?? '').replace(/https?:\/\/\S+/gi, '').trim();
+  const status = (l.statusDescription ?? '').trim();
+  const candidates = [reason, status].filter(
+    (t) => t && t.toLowerCase() !== label.toLowerCase() && !/^good service$/i.test(t),
+  );
+  if (candidates.length === 0) return '';
+  return candidates.sort((a, b) => b.length - a.length)[0];
+}
 
 export const SEVERITY_RANK: Record<LineSeverityBucket, number> = {
   closed: 0,
@@ -166,6 +201,18 @@ export async function fetchLineStatuses(): Promise<LineStatus[]> {
   const raw = (await res.json()) as RawLine[];
   const out: LineStatus[] = raw.filter(isConnectionLine).map((l) => mapRawLine(l));
 
+  // National Rail comes from our own cache, then gets the same allowlist so the
+  // Connections panel stays focused on lines London drivers actually use.
+  try {
+    const { fetchNationalRailStatuses } = await import('./railStatus');
+    const rail = await fetchNationalRailStatuses();
+    for (const r of rail) {
+      if (isConnectionLine({ id: r.id, modeName: r.modeName })) out.push(r);
+    }
+  } catch (e) {
+    // Rail cache unavailable: show the TfL modes rather than failing the panel.
+  }
+
   // Sort: worst-first so problems surface at the top of the panel.
   out.sort((a, b) => SEVERITY_RANK[a.severityBucket] - SEVERITY_RANK[b.severityBucket]);
   if (out.length > 0) allLinesCache = { at: Date.now(), data: out };
@@ -207,6 +254,24 @@ export async function fetchLineStatusesByIds(
 
   const raw = (await res.json()) as RawLine[];
   const out = raw.map((l) => mapRawLine(l));
+
+  // Termini ask for National Rail ids too (Waterloo → south-western-railway).
+  // TfL's answer for those carries no live severity, so the rail cache wins
+  // wherever it has the same id.
+  try {
+    const { fetchNationalRailStatuses } = await import('./railStatus');
+    const rail = await fetchNationalRailStatuses();
+    const wanted = new Set(unique);
+    for (const r of rail) {
+      if (!wanted.has(r.id)) continue;
+      const at = out.findIndex((l) => l.id === r.id);
+      if (at >= 0) out[at] = r;
+      else out.push(r);
+    }
+  } catch (e) {
+    // Keep the TfL answer rather than failing the hub sheet.
+  }
+
   out.sort((a, b) => SEVERITY_RANK[a.severityBucket] - SEVERITY_RANK[b.severityBucket]);
   if (out.length > 0) byIdsCache.set(cacheKey, { at: Date.now(), data: out });
   return out.length > 0 ? out : cached?.data ?? [];
@@ -301,6 +366,15 @@ export const extractLink = (text: string | undefined): string | undefined => {
  * We flatten + dedupe by NaPTAN id so the UI can render a simple list.
  */
 export async function fetchLineDetail(lineId: string): Promise<LineDetail | null> {
+  // National Rail operators come from National Rail, not TfL (see railStatus).
+  try {
+    const { fetchNationalRailDetail } = await import('./railStatus');
+    const nr = await fetchNationalRailDetail(lineId);
+    if (nr) return nr;
+  } catch (e) {
+    // Fall through to TfL.
+  }
+
   const url = `https://api.tfl.gov.uk/Line/${encodeURIComponent(
     lineId,
   )}/Status?detail=true&_=${Date.now()}${APP_KEY ? `&app_key=${encodeURIComponent(APP_KEY)}` : ''}`;

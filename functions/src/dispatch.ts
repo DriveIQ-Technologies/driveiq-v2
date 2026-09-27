@@ -3,6 +3,8 @@
  * Mirrors client diff rules in src/services/notifications.ts.
  */
 import { logger } from 'firebase-functions';
+
+import { isUsableCopyLine } from './copy.js';
 import type { Firestore } from 'firebase-admin/firestore';
 import { isQuietHours } from './londonTime.js';
 import { sendPushToTokens } from './push.js';
@@ -39,7 +41,48 @@ interface LineStatus {
   name: string;
   severityBucket: string;
   statusDescription: string;
+  /** 'nsi' when the status comes from National Rail rather than TfL. */
+  source?: 'nsi';
 }
+
+/**
+ * Bumped when a source's baseline in notificationState can no longer be
+ * trusted. TfL reported every National Rail operator as a permanent "Special
+ * Service", which bucketed as 'closed'. Once National Rail's own feed took
+ * over, a real "severe" looked like an improvement from 'closed', so South
+ * Western's genuine disruption never alerted. Baselines from before this
+ * version are ignored for National Rail lines, once.
+ */
+export const RAIL_BASELINE = 'nsi-v1';
+
+/** Did a line get worse in a way worth a push? */
+export function lineEscalated(before: string | undefined, after: string): boolean {
+  if (before === after) return false;
+  return (
+    (after === 'closed' && before !== 'closed') ||
+    (after === 'severe' && before !== 'severe' && before !== 'closed')
+  );
+}
+
+/**
+ * The previous bucket to compare against. National Rail baselines written
+ * before RAIL_BASELINE came from TfL's meaningless 'closed' and are ignored.
+ */
+export function lineBaseline(
+  line: { id: string; source?: 'nsi' },
+  prevLines: Record<string, string>,
+  railBaselineVersion: unknown,
+): string | undefined {
+  if (line.source === 'nsi' && railBaselineVersion !== RAIL_BASELINE) return undefined;
+  return prevLines[line.id];
+}
+
+/** Lower sends first: the per-run cap must never be spent on roads alone. */
+const ALERT_PRIORITY: Record<string, number> = {
+  'line-closure': 0,
+  'saved-flight': 1,
+  'road-accident': 2,
+};
 
 type IncidentSnapshot = {
   severity: string;
@@ -123,8 +166,17 @@ async function loadCopyLine(
 ): Promise<string> {
   const snap = await db.doc(`copy/${kind}/lines/${id}`).get();
   const line = snap.data()?.line;
-  return typeof line === 'string' && line.trim() ? line.trim() : fallback;
+  // Checked on read as well as on write: refusals stored before the write-side
+  // guard existed are still sitting in Firestore, and one of them reached a
+  // real phone as the body of a rail alert.
+  if (typeof line === 'string' && isUsableCopyLine(line)) return line.trim();
+  return fallback;
 }
+
+/** Users scanned per Firestore page while sweeping for push tokens. */
+const DISPATCH_PAGE_SIZE = 500;
+/** Hard bound on pages per run so a sweep cannot outlive the function timeout. */
+const MAX_DISPATCH_PAGES = 40;
 
 export async function dispatchPushNotifications(opts: {
   db: Firestore;
@@ -137,16 +189,36 @@ export async function dispatchPushNotifications(opts: {
     return;
   }
 
-  const usersSnap = await opts.db.collection('users').limit(500).get();
-  const userDocs = usersSnap.docs.filter((d) => {
-    const tokens = d.data().fcmTokens;
-    return Array.isArray(tokens) && tokens.some((t) => typeof t === 'string' && t.length > 8);
-  });
+  // Page through EVERY user. This used to be a bare .limit(500) with no
+  // cursor: past 500 accounts the same first 500 were served on every run and
+  // everyone after them silently never received a notification again. Ordered
+  // by document id so the cursor is stable across pages.
+  const userDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+  // Bound the sweep so one run cannot outlive the function timeout.
+  for (let page = 0; page < MAX_DISPATCH_PAGES; page += 1) {
+    let q = opts.db.collection('users').orderBy('__name__').limit(DISPATCH_PAGE_SIZE);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const d of snap.docs) {
+      const tokens = d.data().fcmTokens;
+      if (Array.isArray(tokens) && tokens.some((t) => typeof t === 'string' && t.length > 8)) {
+        userDocs.push(d);
+      }
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < DISPATCH_PAGE_SIZE) break;
+    if (page === MAX_DISPATCH_PAGES - 1) {
+      logger.warn('dispatch.page_cap_reached', { scanned: (page + 1) * DISPATCH_PAGE_SIZE });
+    }
+  }
 
   if (userDocs.length === 0) {
     logger.info('dispatch.no_tokens');
     return;
   }
+  logger.info('dispatch.users_with_tokens', { count: userDocs.length });
 
   for (const userDoc of userDocs) {
     const uid = userDoc.id;
@@ -211,23 +283,17 @@ export async function dispatchPushNotifications(opts: {
 
     if (prefs['line-closures']) {
       for (const l of opts.lines) {
-        const before = prevLines[l.id];
+        const before = lineBaseline(l, prevLines, state.railBaseline);
         const after = l.severityBucket;
-        if (before === after) continue;
-        const escalated =
-          (after === 'closed' && before !== 'closed') ||
-          (after === 'severe' && before !== 'severe' && before !== 'closed');
-        if (!escalated) continue;
+        if (!lineEscalated(before, after)) continue;
         if (isFirstRun) continue;
         if (!isLineSubscribed(l.id, lineSubs)) continue;
         const title =
           after === 'closed' ? `${l.name} is down. Take a look` : `${l.name}: ${l.statusDescription}`;
-        const body = await loadCopyLine(
-          opts.db,
-          'rail',
-          `tfl-rail-${l.id}`,
-          l.statusDescription,
-        );
+        // A severe title already carries the status text; don't repeat it as the body.
+        const fallback =
+          after === 'closed' ? l.statusDescription : 'Tap to see what is affected and plan around it.';
+        const body = await loadCopyLine(opts.db, 'rail', `tfl-rail-${l.id}`, fallback);
         payloads.push({
           title,
           body,
@@ -277,6 +343,9 @@ export async function dispatchPushNotifications(opts: {
     }
 
     const deadTokens = new Set<string>();
+    payloads.sort(
+      (a, b) => (ALERT_PRIORITY[a.data.kind] ?? 9) - (ALERT_PRIORITY[b.data.kind] ?? 9),
+    );
     for (const p of payloads.slice(0, 5)) {
       const result = await sendPushToTokens(tokens, p);
       for (const t of result.invalidTokens) deadTokens.add(t);
@@ -320,6 +389,7 @@ export async function dispatchPushNotifications(opts: {
       {
         incidents: nextIncidents,
         lines: nextLines,
+        railBaseline: RAIL_BASELINE,
         flights: nextFlights,
         updatedAt: new Date().toISOString(),
       },

@@ -4,6 +4,7 @@
  * Manual eventOverrides / venueOverrides still win after this runs.
  */
 
+import { type EventKind, typicalFinishAt } from './eventDurations.js';
 import { addMinutesIso, londonYmd, ukOffset } from './londonTime.js';
 
 export interface PublishedEvent {
@@ -13,6 +14,12 @@ export interface PublishedEvent {
   title: string;
   startsAt: string;
   endsAt: string;
+  /**
+   * True when `endsAt` is our estimate because the source gave no end time.
+   * An estimate must never be read back as a published end — that is how a
+   * made-up "start + 3h" once got extended further as if it were real.
+   */
+  endIsEstimated?: boolean;
   venue: string;
   latitude: number;
   longitude: number;
@@ -125,9 +132,22 @@ function finishAtHour(iso: string, hhmm: string): string {
   return new Date(`${ymd}T${h}:${m}:00${ukOffset(ymd)}`).toISOString();
 }
 
-function defaultEndsAt(startsAt: string, sub?: string): string {
-  const minutes = /theatre|comedy|arts/i.test(sub ?? '') ? 180 : 180;
-  return addMinutesIso(startsAt, minutes);
+/**
+ * Is `endsAt` our estimate rather than a time the source published?
+ *
+ * Events imported before `endIsEstimated` existed have no flag, so infer it:
+ * sports sources never publish an end, and Ticketmaster's old fallback was
+ * exactly start + 3h. Treating those as published is what let a made-up end
+ * pass `publishedFinishLooksReal` and get extended further.
+ */
+function endLooksEstimated(event: PublishedEvent): boolean {
+  if (event.endIsEstimated !== undefined) return event.endIsEstimated;
+  if (event.category === 'sports') return true;
+  if (event.source === 'ticketmaster') {
+    const dur = Date.parse(event.endsAt) - Date.parse(event.startsAt);
+    return dur === 3 * 60 * 60 * 1000;
+  }
+  return false;
 }
 
 function occupancyBand(sub: string | undefined, sports: boolean): { low: number; high: number } {
@@ -195,6 +215,17 @@ export function normalisePublishedEvent(event: PublishedEvent): PublishedEvent {
   }
 
   const profile = venueProfileFor(event.venue);
+  // Only a genuinely published end may be used as one. When the source gave
+  // none, fall back to a realistic length for this kind of event.
+  const publishedEnd = endLooksEstimated(event) ? undefined : event.endsAt;
+  const kind: EventKind = sports ? 'sports' : music ? 'music' : theatre ? 'theatre' : 'other';
+  const typical = (from: string) =>
+    typicalFinishAt(from, {
+      kind,
+      subCategory: event.subCategory,
+      title: event.title,
+      description: event.description,
+    });
   let doorsAt = event.doorsAt;
   let realStartAt = event.realStartAt;
   let estimatedFinishAt = event.estimatedFinishAt;
@@ -202,14 +233,13 @@ export function normalisePublishedEvent(event: PublishedEvent): PublishedEvent {
   if (sports) {
     realStartAt = realStartAt ?? event.startsAt;
     doorsAt = doorsAt ?? addMinutesIso(realStartAt, -(profile?.sportsDoorsBeforeMin ?? 75));
-    const listedEnd = event.endsAt ? Date.parse(event.endsAt) : NaN;
+    const listedEnd = publishedEnd ? Date.parse(publishedEnd) : NaN;
     const startMs = Date.parse(realStartAt);
     const endLooksLikeMultiDay =
       Number.isFinite(listedEnd) && Number.isFinite(startMs) && listedEnd - startMs > 16 * 60 * 60 * 1000;
     estimatedFinishAt =
       estimatedFinishAt ??
-      (endLooksLikeMultiDay ? defaultEndsAt(realStartAt, event.subCategory) : event.endsAt) ??
-      defaultEndsAt(realStartAt, event.subCategory);
+      (publishedEnd && !endLooksLikeMultiDay ? publishedEnd : typical(realStartAt));
   } else if (music) {
     const { hour: listedHour, minute: listedMinute } = londonWallHourMinute(event.startsAt);
     const publishedStart = listedIsPublishedStart(event);
@@ -235,24 +265,24 @@ export function normalisePublishedEvent(event: PublishedEvent): PublishedEvent {
     const festivalDay =
       FESTIVAL_DAY.test(`${event.title} ${event.venue} ${event.subCategory ?? ''}`) || listedHour < 17;
     if (!estimatedFinishAt) {
-      if (publishedStart && publishedFinishLooksReal(realStartAt, event.endsAt)) {
-        estimatedFinishAt = addMinutesIso(event.endsAt, CLASSICAL_CROWD_OUT_MIN);
+      if (publishedStart && publishedEnd && publishedFinishLooksReal(realStartAt, publishedEnd)) {
+        estimatedFinishAt = addMinutesIso(publishedEnd, CLASSICAL_CROWD_OUT_MIN);
       } else if (profile?.concertFinishHhmm && !publishedStart) {
         estimatedFinishAt = finishAtHour(event.startsAt, profile.concertFinishHhmm);
       } else if (festivalDay) {
         estimatedFinishAt = finishAtHour(event.startsAt, '22:30');
       } else {
-        estimatedFinishAt = event.endsAt ?? defaultEndsAt(realStartAt, event.subCategory ?? 'Music');
+        estimatedFinishAt = publishedEnd ?? typical(realStartAt);
       }
     }
   } else if (theatre) {
     realStartAt = realStartAt ?? event.startsAt;
     doorsAt = doorsAt ?? addMinutesIso(realStartAt, -30);
-    estimatedFinishAt = estimatedFinishAt ?? event.endsAt ?? defaultEndsAt(realStartAt, event.subCategory);
+    estimatedFinishAt = estimatedFinishAt ?? publishedEnd ?? typical(realStartAt);
   } else {
     realStartAt = realStartAt ?? event.startsAt;
     doorsAt = doorsAt ?? addMinutesIso(realStartAt, -45);
-    estimatedFinishAt = estimatedFinishAt ?? event.endsAt ?? defaultEndsAt(realStartAt, event.subCategory);
+    estimatedFinishAt = estimatedFinishAt ?? publishedEnd ?? typical(realStartAt);
   }
 
   let turnoutMin = event.turnoutMin;

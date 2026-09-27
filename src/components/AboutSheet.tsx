@@ -102,7 +102,7 @@ export function AboutSheet({
             venue or operator before you travel.
           </Text>
           <Text style={styles.copyright}>
-            © {new Date().getFullYear()} DriveIQ. All rights reserved.
+            © {new Date().getFullYear()} DriveIQ Technologies LTD. All rights reserved.
           </Text>
         </ScrollView>
       </SafeAreaView>

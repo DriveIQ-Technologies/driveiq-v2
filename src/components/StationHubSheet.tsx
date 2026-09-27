@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { SeverityPill } from '@/components/ui/SeverityPill';
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { useAuth } from '@/providers/AuthProvider';
 import { track, trackScreen } from '@/services/analytics';
@@ -31,7 +32,7 @@ import {
   type StationLineStatus,
 } from '@/services/stations';
 import { hasProAccess, showProPaywall } from '@/services/subscription';
-import { SEVERITY_COLOR, SEVERITY_LABEL } from '@/services/tflLines';
+import { lineDetailText, modeLabel } from '@/services/tflLines';
 import { colors } from '@/theme/colors';
 
 interface Props {
@@ -370,23 +371,16 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
                 />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.lineName}>{l.displayName}</Text>
-                  <Text style={styles.lineMode}>{SEVERITY_LABEL[l.severityBucket]}</Text>
-                  {l.reason ? (
+                  <Text style={styles.lineMode}>{modeLabel(l.modeName)}</Text>
+                  {/* Short preview; tapping the row opens the full message. */}
+                  {lineDetailText(l) ? (
                     <Text style={styles.lineReason} numberOfLines={2}>
-                      {l.reason.replace(/https?:\/\/\S+/gi, '').trim() ||
-                        'Tap for full details'}
+                      {lineDetailText(l)}
                     </Text>
                   ) : null}
                 </View>
                 <View style={styles.trailing}>
-                  <View
-                    style={[
-                      styles.statusPill,
-                      { backgroundColor: SEVERITY_COLOR[l.severityBucket] },
-                    ]}
-                  >
-                    <Text style={styles.statusText}>{l.statusDescription}</Text>
-                  </View>
+                  <SeverityPill bucket={l.severityBucket} />
                   <Ionicons
                     name="chevron-forward"
                     size={18}
@@ -536,11 +530,4 @@ const styles = StyleSheet.create({
   lineMode: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   lineReason: { fontSize: 12, color: colors.textPrimary, marginTop: 6, lineHeight: 17 },
   trailing: { alignItems: 'flex-end' },
-  statusPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, maxWidth: 120 },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: colors.textOnPrimary,
-    textAlign: 'center',
-  },
 });

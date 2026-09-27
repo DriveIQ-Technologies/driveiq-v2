@@ -85,9 +85,70 @@ export async function readAirportCache(
   return readCacheDoc('airportCache', airportId);
 }
 
-/** Full 24h board. Premium only. */
+/**
+ * Full all-day board (36h from local midnight). Premium only.
+ *
+ * Stored as one document per 12h window: Heathrow's board exceeds Firestore's
+ * 1 MiB per-document limit in a single doc, so the write failed and LHR had no
+ * all-day board while quieter airports worked. Windows are read in parallel and
+ * merged; a missing window is skipped rather than failing the board.
+ */
 export async function readAirportDayCache(
   airportId: string,
 ): Promise<AirportCacheDoc | null> {
-  return readCacheDoc('airportCacheDay', airportId);
+  const icao = AIRPORT_ICAO[airportId];
+  if (!icao || !db || !fsApi) return null;
+
+  const WINDOWS = 3;
+  const reads = Array.from({ length: WINDOWS }, (_, i) =>
+    readRawDoc(`airportCacheDay`, `${icao}-${i}`),
+  );
+  const parts = (await Promise.all(reads)).filter(Boolean) as RawCache[];
+
+  if (parts.length === 0) {
+    // Nothing chunked yet (first run after deploy) — fall back to the old
+    // single-document layout so the board is never blank in between.
+    return readCacheDoc('airportCacheDay', airportId);
+  }
+
+  const byId = new Map<string, AirportFlight>();
+  for (const part of parts) for (const f of part.flights) byId.set(f.id, f);
+
+  const flights = Array.from(byId.values()).sort(
+    (a, b) => a.effectiveMs - b.effectiveMs,
+  );
+  // Age of the STALEST window: the board is only as fresh as its oldest part.
+  const updatedAtMs = Math.min(...parts.map((p) => p.updatedAtMs));
+  const ageMs = Date.now() - updatedAtMs;
+
+  return {
+    airportId,
+    icao,
+    flights: withEffectiveMs(flights),
+    updatedAtMs,
+    ageMs,
+    stale: ageMs > STALE_AFTER_MS,
+  };
+}
+
+interface RawCache {
+  flights: AirportFlight[];
+  updatedAtMs: number;
+}
+
+/** One cache document, or null when missing, unreadable or too old. */
+async function readRawDoc(collection: string, docId: string): Promise<RawCache | null> {
+  if (!db || !fsApi) return null;
+  try {
+    const snap = await fsApi.getDoc(fsApi.doc(db, collection, docId));
+    if (!snap.exists()) return null;
+    const data = snap.data() as { flights?: AirportFlight[]; updatedAtMs?: number };
+    if (!Array.isArray(data.flights)) return null;
+    const updatedAtMs = Number(data.updatedAtMs ?? 0);
+    const ageMs = Date.now() - updatedAtMs;
+    if (!Number.isFinite(ageMs) || ageMs > HARD_MAX_AGE_MS) return null;
+    return { flights: data.flights, updatedAtMs };
+  } catch (e) {
+    return null;
+  }
 }

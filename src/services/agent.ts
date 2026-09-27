@@ -165,6 +165,7 @@ const APP_SOURCES = new Set<AppEvent['source']>([
   'venue-site',
   'sample',
   'featured',
+  'manual',
 ]);
 
 export function discoveredEventToAppEvent(row: AgentDiscoveredEvent): AppEvent | null {

@@ -49,6 +49,18 @@ function getNotificationsModule(): typeof import('expo-notifications') | null {
   }
 }
 
+/**
+ * True when this device+user pair has a push token registered server-side, so
+ * Cloud Functions will deliver road / rail / flight alerts for it.
+ *
+ * The app raises the same alerts locally as a fallback. Both paths keep their
+ * own state, so without this check a user with the app open receives each
+ * incident twice — once locally, once as a push.
+ */
+export function isServerPushActive(): boolean {
+  return Boolean(registeredToken && registeredUid);
+}
+
 export async function registerPushToken(): Promise<boolean> {
   const uid = auth?.currentUser?.uid;
   // `auth?.` above, then bare `auth.` — TS was right to complain. Same guard,

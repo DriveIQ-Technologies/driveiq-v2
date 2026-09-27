@@ -119,10 +119,12 @@ import { LocationOnboarding } from '@/components/LocationOnboarding';
 import { OnboardingTour } from '@/components/OnboardingTour';
 import { PremiumInlineBar } from '@/components/PremiumInlineBar';
 import {
-  markWaitlistTrialEndSeen,
-  shouldShowWaitlistTrialEnd,
   WaitlistTrialEndSheet,
 } from '@/components/WaitlistTrialEndSheet';
+import {
+  presentWaitlistEndedIfDue,
+  registerWaitlistEndedHost,
+} from '@/services/waitlistEnded';
 import { claimPendingWaitlistToken, setPendingWaitlistToken } from '@/services/waitlist';
 import { NotificationSettingsPanel } from '@/components/NotificationSettingsPanel';
 import { SidebarMenu } from '@/components/SidebarMenu';
@@ -868,11 +870,21 @@ export default function MapScreen() {
     return () => unsub?.();
   }, []);
 
+  // "Your Premium week has ended": once, the next time the app is opened after
+  // the week runs out — on launch, on every return to the foreground, and after
+  // sign-in once waitlist state has synced (see AuthProvider). The service
+  // decides and guarantees it shows at most once per account per week.
   useEffect(() => {
     if (showSplash) return;
-    void shouldShowWaitlistTrialEnd().then((show) => {
-      if (show) setWaitlistTrialEndOpen(true);
+    registerWaitlistEndedHost(() => setWaitlistTrialEndOpen(true));
+    void presentWaitlistEndedIfDue();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void presentWaitlistEndedIfDue();
     });
+    return () => {
+      sub.remove();
+      registerWaitlistEndedHost(null);
+    };
   }, [showSplash, hasAccount]);
 
   // Per-filter event counts for the FilterBar chip badges. Recomputed when
@@ -2051,10 +2063,7 @@ export default function MapScreen() {
 
       <WaitlistTrialEndSheet
         visible={waitlistTrialEndOpen}
-        onClose={() => {
-          void markWaitlistTrialEndSeen();
-          setWaitlistTrialEndOpen(false);
-        }}
+        onClose={() => setWaitlistTrialEndOpen(false)}
       />
 
       <SidebarMenu

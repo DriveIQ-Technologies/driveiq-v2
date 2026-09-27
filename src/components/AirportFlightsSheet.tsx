@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 
 import { LineDetailSheet } from '@/components/LineDetailSheet';
+import { SeverityPill } from '@/components/ui/SeverityPill';
+import { lineDetailText } from '@/services/tflLines';
 import { SheetOverlay } from '@/components/ui/SheetOverlay';
 import { showDialog } from '@/services/dialog';
 import { useAuth } from '@/providers/AuthProvider';
@@ -22,6 +24,7 @@ import {
 } from '@/services/aerodatabox';
 import {
   loadSavedFlights,
+  replaceWatchedFlights,
   saveFlight,
   unsaveFlight,
   type SavedFlightMap,
@@ -43,14 +46,25 @@ interface Props {
 const FREE_WINDOW_HOURS = 3;
 const FREE_WATCH_LIMIT = 1;
 
-const SEVERITY_COLOR: Record<ConnectionStatus['severityBucket'], string> = {
-  good: '#26C281',
-  minor: '#FACC15',
-  severe: '#F97316',
-  closed: '#DC2626',
-};
-
 /** "2026-06-26 08:05+01:00" | "2026-06-26T08:05+01:00" -> "08:05". */
+/** What an empty board says. Always prefers "until HH:MM" when we know it. */
+function emptyBoardMessage(opts: {
+  direction: 'departure' | 'arrival';
+  isPro: boolean;
+  nextAt: string | null;
+}): string {
+  const noun = opts.direction === 'departure' ? 'departures' : 'arrivals';
+  const usable = opts.nextAt && opts.nextAt !== '--:--' ? opts.nextAt : null;
+  if (usable) {
+    return opts.isPro
+      ? `No ${noun} until ${usable}.`
+      : `No ${noun} until ${usable}. Premium shows the full day.`;
+  }
+  return opts.isPro
+    ? `No more ${noun} in this window.`
+    : `No ${noun} in the next ${FREE_WINDOW_HOURS} hours. Premium shows the full day.`;
+}
+
 function hhmm(local?: string): string {
   if (!local) return '--:--';
   const sep = local.includes('T') ? 'T' : ' ';
@@ -219,6 +233,17 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
     return [visible, locked] as const;
   }, [flights, direction, isPro]);
 
+  // The next flight in this direction, whether or not the free window shows
+  // it. Lets an empty board say WHEN things start ("No departures until
+  // 06:00") instead of just "none in the next 3 hours" — at 1am that read as
+  // though the board was broken when Heathrow was simply in its night curfew.
+  const nextFlight = useMemo(() => {
+    const now = Date.now();
+    return flights
+      .filter((f) => f.direction === direction && f.effectiveMs > now)
+      .sort((a, b) => a.effectiveMs - b.effectiveMs)[0];
+  }, [flights, direction]);
+
   const boundaryTracked = useRef(false);
   useEffect(() => {
     if (isPro || lockedFlights.length === 0 || boundaryTracked.current || !airport) return;
@@ -251,15 +276,43 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
           return;
         }
 
-        // Enforce the watch quota before saving.
-        const watchedCount = Object.keys(saved).length;
-        if (!isPro && watchedCount >= FREE_WATCH_LIMIT) {
-          track('flight_save_blocked_limit', { tier: 'free', watched_count: watchedCount });
+        // Enforce the watch quota before saving. Reload rather than trust
+        // `saved`: loading drops flights that have already landed or left, so
+        // only flights still happening count against the limit.
+        const current = await loadSavedFlights();
+        setSaved(current);
+        const watching = Object.values(current);
+        if (!isPro && watching.length >= FREE_WATCH_LIMIT) {
+          track('flight_save_blocked_limit', { tier: 'free', watched_count: watching.length });
+          // Name what is being watched, wherever it is, and offer the swap.
+          // The old wording ("stop watching your current one") pointed at a
+          // flight the user often could not find on this screen.
+          const names = watching.map((w) => w.flightNumber).join(', ');
+          const others = watching.length > 1 ? `${watching.length} flights (${names})` : names;
           showDialog(
             'Flight watch limit',
-            `Free tracks ${FREE_WATCH_LIMIT} flight at a time. Upgrade to DriveIQ Premium to watch unlimited flights, or stop watching your current one first.`,
+            `Free watches ${FREE_WATCH_LIMIT} flight at a time and you're watching ${others}. Watch ${f.flightNumber} instead, or go Premium to watch as many as you like.`,
             [
               { label: 'Not now', style: 'cancel' },
+              {
+                label: `Watch ${f.flightNumber}`,
+                onPress: () => {
+                  void (async () => {
+                    await ensurePermission();
+                    const next = await replaceWatchedFlights(airport.id, f);
+                    setSaved(next);
+                    track('flight_watch_swapped', {
+                      airport_id: airport.id,
+                      flight_id: f.id,
+                      replaced: watching.length,
+                    });
+                    showDialog(
+                      'Watching flight',
+                      `${f.flightNumber}. We will ping you if it is delayed or cancelled.`,
+                    );
+                  })();
+                },
+              },
               { label: 'See Premium', onPress: upgrade },
             ],
           );
@@ -346,16 +399,14 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.connLabel}>{c.label}</Text>
                   {c.note ? <Text style={styles.connNote}>{c.note}</Text> : null}
-                  {c.reason ? (
-                    <Text style={styles.connReason} numberOfLines={2}>
-                      {c.reason.replace(/https?:\/\/\S+/gi, '').trim() || 'Tap for full details'}
-                    </Text>
-                  ) : null}
+                  {lineDetailText(c) ? (
+                  <Text style={styles.connReason} numberOfLines={2}>
+                    {lineDetailText(c)}
+                  </Text>
+                ) : null}
                 </View>
                 <View style={styles.connTrailing}>
-                  <View style={[styles.statusPill, { backgroundColor: SEVERITY_COLOR[c.severityBucket] }]}>
-                    <Text style={styles.statusText}>{c.statusDescription}</Text>
-                  </View>
+                  <SeverityPill bucket={c.severityBucket} />
                   <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} style={{ marginTop: 4 }} />
                 </View>
               </Pressable>
@@ -418,10 +469,13 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
 
           {!flightsLoading && !flightsError && shownFlights.length === 0 && (
             <Text style={styles.empty}>
-              No {direction === 'departure' ? 'departures' : 'arrivals'}{' '}
-              {isPro
-                ? 'in this window.'
-                : `in the next ${FREE_WINDOW_HOURS} hours. Premium shows the full day.`}
+              {emptyBoardMessage({
+                direction,
+                isPro: isPro === true,
+                nextAt: nextFlight
+                  ? hhmm(nextFlight.revisedLocal || nextFlight.scheduledLocal)
+                  : null,
+              })}
             </Text>
           )}
 
@@ -747,8 +801,6 @@ const styles = StyleSheet.create({
     maxWidth: 110,
   },
   flightStatusText: { fontSize: 11, fontWeight: '800', textAlign: 'center' },
-  statusPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, maxWidth: 120 },
-  statusText: { fontSize: 11, fontWeight: '800', color: colors.textOnPrimary, textAlign: 'center' },
   detailCard: {
     position: 'absolute',
     left: 20,

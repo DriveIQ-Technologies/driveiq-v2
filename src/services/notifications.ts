@@ -28,6 +28,7 @@ import type { AppEvent } from '@/types/event';
 import type { AirportFlight } from './aerodatabox';
 import type { SavedFlight } from './savedFlights';
 import { track } from './analytics';
+import { isServerPushActive } from './pushTokens';
 import { templateRailLine, templateRoadLine } from './copyTemplates';
 import { eventReminderPlan, PRE_END_MINUTES } from './eventReminders';
 
@@ -330,6 +331,17 @@ const incidentMaterialChange = (
   );
 };
 
+/**
+ * Alert kinds Cloud Functions also send. When server push is live for this
+ * device the server owns them, and raising a local copy would double every
+ * alert. Kinds NOT listed here stay local-only.
+ */
+const SERVER_DISPATCHED_KINDS = new Set([
+  'road-accident',
+  'line-closure',
+  'saved-flight',
+]);
+
 const fire = async (
   title: string,
   body: string,
@@ -340,6 +352,12 @@ const fire = async (
     return;
   }
   if (isQuietHours()) {
+    return;
+  }
+  const kindForDedup = typeof data.kind === 'string' ? data.kind : '';
+  if (SERVER_DISPATCHED_KINDS.has(kindForDedup) && isServerPushActive()) {
+    // Server push covers this device, and unlike this local path it also
+    // reaches the user when the app is closed.
     return;
   }
   try {

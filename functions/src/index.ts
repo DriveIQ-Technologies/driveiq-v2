@@ -20,9 +20,11 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { logger } from 'firebase-functions';
 import { phraseAndStore, loadSystemPrompt } from './copy.js';
 import { ingestLiveFeeds } from './ingest.js';
-import { publishLondonEvents } from './events.js';
+import { eventsFromRawDocs, publishLondonEvents } from './events.js';
 import { ensureAgentRuntimeDefaults, handleAskAgent } from './agent.js';
+import { handleEventsAdmin } from './eventsAdmin.js';
 import { ingestAirports, ingestAirportDays } from './airports.js';
+import { ingestNationalRail, NSI_FEED_URL } from './nationalRail.js';
 import { ingestEventsRaw } from './eventsIngest.js';
 import { isAirportPollWindow } from './londonTime.js';
 import {
@@ -45,12 +47,21 @@ import { handleRegisterAccount } from './accountLifecycle.js';
 
 initializeApp();
 const db = getFirestore();
+/**
+ * Firestore rejects a document containing `undefined` and fails the whole
+ * write. Optional fields are everywhere in this data — a flight with no IATA
+ * code, a rail operator with no disruption link — and one missing value was
+ * enough to lose an entire airport board. Drop undefined fields instead.
+ */
+db.settings({ ignoreUndefinedProperties: true });
 const anthropicKey = defineSecret('Anthropic-API-key-Production');
 const aerodataboxKey = defineSecret('AERODATABOX_RAPIDAPI_KEY');
 const ticketmasterKey = defineSecret('TICKETMASTER_API_KEY');
+const nationalRailKey = defineSecret('NATIONAL_RAIL_KB_KEY');
 const brevoApiKey = defineSecret('BREVO_API_KEY');
 const brevoSenderEmail = defineSecret('BREVO_SENDER_EMAIL');
 const brevoSenderName = defineSecret('BREVO_SENDER_NAME');
+const eventsAdminKey = defineSecret('EVENTS_ADMIN_KEY');
 
 const WAITLIST_FN_SA = 'firebase-adminsdk-fbsvc@driveiq-app.iam.gserviceaccount.com';
 const london = { timeZone: 'Europe/London' };
@@ -129,7 +140,12 @@ async function processCopyQueue(apiKey: string | undefined): Promise<void> {
 }
 
 export const seedCopyPrompt = onSchedule(
-  { schedule: 'every 24 hours', timeoutSeconds: 120, ...london },
+  {
+    schedule: 'every 24 hours',
+    timeoutSeconds: 120,
+    ...london,
+    serviceAccount: WAITLIST_FN_SA,
+  },
   async () => {
     await loadSystemPrompt(db);
     await ensureAgentRuntimeDefaults(db);
@@ -145,6 +161,7 @@ export const writeQueuedCopy = onSchedule(
     schedule: 'every 5 minutes',
     timeoutSeconds: 300,
     ...london,
+    serviceAccount: WAITLIST_FN_SA,
     secrets: [anthropicKey, aerodataboxKey],
   },
   async () => {
@@ -159,11 +176,38 @@ export const writeQueuedCopy = onSchedule(
     await processCopyQueue(apiKey);
 
     try {
+      // national-rail dropped: TfL reports every operator as a permanent
+      // "Special Service", so rail alerts could never fire. Real per-operator
+      // severity comes from railCache, published by ingestNationalRailStatus.
       const lineRes = await fetch(
-        'https://api.tfl.gov.uk/Line/Mode/tube,overground,dlr,elizabeth-line,tram,national-rail/Status',
+        'https://api.tfl.gov.uk/Line/Mode/tube,overground,dlr,elizabeth-line,tram/Status',
       );
       const lineRows = lineRes.ok ? ((await lineRes.json()) as unknown[]) : [];
       const lines = parseLineStatuses(lineRows);
+
+      try {
+        const railSnap = await db.doc('railCache/national').get();
+        const operators = (railSnap.data()?.operators ?? []) as Array<{
+          lineId?: string;
+          name?: string;
+          severity?: string;
+          status?: string;
+        }>;
+        for (const op of operators) {
+          if (!op.lineId) continue;
+          lines.push({
+            id: op.lineId,
+            name: op.name ?? op.lineId,
+            severityBucket: op.severity ?? 'good',
+            statusDescription: op.status ?? 'Good service',
+            source: 'nsi',
+          });
+        }
+      } catch (e) {
+        logger.warn('dispatch.rail_cache_read_fail', {
+          error: e instanceof Error ? e.message : 'error',
+        });
+      }
       const flightsByAirport = await loadFlightsByAirport(db);
       await dispatchPushNotifications({
         db,
@@ -191,6 +235,7 @@ export const ingestMajorAirports = onSchedule(
     schedule: 'every 10 minutes',
     timeoutSeconds: 180,
     ...london,
+    serviceAccount: WAITLIST_FN_SA,
     secrets: [aerodataboxKey],
   },
   async () => {
@@ -220,6 +265,7 @@ export const ingestAirportDaysHourly = onSchedule(
     schedule: 'every 60 minutes',
     timeoutSeconds: 540,
     ...london,
+    serviceAccount: WAITLIST_FN_SA,
     secrets: [aerodataboxKey],
   },
   async () => {
@@ -234,12 +280,46 @@ export const ingestAirportDaysHourly = onSchedule(
   },
 );
 
+/**
+ * National Rail operator status, every 5 minutes.
+ *
+ * Replaces TfL's national-rail mode, which parks eight operators on a
+ * permanent "Special Service" carrying no live severity. National Rail cache
+ * the feed for 1 minute their side and recommend polling every 5.
+ *
+ * Runs around the clock: unlike the airport polls this is cheap (one request)
+ * and drivers work through the night.
+ */
+export const ingestNationalRailStatus = onSchedule(
+  {
+    schedule: 'every 5 minutes',
+    timeoutSeconds: 120,
+    ...london,
+    serviceAccount: WAITLIST_FN_SA,
+    secrets: [nationalRailKey],
+  },
+  async () => {
+    try {
+      await ingestNationalRail({
+        db,
+        apiKey: await keyOrEmpty(nationalRailKey),
+        url: NSI_FEED_URL,
+      });
+    } catch (e) {
+      logger.warn('rail.ingest_fail', {
+        error: e instanceof Error ? e.message : 'error',
+      });
+    }
+  },
+);
+
 /** STN / LTN / LCY every 15 minutes during the airport poll window. */
 export const ingestRegionalAirports = onSchedule(
   {
     schedule: 'every 15 minutes',
     timeoutSeconds: 180,
     ...london,
+    serviceAccount: WAITLIST_FN_SA,
     secrets: [aerodataboxKey],
   },
   async () => {
@@ -264,6 +344,7 @@ export const ingestEventsNightly = onSchedule(
     timeoutSeconds: 540,
     memory: '512MiB',
     ...london,
+    serviceAccount: WAITLIST_FN_SA,
     secrets: [ticketmasterKey, anthropicKey],
   },
   async () => {
@@ -280,6 +361,18 @@ export const ingestEventsNightly = onSchedule(
   },
 );
 
+/** Rebuild the published catalogue from eventsRaw (no feed calls). */
+async function republishFromRaw(): Promise<void> {
+  // Was 1500: once eventsRaw grew past it, events silently dropped out.
+  const snap = await db.collection('eventsRaw').limit(5000).get();
+  const events = eventsFromRawDocs(snap.docs.map((d) => d.data() as Record<string, unknown>));
+  await publishLondonEvents({
+    db,
+    apiKey: await keyOrEmpty(anthropicKey),
+    events,
+  });
+}
+
 /**
  * Second pass if ingest wrote eventsRaw but publish failed.
  * Safe to run on its own: reads eventsRaw and republishes.
@@ -290,37 +383,39 @@ export const normaliseEventsNightly = onSchedule(
     timeoutSeconds: 540,
     memory: '512MiB',
     ...london,
+    serviceAccount: WAITLIST_FN_SA,
     secrets: [anthropicKey],
   },
   async () => {
     try {
-      const snap = await db.collection('eventsRaw').limit(1500).get();
-      const events = snap.docs
-        .map((d) => d.data() as Record<string, unknown>)
-        .filter((x) => typeof x.id === 'string' && typeof x.startsAt === 'string')
-        .map((x) => ({
-          id: String(x.id),
-          source: String(x.source ?? 'ticketmaster'),
-          category: x.category === 'sports' ? ('sports' as const) : ('other' as const),
-          title: String(x.title ?? 'Event'),
-          startsAt: String(x.startsAt),
-          endsAt: String(x.endsAt ?? x.startsAt),
-          venue: String(x.venue ?? 'London'),
-          latitude: Number(x.latitude),
-          longitude: Number(x.longitude),
-          description: typeof x.description === 'string' ? x.description : undefined,
-          subCategory: typeof x.subCategory === 'string' ? x.subCategory : undefined,
-          url: typeof x.url === 'string' ? x.url : undefined,
-        }))
-        .filter((e) => Number.isFinite(e.latitude) && Number.isFinite(e.longitude));
-      await publishLondonEvents({
-        db,
-        apiKey: await keyOrEmpty(anthropicKey),
-        events,
-      });
+      await republishFromRaw();
     } catch (e) {
       logger.warn('events.publish_fail', { error: e instanceof Error ? e.message : 'error' });
     }
+  },
+);
+
+/**
+ * Events admin page: add events the feeds miss (e.g. England at Wembley),
+ * remove them again. Passcode-protected; publishes straight away.
+ */
+export const eventsAdminHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 300,
+    memory: '512MiB',
+    invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
+    secrets: [eventsAdminKey, anthropicKey],
+  },
+  async (req, res) => {
+    await handleEventsAdmin({
+      db,
+      req,
+      res,
+      adminKey: await keyOrEmpty(eventsAdminKey),
+      republish: republishFromRaw,
+    });
   },
 );
 

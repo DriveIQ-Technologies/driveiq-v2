@@ -189,15 +189,18 @@ export async function getWaitlistTrialEnds(): Promise<string | null> {
   return synced?.premiumUntil ?? null;
 }
 
-export async function hasSeenWaitlistTrialEnd(): Promise<boolean> {
+/**
+ * Which account + waitlist week the "week ended" popup was last shown for.
+ * (Previously a bare '1' that nothing ever read or wrote.)
+ */
+export async function getWaitlistTrialEndSeenMarker(): Promise<string | null> {
   const { getItem } = await import('./storage');
-  const v = await getItem(TRIAL_END_SEEN_KEY);
-  return v === '1';
+  return (await getItem(TRIAL_END_SEEN_KEY)) ?? null;
 }
 
-export async function markWaitlistTrialEndSeen(): Promise<void> {
+export async function setWaitlistTrialEndSeenMarker(marker: string): Promise<void> {
   const { setItem } = await import('./storage');
-  await setItem(TRIAL_END_SEEN_KEY, '1');
+  await setItem(TRIAL_END_SEEN_KEY, marker);
 }
 
 export async function waitlistTrialActive(): Promise<boolean> {

@@ -3,6 +3,7 @@
  * Manual eventOverrides and venueOverrides always win.
  */
 import { logger } from 'firebase-functions';
+import { dedupeSportsEvents } from './sportsDedupe.js';
 import type { Firestore } from 'firebase-admin/firestore';
 import { phraseAndStore } from './copy.js';
 import {
@@ -43,6 +44,7 @@ function isPriority(e: PublishedEvent, now: number): boolean {
   const venue = (e.venue ?? '').toLowerCase();
   const big =
     e.source === 'featured' ||
+    e.source === 'manual' ||
     e.category === 'sports' ||
     venue.includes('o2') ||
     venue.includes('wembley') ||
@@ -91,6 +93,30 @@ function toAppEventDoc(e: PublishedEvent, extra: Record<string, unknown>): Recor
   };
 }
 
+/** eventsRaw documents back into events, for a rebuild without feed calls. */
+export function eventsFromRawDocs(docs: Record<string, unknown>[]): PublishedEvent[] {
+  return docs
+    .filter((x) => typeof x.id === 'string' && typeof x.startsAt === 'string')
+    .map((x) => ({
+      id: String(x.id),
+      source: String(x.source ?? 'ticketmaster'),
+      category: x.category === 'sports' ? ('sports' as const) : ('other' as const),
+      title: String(x.title ?? 'Event'),
+      startsAt: String(x.startsAt),
+      endsAt: String(x.endsAt ?? x.startsAt),
+      // Must survive this rebuild: without it an estimated end is read as a
+      // published one and the realistic-duration logic is skipped.
+      endIsEstimated: typeof x.endIsEstimated === 'boolean' ? x.endIsEstimated : undefined,
+      venue: String(x.venue ?? 'London'),
+      latitude: Number(x.latitude),
+      longitude: Number(x.longitude),
+      description: typeof x.description === 'string' ? x.description : undefined,
+      subCategory: typeof x.subCategory === 'string' ? x.subCategory : undefined,
+      url: typeof x.url === 'string' ? x.url : undefined,
+    }))
+    .filter((e) => Number.isFinite(e.latitude) && Number.isFinite(e.longitude));
+}
+
 const COPY_CAP = 80;
 
 export async function publishLondonEvents(opts: {
@@ -99,7 +125,18 @@ export async function publishLondonEvents(opts: {
   events: PublishedEvent[];
 }): Promise<number> {
   const now = Date.now();
-  const unique = dropTmWhenFeatured(opts.events);
+  // Collapse duplicate fixtures here as well as at import. eventsRaw is never
+  // pruned, so a copy stored before the import-time check existed kept being
+  // republished beside the new one (MK Dons v Bromley from FotMob and ESPN).
+  const unique = dedupeSportsEvents(dropTmWhenFeatured(opts.events));
+  // Listings we just decided are duplicates. The age-based cleanup below keeps
+  // anything still upcoming (so a feed hiccup can't wipe real events), which
+  // meant a duplicate already published stayed until the match was over.
+  // These are known duplicates, so remove them explicitly.
+  const keptRawIds = new Set(unique.map((e) => e.id));
+  const duplicateDocIds = opts.events
+    .filter((e) => !keptRawIds.has(e.id))
+    .map((e) => recordIdFor(e.id));
   let copyBudget = COPY_CAP;
   let written = 0;
   const writer = opts.db.bulkWriter();
@@ -127,7 +164,8 @@ export async function publishLondonEvents(opts: {
     if (existingCopy?.line && existingCopy.fingerprint === fp) {
       copyLine = existingCopy.line;
       copySource = String(existingCopy.source ?? 'template');
-    } else if (opts.apiKey && copyBudget > 0 && isPriority(event, now)) {
+    } else if (!override.copyLine && opts.apiKey && copyBudget > 0 && isPriority(event, now)) {
+      // (A hand-written line in eventOverrides replaces this anyway.)
       copyBudget -= 1;
       const rawRecord = [
         event.subCategory || event.category || 'Event',
@@ -174,9 +212,15 @@ export async function publishLondonEvents(opts: {
 
   await writer.close();
 
-  const stale = await opts.db.collection('eventsPublished').limit(800).get();
+  // Was limit(800) with 1,300+ events published, so the rest were never checked.
+  const stale = await opts.db.collection('eventsPublished').limit(5000).get();
   const cleanup = opts.db.bulkWriter();
   let removed = 0;
+  for (const id of new Set(duplicateDocIds)) {
+    if (keptIds.has(id)) continue;
+    cleanup.delete(opts.db.doc(`eventsPublished/${id}`));
+    removed += 1;
+  }
   for (const doc of stale.docs) {
     if (keptIds.has(doc.id)) continue;
     const ends = Date.parse(String(doc.data().estimatedFinishAt || doc.data().endsAt || ''));

@@ -25,6 +25,35 @@ export async function loadSystemPrompt(db: Firestore): Promise<string> {
   return COPY_SYSTEM_PROMPT;
 }
 
+/**
+ * Is this usable as a driver-facing alert line?
+ *
+ * The copy model sometimes replies ABOUT the task instead of doing it — "I
+ * can't phrase this record… Send me: the line or route" — which is a fair
+ * response to a thin input but is not copy. It was being stored as though it
+ * were, then read back as a push notification body and sent to a real phone.
+ *
+ * Reject anything that talks to us rather than to the driver, and anything too
+ * long or multi-paragraph to be an alert. Rejected copy falls back to the
+ * template, which is always safe.
+ */
+export function isUsableCopyLine(line: string | null | undefined): boolean {
+  const t = (line ?? '').trim();
+  if (!t) return false;
+  // Alert lines are one or two sentences; a paragraph break means prose.
+  if (t.length > 220 || t.includes('\n\n')) return false;
+  const meta = [
+    /\bi\s+(can'?t|cannot|won'?t|am unable|don'?t have|need)\b/i,
+    /\byou'?ve given me\b/i,
+    /\bsend me\b\s*:/i,
+    /\b(please )?(provide|send) (me )?(the|more)\b/i,
+    /\bthere isn'?t enough\b/i,
+    /\bnot enough (useful )?information\b/i,
+    /\bas an ai\b/i,
+  ];
+  return !meta.some((re) => re.test(t));
+}
+
 export async function phraseAndStore(opts: {
   db: Firestore;
   apiKey: string | undefined;
@@ -46,6 +75,15 @@ export async function phraseAndStore(opts: {
       rawRecord: opts.rawRecord,
       model: opts.model,
     });
+    if (line && !isUsableCopyLine(line)) {
+      // The model answered about the record rather than describing it.
+      logger.warn('copy.rejected_meta_reply', {
+        kind: opts.kind,
+        id: opts.id,
+        preview: line.slice(0, 80),
+      });
+      line = null;
+    }
     if (line) source = 'claude';
   }
 

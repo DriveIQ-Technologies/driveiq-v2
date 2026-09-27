@@ -390,6 +390,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         void (async () => {
           const { refreshWaitlistForCurrentUser } = await import('@/services/waitlist');
           await refreshWaitlistForCurrentUser();
+          // Waitlist state is now current for this account: the right moment to
+          // tell them their free week has ended, if it has.
+          const { presentWaitlistEndedIfDue } = await import('@/services/waitlistEnded');
+          await presentWaitlistEndedIfDue();
         })();
         void (async () => {
           const { loadPrefs, loadLineSubscriptions } = await import('@/services/notifications');
