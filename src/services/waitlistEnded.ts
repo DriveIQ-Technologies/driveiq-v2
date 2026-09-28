@@ -12,7 +12,7 @@
 import { auth } from './firebase';
 import { getPremiumSource } from './subscription';
 import {
-  getWaitlistTrialEnds,
+  getLastWaitlistWeekEnd,
   getWaitlistTrialEndSeenMarker,
   setWaitlistTrialEndSeenMarker,
 } from './waitlist';
@@ -43,7 +43,8 @@ export async function presentWaitlistEndedIfDue(): Promise<void> {
     if (!uid) return;
 
     const [endsAt, premiumSource, seenMarker] = await Promise.all([
-      getWaitlistTrialEnds(),
+      // Not getWaitlistTrialEnds(): that only returns an active week.
+      getLastWaitlistWeekEnd(),
       getPremiumSource(),
       getWaitlistTrialEndSeenMarker(),
     ]);

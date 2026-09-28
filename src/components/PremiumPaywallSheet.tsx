@@ -20,6 +20,7 @@ import { track, trackScreen } from '@/services/analytics';
 import {
   configurePurchases,
   getCachedPremiumPackages,
+  getTrialDebugInfo,
   getCurrentOffering,
   isPurchasesNativeAvailable,
   packageDisplayTitle,
@@ -34,6 +35,7 @@ import {
   sortPremiumPackages,
   PACKAGE_ANNUAL_ID,
 } from '@/services/purchases';
+import { notifyPremiumStarted } from '@/services/premiumStarted';
 import { syncPremiumEntitlement } from '@/services/subscription';
 import { colors } from '@/theme/colors';
 
@@ -194,11 +196,18 @@ export function PremiumPaywallSheet({
       const result = await purchaseSelectedPackage(selected.identifier);
       if (result.ok) {
         await syncPremiumEntitlement();
+        const trialStarted = packageHasFreeTrial(selected);
+        if (trialStarted) {
+          void notifyPremiumStarted({
+            plan: isAnnual(selected) ? 'annual' : 'monthly',
+            trialStarted: true,
+          });
+        }
         onUnlocked?.();
         onClose();
         onSuccess?.({
           kind: 'purchase',
-          trialStarted: packageHasFreeTrial(selected),
+          trialStarted,
         });
         return;
       }
@@ -395,6 +404,10 @@ export function PremiumPaywallSheet({
             )}
           </Pressable>
           <Text style={styles.finePrint}>{finePrint}</Text>
+          {__DEV__ ? (
+            // Development builds only: why the trial is or isn't offered.
+            <Text style={styles.devTrial}>{getTrialDebugInfo() || 'trial check not run yet'}</Text>
+          ) : null}
           <View style={styles.legalRow}>
             <Pressable onPress={() => openUrl(TERMS_URL)} hitSlop={8}>
               <Text style={styles.legalLink}>Terms</Text>
@@ -419,6 +432,12 @@ const NIGHT_ELEVATED = '#0C1422';
 const LINE = 'rgba(76, 169, 255, 0.18)';
 
 const styles = StyleSheet.create({
+  devTrial: {
+    marginTop: 8,
+    fontSize: 11,
+    color: '#FACC15',
+    textAlign: 'center',
+  },
   sheet: {
     flex: 1,
     backgroundColor: NIGHT,

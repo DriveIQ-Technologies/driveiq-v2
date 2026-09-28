@@ -7,6 +7,7 @@
  */
 import { track, refreshUserTraits } from './analytics';
 import { auth, db, fsApi, functions, functionsApi } from './firebase';
+import { getItem, removeItem, setItem } from './storage';
 
 const TRIAL_ENDS_KEY = 'driveiq.premium.trialEnds';
 const TRIAL_EMAIL_KEY = 'driveiq.premium.trialEmail';
@@ -111,7 +112,6 @@ export function friendlyWaitlistCodeRequestError(e: unknown): string {
 
 /** Drop cached waitlist week + pending token (e.g. on sign-out). */
 export async function clearWaitlistCache(): Promise<void> {
-  const { removeItem } = await import('./storage');
   await Promise.all([
     removeItem(TRIAL_ENDS_KEY),
     removeItem(TRIAL_EMAIL_KEY),
@@ -137,12 +137,10 @@ async function invalidatePremiumCache(): Promise<void> {
 export async function setPendingWaitlistToken(token: string): Promise<void> {
   const clean = normalizeClaimToken(token);
   if (!clean) return;
-  const { setItem } = await import('./storage');
   await setItem(TRIAL_TOKEN_KEY, clean);
 }
 
 async function takePendingWaitlistToken(): Promise<string | null> {
-  const { getItem, removeItem } = await import('./storage');
   const raw = await getItem(TRIAL_TOKEN_KEY);
   const clean = normalizeClaimToken(raw ?? '');
   await removeItem(TRIAL_TOKEN_KEY);
@@ -156,7 +154,6 @@ async function cacheWaitlistGrant(
 ): Promise<void> {
   const owner = uid ?? currentAccountUid();
   if (!owner) return;
-  const { setItem } = await import('./storage');
   await setItem(TRIAL_ENDS_KEY, premiumUntil);
   await setItem(TRIAL_EMAIL_KEY, waitlistEmail ?? '');
   await setItem(TRIAL_UID_KEY, owner);
@@ -168,7 +165,6 @@ async function getLocalWaitlistForCurrentUser(): Promise<{
 } | null> {
   const uid = currentAccountUid();
   if (!uid) return null;
-  const { getItem } = await import('./storage');
   const [premiumUntil, waitlistEmail, cachedUid] = await Promise.all([
     getItem(TRIAL_ENDS_KEY),
     getItem(TRIAL_EMAIL_KEY),
@@ -194,12 +190,10 @@ export async function getWaitlistTrialEnds(): Promise<string | null> {
  * (Previously a bare '1' that nothing ever read or wrote.)
  */
 export async function getWaitlistTrialEndSeenMarker(): Promise<string | null> {
-  const { getItem } = await import('./storage');
   return (await getItem(TRIAL_END_SEEN_KEY)) ?? null;
 }
 
 export async function setWaitlistTrialEndSeenMarker(marker: string): Promise<void> {
-  const { setItem } = await import('./storage');
   await setItem(TRIAL_END_SEEN_KEY, marker);
 }
 
@@ -220,6 +214,56 @@ export async function refreshWaitlistForCurrentUser(): Promise<void> {
   await syncWaitlistEntitlementFromFirestore();
 }
 
+/** The account's waitlist week as stored on the server, past or present. */
+async function readServerWaitlist(uid: string): Promise<{
+  premiumUntil: string | null;
+  waitlistEmail: string | null;
+} | null> {
+  if (!db || !fsApi) return null;
+  const [rootSnap, entSnap] = await Promise.all([
+    fsApi.getDoc(fsApi.doc(db, 'users', uid)),
+    fsApi.getDoc(fsApi.doc(db, 'users', uid, 'entitlements', 'waitlist')),
+  ]);
+  const root = rootSnap.exists() ? rootSnap.data() : {};
+  const ent = entSnap.exists() ? entSnap.data() : {};
+  const data = { ...root, ...ent } as {
+    premiumUntil?: string;
+    waitlistEmail?: string;
+  };
+  return {
+    premiumUntil:
+      typeof data.premiumUntil === 'string' && Number.isFinite(Date.parse(data.premiumUntil))
+        ? data.premiumUntil
+        : null,
+    waitlistEmail:
+      typeof data.waitlistEmail === 'string' ? normalizeEmail(data.waitlistEmail) : null,
+  };
+}
+
+/**
+ * When this account's most recent waitlist week ends or ended — including a
+ * week that is already over. For the "week ended" popup only.
+ *
+ * getWaitlistTrialEnds() answers "is the week active?" and so drops a past
+ * date, both from the local cache and from the server. The popup read that,
+ * so it never saw an ended week and could never show.
+ */
+export async function getLastWaitlistWeekEnd(): Promise<string | null> {
+  const uid = currentAccountUid();
+  if (!uid) return null;
+  const [cached, cachedUid] = await Promise.all([getItem(TRIAL_ENDS_KEY), getItem(TRIAL_UID_KEY)]);
+  const mine = cachedUid === uid && cached && Number.isFinite(Date.parse(cached)) ? cached : null;
+  // An ended week can't change, so the cache is enough. A week the cache
+  // still thinks is running is checked against the server, which may have
+  // ended it early.
+  if (mine && Date.parse(mine) <= Date.now()) return mine;
+  try {
+    return (await readServerWaitlist(uid))?.premiumUntil ?? mine;
+  } catch {
+    return mine;
+  }
+}
+
 /** Read server entitlement into the local cache (cross-device sync). */
 export async function syncWaitlistEntitlementFromFirestore(): Promise<{
   premiumUntil: string | null;
@@ -228,23 +272,13 @@ export async function syncWaitlistEntitlementFromFirestore(): Promise<{
   const uid = currentAccountUid();
   if (!uid || !db || !fsApi) return null;
   try {
-    const [rootSnap, entSnap] = await Promise.all([
-      fsApi.getDoc(fsApi.doc(db, 'users', uid)),
-      fsApi.getDoc(fsApi.doc(db, 'users', uid, 'entitlements', 'waitlist')),
-    ]);
-    const root = rootSnap.exists() ? rootSnap.data() : {};
-    const ent = entSnap.exists() ? entSnap.data() : {};
-    const data = { ...root, ...ent } as {
-      premiumUntil?: string;
-      waitlistEmail?: string;
-    };
+    const server = await readServerWaitlist(uid);
+    if (!server) return null;
     const premiumUntil =
-      typeof data.premiumUntil === 'string' && Date.parse(data.premiumUntil) > Date.now()
-        ? data.premiumUntil
+      server.premiumUntil && Date.parse(server.premiumUntil) > Date.now()
+        ? server.premiumUntil
         : null;
-    const waitlistEmail = typeof data.waitlistEmail === 'string'
-      ? normalizeEmail(data.waitlistEmail)
-      : null;
+    const waitlistEmail = server.waitlistEmail;
     if (premiumUntil) {
       await cacheWaitlistGrant(premiumUntil, waitlistEmail, uid);
       await refreshUserTraits({ tier: 'premium', waitlist_week: true });

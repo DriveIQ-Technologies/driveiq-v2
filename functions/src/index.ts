@@ -44,6 +44,7 @@ import {
 } from './communityReports.js';
 import { handleDeleteAccount } from './deleteAccount.js';
 import { handleRegisterAccount } from './accountLifecycle.js';
+import { handleNotifyPremiumStarted } from './premiumStarted.js';
 
 initializeApp();
 const db = getFirestore();
@@ -1091,6 +1092,69 @@ export const registerAccountHttp = onRequest(
       }
       // Never block the app on this: the client treats a failure as retryable.
       res.status(200).json({ error: { message: 'Could not register account', status: 'INTERNAL' } });
+    }
+  },
+);
+
+/**
+ * Called by the app after a confirmed Premium trial start (annual or monthly).
+ * Sends the matching designed welcome once. Safe to retry.
+ */
+export const notifyPremiumStartedHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 30,
+    cors: true,
+    invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
+    secrets: [brevoApiKey, brevoSenderEmail, brevoSenderName],
+  },
+  async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: { message: 'POST required', status: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const uid = await uidFromBearer(req);
+      const authUser = await getAuth().getUser(uid);
+      const body = (req.body ?? {}) as {
+        data?: { plan?: unknown; trialStarted?: unknown };
+        plan?: unknown;
+        trialStarted?: unknown;
+      };
+      const data = body.data ?? body;
+      const result = await handleNotifyPremiumStarted({
+        db,
+        user: {
+          uid,
+          email: authUser.email ?? null,
+          displayName: authUser.displayName ?? null,
+        },
+        brevo: {
+          apiKey: await keyOrEmpty(brevoApiKey),
+          senderEmail: await keyOrEmpty(brevoSenderEmail),
+          senderName: await keyOrEmpty(brevoSenderName),
+        },
+        plan: typeof data.plan === 'string' ? data.plan : undefined,
+        trialStarted: data.trialStarted === true,
+      });
+      res.status(200).json({ result });
+    } catch (e) {
+      logger.error('premium_welcome.http_fail', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      if (e instanceof Error && e.message === 'UNAUTHENTICATED') {
+        res.status(401).json({ error: { message: 'Sign in required', status: 'UNAUTHENTICATED' } });
+        return;
+      }
+      res.status(200).json({ error: { message: 'Could not send premium welcome', status: 'INTERNAL' } });
     }
   },
 );

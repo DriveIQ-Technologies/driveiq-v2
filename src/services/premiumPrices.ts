@@ -1,6 +1,12 @@
 /**
- * Paywall price display. App Store Connect and RevenueCat list Premium in GBP
- * (£6.99 / month, £49.99 / year). StoreKit / TestFlight often return USD.
+ * Paywall price display: always Apple's / Google's own price for the user's
+ * store, in its currency, exactly as the purchase sheet will show it.
+ *
+ * This used to relabel a dollar price as pounds ("$49.99" shown as "£49.99")
+ * so UK testers on a US sandbox saw the UK list price. But a US user, or an
+ * App Review tester on the US store, then saw a price that didn't match what
+ * they'd be charged — grounds for rejection. The GBP list below is only a
+ * fallback for a store that returns no price at all.
  */
 
 export const PACKAGE_ANNUAL_ID = '$rc_annual';
@@ -18,6 +24,8 @@ export type PricePackage = {
     price: number;
     currencyCode?: string | null;
     priceString?: string | null;
+    /** RevenueCat's store-formatted monthly price, when it provides one. */
+    pricePerMonthString?: string | null;
   };
 };
 
@@ -49,55 +57,29 @@ export function formatMoney(amount: number, currency: string): string {
   }
 }
 
-function storefrontLooksUk(storefront?: string | null): boolean {
-  const code = (storefront ?? '').toUpperCase();
-  return code === '' || code === 'GB' || code === 'GBR' || code === 'UK';
-}
-
-function storeLooksUsd(pkg: PricePackage): boolean {
-  const code = (pkg.product.currencyCode ?? '').toUpperCase();
-  const raw = pkg.product.priceString ?? '';
-  return code === 'USD' || raw.includes('$') || /USD/i.test(raw);
-}
-
-/**
- * Show the UK list price in pounds when StoreKit reports dollars.
- */
-export function packagePriceLabel(pkg: PricePackage, storefront?: string | null): string {
+/** The store's own price for this plan, e.g. "£6.99" or "$9.99". */
+export function packagePriceLabel(pkg: PricePackage): string {
+  const raw = pkg.product.priceString?.trim() ?? '';
+  if (raw) return raw;
   const storePrice = pkg.product.price;
   const storeCode = (pkg.product.currencyCode ?? '').toUpperCase();
-  const catalogue = catalogueGbpAmount(pkg);
-  const hasStorePrice = typeof storePrice === 'number' && storePrice > 0;
-
-  if (storeCode === 'GBP' && hasStorePrice) {
-    return formatMoney(storePrice, 'GBP');
-  }
-
-  if (storeLooksUsd(pkg) || storefrontLooksUk(storefront)) {
-    if (catalogue != null) return formatMoney(catalogue, 'GBP');
-    if (hasStorePrice) return formatMoney(storePrice, 'GBP');
-  }
-
-  if (hasStorePrice && storeCode) {
+  if (typeof storePrice === 'number' && storePrice > 0 && storeCode) {
     return formatMoney(storePrice, storeCode);
   }
-
-  const raw = pkg.product.priceString?.trim() ?? '';
-  if (raw) {
-    return raw.replace(/\bUS\$/g, '£').replace(/\$/g, '£').replace(/\s*USD\s*$/i, '');
-  }
-  if (catalogue != null) return formatMoney(catalogue, 'GBP');
-  return '';
+  const catalogue = catalogueGbpAmount(pkg);
+  return catalogue != null ? formatMoney(catalogue, 'GBP') : '';
 }
 
-export function packageMonthlyEquivalent(
-  pkg: PricePackage,
-  storefront?: string | null,
-): string | null {
+/** Yearly plan as a per-month figure, in the store's currency. */
+export function packageMonthlyEquivalent(pkg: PricePackage): string | null {
   if (!isAnnualPackage(pkg)) return null;
-  const label = packagePriceLabel(pkg, storefront);
-  const match = label.replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
-  const yearly = match ? Number(match[1]) : catalogueGbpAmount(pkg);
-  if (yearly == null || !(yearly > 0)) return null;
-  return formatMoney(yearly / 12, 'GBP');
+  const fromStore = pkg.product.pricePerMonthString?.trim();
+  if (fromStore) return fromStore;
+  const storePrice = pkg.product.price;
+  const storeCode = (pkg.product.currencyCode ?? '').toUpperCase();
+  if (typeof storePrice === 'number' && storePrice > 0 && storeCode) {
+    return formatMoney(storePrice / 12, storeCode);
+  }
+  const catalogue = catalogueGbpAmount(pkg);
+  return catalogue != null ? formatMoney(catalogue / 12, 'GBP') : null;
 }

@@ -62,7 +62,6 @@ describe('packagePriceLabel', () => {
           currencyCode: 'GBP',
           priceString: '£6.99',
         }),
-        'GB',
       ),
     ).toBe('£6.99');
     expect(
@@ -74,49 +73,79 @@ describe('packagePriceLabel', () => {
           currencyCode: 'GBP',
           priceString: '£49.99',
         }),
-        'GB',
       ),
     ).toBe('£49.99');
   });
 
-  it('shows pound list prices when StoreKit reports dollars', () => {
+  it("shows the store's own price, never a dollar price relabelled as pounds", () => {
+    // Seen on a US-store simulator: Apple said $49.99 and the paywall said
+    // £49.99 — not what Apple's purchase sheet (or App Review) would show.
     expect(
       packagePriceLabel(
         pkg({
           identifier: PACKAGE_MONTHLY_ID,
           packageType: 'MONTHLY',
-          price: 6.99,
+          price: 8.99,
           currencyCode: 'USD',
-          priceString: '$6.99',
+          priceString: '$8.99',
         }),
-        'USA',
       ),
-    ).toBe('£6.99');
+    ).toBe('$8.99');
     expect(
       packagePriceLabel(
         pkg({
           identifier: PACKAGE_ANNUAL_ID,
           packageType: 'ANNUAL',
-          price: 49.99,
-          currencyCode: 'USD',
-          priceString: '$49.99',
+          price: 64.99,
+          currencyCode: 'EUR',
+          priceString: '64,99 €',
         }),
-        null,
       ),
-    ).toBe('£49.99');
+    ).toBe('64,99 €');
   });
 
-  it('uses the yearly list price for the monthly equivalent', () => {
+  it('formats the store price itself when no display string is given', () => {
+    const p = pkg({ identifier: PACKAGE_MONTHLY_ID, packageType: 'MONTHLY', price: 8.99, currencyCode: 'USD' });
+    p.product.priceString = null;
+    expect(packagePriceLabel(p)).toBe('US$8.99');
+  });
+
+  it('falls back to the UK list price only when the store gives no price', () => {
+    const p = pkg({ identifier: PACKAGE_ANNUAL_ID, packageType: 'ANNUAL', price: 0, currencyCode: '' });
+    p.product.priceString = '';
+    expect(packagePriceLabel(p)).toBe('£49.99');
+  });
+
+  it('gives the yearly plan a per-month figure in the store currency', () => {
     expect(
       packageMonthlyEquivalent(
         pkg({
           identifier: PACKAGE_ANNUAL_ID,
           packageType: 'ANNUAL',
           price: 49.99,
-          currencyCode: 'USD',
-          priceString: '$49.99',
+          currencyCode: 'GBP',
+          priceString: '£49.99',
         }),
       ),
     ).toBe('£4.17');
+    expect(
+      packageMonthlyEquivalent(
+        pkg({
+          identifier: PACKAGE_ANNUAL_ID,
+          packageType: 'ANNUAL',
+          price: 59.99,
+          currencyCode: 'USD',
+          priceString: '$59.99',
+        }),
+      ),
+    ).toBe('US$5.00');
+    const withStoreString = pkg({ identifier: PACKAGE_ANNUAL_ID, packageType: 'ANNUAL', price: 59.99, currencyCode: 'USD' });
+    withStoreString.product.pricePerMonthString = '$4.99';
+    expect(packageMonthlyEquivalent(withStoreString)).toBe('$4.99');
+    expect(
+      packageMonthlyEquivalent(
+        pkg({ identifier: PACKAGE_MONTHLY_ID, packageType: 'MONTHLY', price: 6.99, currencyCode: 'GBP' }),
+      ),
+    ).toBeNull();
   });
 });

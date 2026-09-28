@@ -6,7 +6,7 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/premiumWelcomeAnnual.html src/premiumWelcomeMonthly.html src/welcomeFree.html lib/",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
     "test": "vitest run",

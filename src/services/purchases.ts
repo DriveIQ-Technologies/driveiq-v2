@@ -65,6 +65,13 @@ let cachedOffering: PurchasesOffering | null = null;
 let offeringsPrefetch: Promise<PurchasesOffering | null> | null = null;
 /** productId → RevenueCat INTRO_ELIGIBILITY_STATUS, for this Apple ID. */
 const trialEligibility = new Map<string, number>();
+/** Dev builds only: why each plan does or doesn't show "7 days free". */
+let trialDebug = '';
+
+/** Store country, Apple's intro offer, and eligibility per plan (dev builds). */
+export function getTrialDebugInfo(): string {
+  return trialDebug;
+}
 const listeners = new Set<(pro: boolean) => void>();
 
 /** True when the RNPurchases native module is compiled into this binary. */
@@ -256,7 +263,7 @@ export async function prefetchOfferings(force = false): Promise<PurchasesOfferin
           pricePerMonthString?: string | null;
         };
         const catalogueGbp = catalogueGbpAmount(pkg);
-        const displayed = packagePriceLabel(pkg, lastStorefront);
+        const displayed = packagePriceLabel(pkg);
         track('purchases_price_compare', {
           storefront: lastStorefront ?? '',
           package_id: pkg.identifier,
@@ -283,6 +290,17 @@ async function refreshTrialEligibility(
   P: PurchasesModule['default'],
   pkgs: PurchasesPackage[],
 ): Promise<void> {
+  const describe = () =>
+    `storefront ${lastStorefront ?? '?'} · ` +
+    pkgs
+      .map((p) => {
+        const intro = p.product.introPrice;
+        const offer = intro ? `intro ${intro.price} ${intro.period ?? ''}`.trim() : 'no intro';
+        // 0 unknown · 1 already used · 2 eligible · 3 no offer
+        return `${p.product.identifier}: ${offer}, elig ${trialEligibility.get(p.product.identifier) ?? '-'}`;
+      })
+      .join(' | ');
+  trialDebug = describe();
   if (Platform.OS !== 'ios' || pkgs.length === 0) return;
   try {
     const ids = pkgs.map((p) => p.product.identifier);
@@ -291,6 +309,7 @@ async function refreshTrialEligibility(
       const status = result[id]?.status;
       if (typeof status === 'number') trialEligibility.set(id, status);
     }
+    trialDebug = describe();
     track('purchases_trial_eligibility', {
       statuses: ids.map((id) => `${id}:${trialEligibility.get(id) ?? 'none'}`).join(','),
     });
@@ -513,18 +532,12 @@ export async function presentRevenueCatPaywall(): Promise<
   }
 }
 
-export function packagePriceLabel(
-  pkg: PurchasesPackage,
-  storefront: string | null = lastStorefront,
-): string {
-  return formatPackagePrice(pkg, storefront);
+export function packagePriceLabel(pkg: PurchasesPackage): string {
+  return formatPackagePrice(pkg);
 }
 
-export function packageMonthlyEquivalent(
-  pkg: PurchasesPackage,
-  storefront: string | null = lastStorefront,
-): string | null {
-  return formatMonthlyEquivalent(pkg, storefront);
+export function packageMonthlyEquivalent(pkg: PurchasesPackage): string | null {
+  return formatMonthlyEquivalent(pkg);
 }
 
 async function readStorefront(

@@ -5,6 +5,10 @@
  * waitlistEmail.ts so welcome and lifecycle emails share one house style.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 export const BRAND = {
   primary: '#2D7DF6',
   primaryDark: '#1F62C9',
@@ -29,6 +33,20 @@ export function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Designed HTML lives next to the compiled JS in lib/, or in src/ during tests. */
+export function loadEmailTemplate(fileName: string): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [join(here, fileName), join(here, '../src', fileName)];
+  for (const path of candidates) {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      // try the next path
+    }
+  }
+  throw new Error(`email_template_missing:${fileName}`);
 }
 
 export function emailShell(opts: { preheader: string; bodyRows: string }): string {
