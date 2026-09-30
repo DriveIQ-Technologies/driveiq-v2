@@ -65,7 +65,7 @@ let cachedOffering: PurchasesOffering | null = null;
 let offeringsPrefetch: Promise<PurchasesOffering | null> | null = null;
 /** productId → RevenueCat INTRO_ELIGIBILITY_STATUS, for this Apple ID. */
 const trialEligibility = new Map<string, number>();
-/** Dev builds only: why each plan does or doesn't show "7 days free". */
+/** Why each plan shows this price and does or doesn't show "7 days free". */
 let trialDebug = '';
 
 /** Store country, Apple's intro offer, and eligibility per plan (dev builds). */
@@ -297,7 +297,8 @@ async function refreshTrialEligibility(
         const intro = p.product.introPrice;
         const offer = intro ? `intro ${intro.price} ${intro.period ?? ''}`.trim() : 'no intro';
         // 0 unknown · 1 already used · 2 eligible · 3 no offer
-        return `${p.product.identifier}: ${offer}, elig ${trialEligibility.get(p.product.identifier) ?? '-'}`;
+        const price = `${p.product.priceString ?? p.product.price} ${p.product.currencyCode ?? ''}`.trim();
+        return `${p.product.identifier}: ${price}, ${offer}, elig ${trialEligibility.get(p.product.identifier) ?? '-'}`;
       })
       .join(' | ');
   trialDebug = describe();
@@ -420,14 +421,21 @@ function applyCustomerInfo(info: CustomerInfo, pkg?: PurchasesPackage): void {
 
 /** Re-fetch offerings then buy — cached packages after logIn can hang StoreKit. */
 export async function purchaseSelectedPackage(identifier: string): Promise<PurchaseResult> {
-  let offering = cachedOffering;
-  try {
-    offering =
-      (await withTimeout(prefetchOfferings(true), 12_000, 'offerings-timeout')) ?? cachedOffering;
-  } catch {
-    offering = cachedOffering;
+  const find = (o: PurchasesOffering | null) =>
+    o?.availablePackages.find((p) => p.identifier === identifier);
+  // Use the plan the paywall already loaded. Every tap on Subscribe used to
+  // re-download the offerings (plus the storefront and trial-eligibility
+  // checks that ride along) before asking StoreKit for the payment sheet —
+  // up to 12 seconds of nothing on a slow connection. Fetch only if the plan
+  // somehow isn't cached.
+  let pkg = find(cachedOffering);
+  if (!pkg) {
+    try {
+      pkg = find(await withTimeout(prefetchOfferings(true), 12_000, 'offerings-timeout'));
+    } catch {
+      pkg = undefined;
+    }
   }
-  const pkg = offering?.availablePackages.find((p) => p.identifier === identifier);
   if (!pkg) {
     return {
       ok: false,

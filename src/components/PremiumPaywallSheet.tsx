@@ -105,6 +105,9 @@ export function PremiumPaywallSheet({
   );
   const [loading, setLoading] = useState(cached.length === 0);
   const [busy, setBusy] = useState(false);
+  // Long-press the small print to see what the store returned (country,
+  // currency, trial). For support: "why is it in dollars / no free week?"
+  const [showStoreInfo, setShowStoreInfo] = useState(false);
   const enter = useRef(new Animated.Value(0)).current;
   const inFlight = useRef(false);
   const visibleRef = useRef(visible);
@@ -403,10 +406,17 @@ export function PremiumPaywallSheet({
               </>
             )}
           </Pressable>
-          <Text style={styles.finePrint}>{finePrint}</Text>
-          {__DEV__ ? (
-            // Development builds only: why the trial is or isn't offered.
-            <Text style={styles.devTrial}>{getTrialDebugInfo() || 'trial check not run yet'}</Text>
+          <Text
+            style={styles.finePrint}
+            onLongPress={() => setShowStoreInfo((v) => !v)}
+            suppressHighlighting
+          >
+            {finePrint}
+          </Text>
+          {__DEV__ || showStoreInfo ? (
+            <Text style={styles.devTrial} selectable>
+              {getTrialDebugInfo() || 'Store details not loaded yet'}
+            </Text>
           ) : null}
           <View style={styles.legalRow}>
             <Pressable onPress={() => openUrl(TERMS_URL)} hitSlop={8}>

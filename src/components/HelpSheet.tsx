@@ -90,7 +90,7 @@ export function HelpSheet({ visible, onClose, onOpenAISupport }: Props) {
           </Pressable>
         </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
           {FAQS.map((item, i) => {
             const expanded = open === i;
             return (

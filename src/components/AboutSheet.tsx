@@ -50,7 +50,7 @@ export function AboutSheet({
           </Pressable>
         </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
           <View style={styles.brandBlock}>
             <View style={styles.logoBadge}>
               <Image

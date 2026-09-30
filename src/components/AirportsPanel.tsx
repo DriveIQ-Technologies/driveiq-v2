@@ -74,7 +74,7 @@ export function AirportsPanel({ visible, onClose, onPickAirport, onNavigate }: P
           </Pressable>
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+        <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           {loading && (
             <View style={styles.loading}>
               <ActivityIndicator color={colors.primary} />

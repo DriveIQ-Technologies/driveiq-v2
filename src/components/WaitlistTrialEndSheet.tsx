@@ -9,6 +9,7 @@ import { track, trackScreen } from '@/services/analytics';
 import { loadSavedFlights } from '@/services/savedFlights';
 import { loadSavedStations } from '@/services/savedStations';
 import { showPremiumPaywall } from '@/services/subscription';
+import { markWaitlistEndedShown } from '@/services/waitlistEnded';
 import { colors } from '@/theme/colors';
 
 interface Props {
@@ -67,6 +68,8 @@ export function WaitlistTrialEndSheet({ visible, onClose }: Props) {
   useEffect(() => {
     if (!visible) return;
     trackScreen('waitlist_trial_end');
+    // Only now is it recorded as seen (see services/waitlistEnded.ts).
+    void markWaitlistEndedShown();
     setUsed(null);
     void (async () => {
       try {

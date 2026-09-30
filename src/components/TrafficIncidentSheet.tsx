@@ -60,7 +60,7 @@ export function TrafficIncidentSheet({ incident, onClose, onNavigate }: Props) {
           </Pressable>
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 24 }}>
+        <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 24 }}>
           {incident.location ? (
             <Text style={styles.location}>{incident.location}</Text>
           ) : null}

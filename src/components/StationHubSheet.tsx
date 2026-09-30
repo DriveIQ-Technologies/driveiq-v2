@@ -238,7 +238,7 @@ export function StationHubSheet({ station, onClose, onNavigate, onFirstStationSa
           </Pressable>
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+        <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           {stationBoundaryLocked ? (
             <Pressable
               style={styles.inlineUpgradeBar}

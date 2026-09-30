@@ -183,7 +183,7 @@ export function AccountSheet({ visible, section, onClose }: Props) {
       >
         <View style={styles.sheet}>
           <View style={styles.handle} />
-          <ScrollView
+          <ScrollView showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ paddingBottom: 24 }}
           >

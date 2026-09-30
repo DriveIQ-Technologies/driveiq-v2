@@ -113,7 +113,7 @@ export function ConnectionsPanel({ visible, onClose, onOpenStation }: Props) {
           </Pressable>
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+        <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           <Text style={styles.hubSectionLabel}>Major stations</Text>
           <Text style={styles.hubHint}>
             Tap a station for every line serving it. Tube, Elizabeth line,

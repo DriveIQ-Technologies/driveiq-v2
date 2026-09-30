@@ -364,7 +364,7 @@ export function AirportFlightsSheet({ airport, onClose, onNavigate }: Props) {
           </Pressable>
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+        <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           {onNavigate ? (
             <Pressable
               onPress={() => onNavigate(airport)}

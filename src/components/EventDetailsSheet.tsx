@@ -168,7 +168,7 @@ function SheetBody({
       : null;
 
   return (
-    <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+    <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={styles.bodyContent}>
       <View style={styles.handle} />
       <View style={[styles.tagRow]}>
         <View style={[styles.tag, { backgroundColor: accent }]}>

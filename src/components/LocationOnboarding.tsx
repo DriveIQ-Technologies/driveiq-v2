@@ -62,7 +62,13 @@ export function LocationOnboarding({ open, onDone }: Props) {
     track('location_onboarding_enabled');
     setBusy(true);
     await markLocationOnboardingSeen();
-    const location = await requestForegroundLocation();
+    // The system prompt answers at once; the GPS fix after "Allow" can take a
+    // while indoors. Don't hold the card open for it — the map reads the
+    // position again when it arrives / when the app comes back to the front.
+    const location = await Promise.race([
+      requestForegroundLocation(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+    ]);
     track('location_permission_result', { granted: Boolean(location), source: 'onboarding' });
     if (!location) {
       track('location_onboarding_denied');
@@ -206,17 +212,22 @@ const styles = StyleSheet.create({
     marginBottom: 18,
     fontStyle: 'italic',
   },
+  // Full-width, fixed height. This had `flex: 1.4` left over from when it sat
+  // in a row beside a "Not now" button; in a column that squashed it to its
+  // padding, hiding the label and leaving a thin blue bar people couldn't
+  // tell was a button — so the card never closed and iOS never asked.
   enableBtn: {
-    flex: 1.4,
-    paddingVertical: 13,
-    borderRadius: 12,
+    alignSelf: 'stretch',
+    minHeight: 50,
+    paddingVertical: 14,
+    borderRadius: 14,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   enableText: {
     color: colors.textOnPrimary,
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '800',
   },
 });

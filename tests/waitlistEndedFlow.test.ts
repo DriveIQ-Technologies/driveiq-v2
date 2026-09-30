@@ -38,7 +38,17 @@ vi.mock('@/services/subscription', () => ({
 }));
 vi.mock('@/services/analytics', () => ({ track: vi.fn(), refreshUserTraits: vi.fn() }));
 
-const { presentWaitlistEndedIfDue, registerWaitlistEndedHost } = await import('@/services/waitlistEnded');
+const { markWaitlistEndedShown, presentWaitlistEndedIfDue, registerWaitlistEndedHost } = await import(
+  '@/services/waitlistEnded'
+);
+
+/** Pending "it's on screen" confirmations from the fake sheet. */
+let marks: Promise<void>[] = [];
+/** An app open: run the check, then let the sheet confirm it appeared. */
+async function open() {
+  await presentWaitlistEndedIfDue();
+  await Promise.all(marks);
+}
 
 const DAY = 24 * 60 * 60 * 1000;
 const endedYesterday = new Date(Date.now() - DAY).toISOString();
@@ -52,30 +62,51 @@ describe('waitlist week ended popup, end to end', () => {
     currentUser = { uid: 'donnie', isAnonymous: false };
     premium = 'none';
     shown = 0;
+    marks = [];
+    // Like the real sheet: once visible, it confirms, and only then is it seen.
     registerWaitlistEndedHost(() => {
       shown += 1;
+      marks.push(markWaitlistEndedShown());
     });
   });
 
   it('shows when the week ended and the phone has no copy of it (reinstall / new phone)', async () => {
     server['users/donnie/entitlements/waitlist'] = { premiumUntil: endedYesterday };
-    await presentWaitlistEndedIfDue();
+    await open();
     expect(shown).toBe(1);
   });
 
   it('shows when the ended week is still in the phone cache', async () => {
     store.set('driveiq.premium.trialEnds', endedYesterday);
     store.set('driveiq.premium.trialUid', 'donnie');
-    await presentWaitlistEndedIfDue();
+    await open();
     expect(shown).toBe(1);
   });
 
   it('shows once only, however often the app is opened', async () => {
     server['users/donnie/entitlements/waitlist'] = { premiumUntil: endedYesterday };
-    await presentWaitlistEndedIfDue();
-    await presentWaitlistEndedIfDue();
-    await presentWaitlistEndedIfDue();
+    await open();
+    await open();
+    await open();
     expect(shown).toBe(1);
+  });
+
+  it('shows again if the screen was rebuilt before the popup appeared', async () => {
+    server['users/donnie/entitlements/waitlist'] = { premiumUntil: endedYesterday };
+    // Start-up: the check runs, but the screen is rebuilt before the sheet
+    // renders, so it never confirms it was on screen.
+    registerWaitlistEndedHost(() => {
+      shown += 1;
+    });
+    await presentWaitlistEndedIfDue();
+    // The rebuilt screen registers again and checks again.
+    registerWaitlistEndedHost(() => {
+      shown += 1;
+      marks.push(markWaitlistEndedShown());
+    });
+    await open();
+    await open();
+    expect(shown).toBe(2); // lost once, then shown — and not a third time
   });
 
   it('does not show while the week is still running', async () => {
@@ -83,22 +114,22 @@ describe('waitlist week ended popup, end to end', () => {
       premiumUntil: new Date(Date.now() + DAY).toISOString(),
     };
     premium = 'waitlist';
-    await presentWaitlistEndedIfDue();
+    await open();
     expect(shown).toBe(0);
   });
 
   it('does not show to someone who has since subscribed', async () => {
     server['users/donnie/entitlements/waitlist'] = { premiumUntil: endedYesterday };
     premium = 'revenuecat';
-    await presentWaitlistEndedIfDue();
+    await open();
     expect(shown).toBe(0);
   });
 
   it('does not show when signed out, or for an account that never had a week', async () => {
     currentUser = null;
-    await presentWaitlistEndedIfDue();
+    await open();
     currentUser = { uid: 'someone-else', isAnonymous: false };
-    await presentWaitlistEndedIfDue();
+    await open();
     expect(shown).toBe(0);
   });
 
@@ -106,14 +137,14 @@ describe('waitlist week ended popup, end to end', () => {
     store.set('driveiq.premium.trialEnds', new Date(Date.now() + 3 * DAY).toISOString());
     store.set('driveiq.premium.trialUid', 'donnie');
     server['users/donnie/entitlements/waitlist'] = { premiumUntil: endedYesterday };
-    await presentWaitlistEndedIfDue();
+    await open();
     expect(shown).toBe(1);
   });
 
   it("ignores another account's cached week on a shared phone", async () => {
     store.set('driveiq.premium.trialEnds', endedYesterday);
     store.set('driveiq.premium.trialUid', 'previous-user');
-    await presentWaitlistEndedIfDue();
+    await open();
     expect(shown).toBe(0);
   });
 });

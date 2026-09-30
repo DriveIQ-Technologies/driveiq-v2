@@ -9,6 +9,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { isQuietHours } from './londonTime.js';
 import { sendPushToTokens } from './push.js';
 import type { CachedFlight } from './airports.js';
+import { evaluateWatchedFlight, type WatchedFlightState } from './flightAlerts.js';
 import type { TrafficIncident } from './corridors.js';
 
 export interface NotificationPrefs {
@@ -240,7 +241,7 @@ export async function dispatchPushNotifications(opts: {
 
     const prevIncidents = (state.incidents ?? {}) as Record<string, IncidentSnapshot>;
     const prevLines = (state.lines ?? {}) as Record<string, string>;
-    const prevFlights = (state.flights ?? {}) as Record<string, SavedFlight>;
+    const prevFlights = (state.flights ?? {}) as Record<string, WatchedFlightState>;
     const isFirstRun =
       Object.keys(prevIncidents).length === 0 && Object.keys(prevLines).length === 0;
 
@@ -302,44 +303,61 @@ export async function dispatchPushNotifications(opts: {
       }
     }
 
+    // Watched flights: evaluated once here; the result feeds both the alerts
+    // and the state written below.
+    const nextFlightState: Record<string, WatchedFlightState> = {};
     if (prefs['saved-flights'] && watched.length > 0) {
       const liveById: Record<string, CachedFlight> = {};
       for (const flights of Object.values(opts.flightsByAirport)) {
         for (const f of flights) liveById[f.id] = f;
       }
-      for (const prev of watched) {
-        const next = liveById[prev.id];
-        if (!next) continue;
-        const before = prevFlights[prev.id] ?? prev;
-        const becameCancelled = !before.cancelled && next.cancelled;
-        const becameDelayed = !before.delayed && next.delayed;
-        const delayWorse =
-          before.delayed &&
-          next.delayed &&
-          (next.delayMinutes ?? 0) >= (before.delayMinutes ?? 0) + 15;
-        if (!becameCancelled && !becameDelayed && !delayWorse) continue;
-        const title = becameCancelled
-          ? `${next.flightNumber} cancelled`
-          : `${next.flightNumber} delayed`;
-        const body = await loadCopyLine(
-          opts.db,
-          'flight',
-          `flight-${next.id}`,
-          becameCancelled
-            ? `${next.flightNumber} to/from ${next.counterpart} is cancelled.`
-            : `${next.flightNumber} is now delayed${next.delayMinutes ? ` by ${next.delayMinutes}m` : ''}.`,
-        );
+      let onBoard = 0;
+      let flightAlerts = 0;
+      for (const saved of watched) {
+        const live = liveById[saved.id];
+        if (!live) continue;
+        onBoard += 1;
+        const { alert, next } = evaluateWatchedFlight(saved, prevFlights[saved.id], live);
+        nextFlightState[saved.id] = next;
+        if (!alert) continue;
+        flightAlerts += 1;
         payloads.push({
-          title,
-          body,
+          title: alert.title,
+          body: alert.body,
           // airportId so the tap opens the right airport's flight list.
           data: {
             kind: 'saved-flight',
-            flightId: next.id,
-            airportId: prev.airportId,
+            flightId: live.id,
+            airportId: saved.airportId,
+            event: alert.kind,
           },
         });
       }
+      // Why a watcher did or didn't get a flight alert this run: a watched
+      // flight that's not on the board (wrong id / outside the window) can't
+      // alert, and one that's on the board only alerts when it changes.
+      logger.info('dispatch.flights', {
+        uid,
+        watched: watched.length,
+        onBoard,
+        alerts: flightAlerts,
+        states: watched
+          .map((w) => {
+            const live = liveById[w.id];
+            if (!live) return `${w.flightNumber}:not on board`;
+            const state = live.cancelled
+              ? 'cancelled'
+              : live.status === 'Arrived' || live.status === 'Departed'
+                ? live.status.toLowerCase()
+                : live.delayed
+                  ? `+${live.delayMinutes ?? 0}m`
+                  : 'on time';
+            return `${live.flightNumber}:${state}`;
+          })
+          .slice(0, 5),
+      });
+    } else if (watched.length > 0) {
+      logger.info('dispatch.flights', { uid, watched: watched.length, prefOff: true });
     }
 
     const deadTokens = new Set<string>();
@@ -364,26 +382,7 @@ export async function dispatchPushNotifications(opts: {
     for (const inc of opts.incidents) nextIncidents[inc.id] = incidentFingerprint(inc);
     const nextLines: Record<string, string> = {};
     for (const l of opts.lines) nextLines[l.id] = l.severityBucket;
-    const nextFlights: Record<string, SavedFlight> = { ...prevFlights };
-    if (prefs['saved-flights']) {
-      const liveById: Record<string, CachedFlight> = {};
-      for (const flights of Object.values(opts.flightsByAirport)) {
-        for (const f of flights) liveById[f.id] = f;
-      }
-      for (const w of watched) {
-        const live = liveById[w.id];
-        if (live) {
-          nextFlights[w.id] = {
-            id: live.id,
-            airportId: w.airportId,
-            flightNumber: live.flightNumber,
-            cancelled: live.cancelled,
-            delayed: live.delayed,
-            delayMinutes: live.delayMinutes,
-          };
-        }
-      }
-    }
+    const nextFlights: Record<string, WatchedFlightState> = { ...prevFlights, ...nextFlightState };
 
     await stateRef.set(
       {

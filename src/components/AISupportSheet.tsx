@@ -1153,7 +1153,7 @@ export function AISupportSheet({
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         >
-          <ScrollView
+          <ScrollView showsVerticalScrollIndicator={false}
             ref={scrollRef}
             style={styles.thread}
             contentContainerStyle={[

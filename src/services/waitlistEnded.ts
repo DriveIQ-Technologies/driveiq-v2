@@ -24,6 +24,8 @@ let host: Host | null = null;
 /** A popup that came due before the host mounted, shown once it does. */
 let pending = false;
 let checking = false;
+/** The week the popup is being shown for, until the sheet confirms it's on screen. */
+let dueMarker: string | null = null;
 
 export function registerWaitlistEndedHost(fn: Host | null): void {
   host = fn;
@@ -31,6 +33,15 @@ export function registerWaitlistEndedHost(fn: Host | null): void {
     pending = false;
     fn();
   }
+}
+
+/** Called by the sheet once it is visible: from now on it won't show again. */
+export async function markWaitlistEndedShown(): Promise<void> {
+  const marker = dueMarker;
+  dueMarker = null;
+  if (!marker) return;
+  track('waitlist_ended_shown');
+  await setWaitlistTrialEndSeenMarker(marker);
 }
 
 /** Safe to call often (app open, foreground, sign-in): it shows at most once. */
@@ -57,11 +68,17 @@ export async function presentWaitlistEndedIfDue(): Promise<void> {
     });
     if (action === 'none' || !marker) return;
 
-    // Record first, so a crash or a second call can never show it twice.
-    await setWaitlistTrialEndSeenMarker(marker);
-    if (action !== 'show') return;
+    if (action !== 'show') {
+      // Subscribed since, or came back months later: nothing to show.
+      await setWaitlistTrialEndSeenMarker(marker);
+      return;
+    }
 
-    track('waitlist_ended_shown');
+    // Not recorded as seen yet: that happens when the sheet is actually on
+    // screen (markWaitlistEndedShown). Recording it here lost the popup for
+    // good whenever the screen was rebuilt during start-up (sign-in restoring)
+    // between deciding to show it and it appearing.
+    dueMarker = marker;
     if (host) host();
     else pending = true;
   } catch (e) {

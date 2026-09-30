@@ -182,7 +182,7 @@ export function NotificationSettingsPanel({ visible, onClose }: Props) {
           </Pressable>
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
+        <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 28 }}>
           {!hasAccount ? (
             <View style={styles.gateCard}>
               <View style={styles.gateIcon}>

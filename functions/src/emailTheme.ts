@@ -6,8 +6,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 export const BRAND = {
   primary: '#2D7DF6',
@@ -37,7 +36,10 @@ export function escapeHtml(value: string): string {
 
 /** Designed HTML lives next to the compiled JS in lib/, or in src/ during tests. */
 export function loadEmailTemplate(fileName: string): string {
-  const here = dirname(fileURLToPath(import.meta.url));
+  // __dirname, not import.meta.url: functions compile to CommonJS, where
+  // import.meta is a build error (it stopped `firebase deploy` at predeploy).
+  // Vitest provides __dirname too.
+  const here = __dirname;
   const candidates = [join(here, fileName), join(here, '../src', fileName)];
   for (const path of candidates) {
     try {

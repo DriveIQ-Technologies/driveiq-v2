@@ -30,7 +30,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('handleNotifyPremiumStarted', () => {
   it('sends the annual trial welcome once', async () => {
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const { db, store } = fakeDb();
 
@@ -66,7 +66,7 @@ describe('handleNotifyPremiumStarted', () => {
   });
 
   it('sends the monthly trial welcome', async () => {
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const { db, store } = fakeDb();
 
@@ -88,7 +88,7 @@ describe('handleNotifyPremiumStarted', () => {
   });
 
   it('does not send for a paid-from-day-one subscribe', async () => {
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const { db } = fakeDb();
 

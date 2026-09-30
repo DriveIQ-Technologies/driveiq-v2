@@ -55,7 +55,7 @@ export function VenueEventsSheet({ events, lockedEvents = [], onClose, onPickEve
           </Pressable>
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 24 }}>
+        <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 24 }}>
           {(events ?? []).map((event) => {
             const desc = pinDescriptorFor(event);
             const cat = CATEGORY_FILTERS.find((c) => c.key === categoryFilterFor(event));

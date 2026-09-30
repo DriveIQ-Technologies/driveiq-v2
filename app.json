@@ -3,7 +3,7 @@
     "name": "DriveIQ",
     "slug": "driveiq-91cbfgcslw1jeepr9yba",
     "scheme": "driveiq",
-    "version": "6.3.4",
+    "version": "6.3.6",
     "orientation": "portrait",
     "icon": "./assets/driveiq-app-icon-1024.png",
     "userInterfaceStyle": "light",
@@ -30,7 +30,7 @@
     "android": {
       "package": "driveiq.app",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/driveiq-logo@hd.png",
+        "foregroundImage": "./assets/driveiq-adaptive-foreground.png",
         "backgroundColor": "#060B14"
       },
       "permissions": [
@@ -39,7 +39,7 @@
         "POST_NOTIFICATIONS",
         "RECEIVE_BOOT_COMPLETED"
       ],
-      "versionCode": 35
+      "versionCode": 38
     },
     "web": {
       "bundler": "metro"
@@ -57,7 +57,9 @@
       [
         "expo-notifications",
         {
-          "enableBackgroundRemoteNotifications": true
+          "enableBackgroundRemoteNotifications": true,
+          "icon": "./assets/notification-icon.png",
+          "color": "#2D7DF6"
         }
       ],
       [

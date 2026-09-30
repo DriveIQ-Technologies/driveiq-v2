@@ -109,7 +109,7 @@ export function SettingsSheet({ visible, onClose, onOpenAccount }: Props) {
           </Pressable>
         </View>
 
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
           <Text style={styles.sectionTitle}>Account</Text>
           {rows.map((row) => (
             <Pressable

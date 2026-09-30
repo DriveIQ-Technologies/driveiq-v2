@@ -155,7 +155,7 @@ export function LineDetailSheet({
           ) : null}
         </View>
 
-        <ScrollView
+        <ScrollView showsVerticalScrollIndicator={false}
           style={styles.body}
           contentContainerStyle={{ paddingBottom: 28 }}
           refreshControl={

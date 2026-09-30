@@ -91,7 +91,7 @@ export function FeedbackSheet({ visible, onClose }: Props) {
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <ScrollView contentContainerStyle={styles.body}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.body}>
             <Text style={styles.lead}>
               We read everything. Tell us what's working, what isn't, or an
               event we should add.

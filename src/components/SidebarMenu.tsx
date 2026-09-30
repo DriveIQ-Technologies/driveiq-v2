@@ -32,7 +32,7 @@ import {
   showPremiumPaywall,
   syncPremiumEntitlement,
 } from '@/services/subscription';
-import { getWaitlistTrialEnds } from '@/services/waitlist';
+import { getLastWaitlistWeekEnd, getWaitlistTrialEnds } from '@/services/waitlist';
 import { colors } from '@/theme/colors';
 import type { AccountSection } from '@/components/AccountSheet';
 
@@ -116,6 +116,9 @@ export function SidebarMenu({
     'revenuecat' | 'waitlist' | 'preview' | 'dev_unlock' | 'none'
   >('none');
   const [waitlistDays, setWaitlistDays] = useState<number | null>(null);
+  // The waitlist week is once per account: after it's used (even once it has
+  // ended and they're back on free) there is nothing left to claim.
+  const [waitlistUsed, setWaitlistUsed] = useState(false);
   // From the store: only true when this Apple ID can actually get the trial.
   const [trialAvailable, setTrialAvailable] = useState(() => premiumTrialAvailable());
 
@@ -123,12 +126,14 @@ export function SidebarMenu({
     if (visible) {
       trackScreen('sidebar_menu', { signed_in: signedIn });
       void (async () => {
-        const [pro, source, ends] = await Promise.all([
+        const [pro, source, ends, lastWeek] = await Promise.all([
           hasProAccess(),
           getPremiumSource(),
           getWaitlistTrialEnds(),
+          getLastWaitlistWeekEnd(),
         ]);
         setIsPremium(pro);
+        setWaitlistUsed(lastWeek != null);
         setPremiumSource(source);
         setWaitlistDays(source === 'waitlist' ? waitlistDaysLeft(ends) : null);
         if (!pro) {
@@ -203,7 +208,7 @@ export function SidebarMenu({
           body: 'Email, password, delete account',
           handler: () => afterClose(onOpenSettings),
         },
-        ...(!isPremium
+        ...(!isPremium && !waitlistUsed
           ? [
               {
                 key: 'waitlist',
@@ -482,7 +487,7 @@ export function SidebarMenu({
             </Pressable>
           </View>
 
-          <ScrollView
+          <ScrollView showsVerticalScrollIndicator={false}
             style={styles.body}
             contentContainerStyle={{ paddingBottom: 28 }}
           >
