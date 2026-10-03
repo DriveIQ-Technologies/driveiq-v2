@@ -74,6 +74,8 @@ export async function handleNotifyPremiumStarted(opts: {
       {
         premiumWelcomeSentAt: nowIso,
         premiumPlan: plan,
+        premiumStatus: 'trial',
+        premiumSource: 'store',
         premiumTrialEndsAt: trialEnds.toISOString(),
         updatedAt: nowIso,
       },

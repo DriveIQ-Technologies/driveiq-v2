@@ -45,6 +45,7 @@ import {
 import { handleDeleteAccount } from './deleteAccount.js';
 import { handleRegisterAccount } from './accountLifecycle.js';
 import { handleNotifyPremiumStarted } from './premiumStarted.js';
+import { handleRevenueCatWebhook, handleTrialDay6Reminders, webhookAuthorized } from './premiumBilling.js';
 
 initializeApp();
 const db = getFirestore();
@@ -63,6 +64,7 @@ const brevoApiKey = defineSecret('BREVO_API_KEY');
 const brevoSenderEmail = defineSecret('BREVO_SENDER_EMAIL');
 const brevoSenderName = defineSecret('BREVO_SENDER_NAME');
 const eventsAdminKey = defineSecret('EVENTS_ADMIN_KEY');
+const revenueCatWebhookAuth = defineSecret('REVENUECAT_WEBHOOK_AUTH');
 
 const WAITLIST_FN_SA = 'firebase-adminsdk-fbsvc@driveiq-app.iam.gserviceaccount.com';
 const london = { timeZone: 'Europe/London' };
@@ -1156,5 +1158,80 @@ export const notifyPremiumStartedHttp = onRequest(
       }
       res.status(200).json({ error: { message: 'Could not send premium welcome', status: 'INTERNAL' } });
     }
+  },
+);
+
+/**
+ * RevenueCat → user plan. Waitlist weeks are not written here.
+ * Authorization header must match REVENUECAT_WEBHOOK_AUTH.
+ */
+export const revenueCatWebhookHttp = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 30,
+    invoker: 'public',
+    serviceAccount: WAITLIST_FN_SA,
+    secrets: [brevoApiKey, brevoSenderEmail, brevoSenderName, revenueCatWebhookAuth],
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).send('POST required');
+      return;
+    }
+    let secret = '';
+    try {
+      secret = (await keyOrEmpty(revenueCatWebhookAuth)) ?? '';
+    } catch {
+      secret = '';
+    }
+    if (!webhookAuthorized(req.get('authorization'), secret)) {
+      res.status(401).send('unauthorized');
+      return;
+    }
+    const body = (req.body ?? {}) as { event?: Record<string, unknown> };
+    const event = body.event ?? {};
+    try {
+      const result = await handleRevenueCatWebhook({
+        db,
+        brevo: {
+          apiKey: await keyOrEmpty(brevoApiKey),
+          senderEmail: await keyOrEmpty(brevoSenderEmail),
+          senderName: await keyOrEmpty(brevoSenderName),
+        },
+        event: {
+          type: typeof event.type === 'string' ? event.type : undefined,
+          app_user_id: typeof event.app_user_id === 'string' ? event.app_user_id : undefined,
+          product_id: typeof event.product_id === 'string' ? event.product_id : undefined,
+          period_type: typeof event.period_type === 'string' ? event.period_type : undefined,
+          expiration_at_ms: typeof event.expiration_at_ms === 'number' ? event.expiration_at_ms : null,
+        },
+      });
+      res.status(200).json(result);
+    } catch (e) {
+      logger.error('revenuecat.webhook_fail', { error: e instanceof Error ? e.message : String(e) });
+      res.status(500).send('error');
+    }
+  },
+);
+
+/** Day before the trial charge. Skips anyone who already cancelled. */
+export const premiumTrialDay6 = onSchedule(
+  {
+    schedule: 'every day 09:00',
+    timeoutSeconds: 120,
+    ...london,
+    serviceAccount: WAITLIST_FN_SA,
+    secrets: [brevoApiKey, brevoSenderEmail, brevoSenderName],
+  },
+  async () => {
+    const result = await handleTrialDay6Reminders({
+      db,
+      brevo: {
+        apiKey: await keyOrEmpty(brevoApiKey),
+        senderEmail: await keyOrEmpty(brevoSenderEmail),
+        senderName: await keyOrEmpty(brevoSenderName),
+      },
+    });
+    logger.info('premium_day6.done', result);
   },
 );

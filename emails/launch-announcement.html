@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<!--
+  DriveIQ launch email: Brevo CAMPAIGN template (send to the waitlist list).
+  Same "driver pass" design system as functions/src/welcomeFree.html.
+
+  Before sending:
+    - Store links below are the real listings (App Store id 6795638906,
+      Google Play package driveiq.app). They 404 until each store approves.
+    - {{ contact.FIRSTNAME }}, {{ mirror }} and {{ unsubscribe }} are Brevo
+      campaign tags; Brevo fills them in when it sends.
+    - Suggested subject: DriveIQ is live. Your free Premium week is waiting
+-->
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>DriveIQ is live</title>
+<style>
+  :root{color-scheme:light dark;supported-color-schemes:light dark;}
+  @media only screen and (max-width:620px){
+    .w{width:100% !important;}
+    .pad{padding-left:24px !important;padding-right:24px !important;}
+    .h1{font-size:34px !important;line-height:39px !important;}
+    .col{display:block !important;width:100% !important;box-sizing:border-box;}
+    .colr{border-left:0 !important;border-top:1px solid #e6eaf0 !important;padding-left:0 !important;}
+    .f3{display:block !important;width:100% !important;padding:0 0 14px !important;}
+    .btn{display:block !important;width:100% !important;padding:0 0 10px !important;}
+  }
+  @media (prefers-color-scheme:dark){
+    .bg{background:#0c0f15 !important;}
+    .card{background:#141922 !important;border-color:#232a36 !important;}
+    .tint{background:#1a2030 !important;border-color:#283044 !important;}
+    .ink{color:#f2f4f8 !important;}
+    .body{color:#c3cbd8 !important;}
+    .muted{color:#8f99ab !important;}
+    .blue{color:#7fb0ff !important;}
+    .rule,.colr{border-color:#262d3a !important;}
+    .dot{background:#141922 !important;}
+    .rline{border-color:#34507f !important;}
+    .chip{background:#1f3257 !important;color:#cfe0ff !important;}
+    .store{background:#f2f4f8 !important;}
+    .storet{color:#0c0f15 !important;}
+  }
+  [data-ogsc] .ink{color:#f2f4f8 !important;}
+  [data-ogsc] .body{color:#c3cbd8 !important;}
+  [data-ogsc] .muted{color:#8f99ab !important;}
+  [data-ogsc] .blue{color:#7fb0ff !important;}
+</style>
+</head>
+<body class="bg" style="margin:0;padding:0;background:#eef1f5;">
+<span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">DriveIQ is live in London. Your free week of Premium is waiting, no card needed.</span>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="bg" style="width:100%;background:#eef1f5;">
+<tbody><tr><td align="center" style="padding:20px 12px 40px;">
+
+<!-- View in browser -->
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="w" style="width:600px;max-width:600px;">
+  <tbody><tr><td align="center" style="padding:0 6px 14px;">
+    <a href="{{ mirror }}" class="muted" style="font:400 12px Arial,Helvetica,sans-serif;color:#7a8496;text-decoration:underline;">View in browser</a>
+  </td></tr>
+  <tr><td align="right" style="padding:0 6px 16px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right"><tbody><tr>
+      <td width="30" valign="middle" style="width:30px;padding-right:10px;"><img src="https://driveiq.app/assets/driveiq-pin.png" width="30" alt="DriveIQ Technologies" style="display:block;width:30px;height:auto;border:0;"></td>
+      <td valign="middle" align="left"><div class="ink" style="font:bold 20px/21px Arial,Helvetica,sans-serif;letter-spacing:-.4px;color:#0f1522;mso-line-height-rule:exactly;">DriveIQ</div><div class="muted" style="font:bold 8px/13px Arial,Helvetica,sans-serif;letter-spacing:.34em;color:#6b7587;mso-line-height-rule:exactly;">TECHNOLOGIES</div></td>
+    </tr></tbody></table>
+  </td></tr>
+</tbody></table>
+
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="w card" style="width:600px;max-width:600px;background:#fdfdfe;border:1px solid #e1e5ec;border-radius:22px;">
+  <tbody>
+
+  <!-- Pass header -->
+  <tr><td class="pad" style="padding:26px 40px 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr>
+      <td><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tbody><tr><td class="chip" style="background:#e1ebfc;border-radius:6px;padding:5px 9px;font:bold 11px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#2563d9;">NOW LIVE</td></tr></tbody></table></td>
+      <td align="right"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">LDN · 51.5074°N</div></td>
+    </tr></tbody></table>
+  </td></tr>
+
+  <!-- Hero -->
+  <tr><td class="pad" style="padding:30px 40px 0;">
+    <div class="h1 ink" style="font:bold 42px/47px Arial,Helvetica,sans-serif;letter-spacing:-1.5px;color:#0f1522;mso-line-height-rule:exactly;">DriveIQ is live{% if contact.FIRSTNAME %}, {{ contact.FIRSTNAME }}{% endif %}.</div>
+    <div style="height:14px;line-height:14px;font-size:0;">&nbsp;</div>
+    <div class="body" style="font:400 17px/27px Arial,Helvetica,sans-serif;color:#3d4757;mso-line-height-rule:exactly;">You joined before anyone else, so you're first in. London's events, rail, roads and airports are now on one live map, and your first week of Premium is on us.</div>
+    <div style="height:28px;line-height:28px;font-size:0;">&nbsp;</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr>
+      <td class="f3" valign="top" width="33%" style="width:33%;padding-right:12px;"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">YOUR PASS</div><div style="height:6px;line-height:6px;font-size:0;">&nbsp;</div><div class="ink" style="font:bold 16px/22px Arial,Helvetica,sans-serif;color:#0f1522;">7 days Premium</div></td>
+      <td class="f3" valign="top" width="33%" style="width:33%;padding-right:12px;"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">CARD NEEDED</div><div style="height:6px;line-height:6px;font-size:0;">&nbsp;</div><div class="ink" style="font:bold 16px/22px Arial,Helvetica,sans-serif;color:#0f1522;">None</div></td>
+      <td class="f3" valign="top" width="33%" style="width:33%;"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">STATUS</div><div style="height:6px;line-height:6px;font-size:0;">&nbsp;</div><div class="blue" style="font:bold 16px/22px Arial,Helvetica,sans-serif;color:#2563d9;">Ready to claim</div></td>
+    </tr></tbody></table>
+    <div style="height:30px;line-height:30px;font-size:0;">&nbsp;</div>
+
+    <!-- Store buttons (text buttons: render in every client, no images) -->
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr>
+      <td class="btn" width="50%" style="width:50%;padding-right:6px;">
+        <a href="https://apps.apple.com/gb/app/id6795638906" class="store" style="display:block;background:#0f1522;border-radius:14px;padding:13px 16px;text-decoration:none;text-align:center;">
+          <span class="storet" style="display:block;font:400 11px/14px Arial,Helvetica,sans-serif;color:#c3cbd8;">Download on the</span>
+          <span class="storet" style="display:block;font:bold 18px/23px Arial,Helvetica,sans-serif;color:#ffffff;">App Store</span>
+        </a>
+      </td>
+      <td class="btn" width="50%" style="width:50%;padding-left:6px;">
+        <a href="https://play.google.com/store/apps/details?id=driveiq.app" class="store" style="display:block;background:#0f1522;border-radius:14px;padding:13px 16px;text-decoration:none;text-align:center;">
+          <span class="storet" style="display:block;font:400 11px/14px Arial,Helvetica,sans-serif;color:#c3cbd8;">Get it on</span>
+          <span class="storet" style="display:block;font:bold 18px/23px Arial,Helvetica,sans-serif;color:#ffffff;">Google Play</span>
+        </a>
+      </td>
+    </tr></tbody></table>
+  </td></tr>
+
+  <!-- Ticket tear -->
+  <tr><td style="padding:32px 0 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr>
+      <td width="14" height="28" class="bg" style="width:14px;height:28px;background:#eef1f5;border-radius:0 14px 14px 0;font-size:0;line-height:0;">&nbsp;</td>
+      <td style="padding:0 12px;"><div class="rule" style="border-top:2px dashed #d8dee8;height:0;line-height:0;font-size:0;">&nbsp;</div></td>
+      <td width="14" height="28" class="bg" style="width:14px;height:28px;background:#eef1f5;border-radius:14px 0 0 14px;font-size:0;line-height:0;">&nbsp;</td>
+    </tr></tbody></table>
+  </td></tr>
+
+  <!-- Claim steps -->
+  <tr><td class="pad" style="padding:26px 40px 0;">
+    <div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">CLAIM YOUR FREE WEEK</div>
+    <div style="height:10px;line-height:10px;font-size:0;">&nbsp;</div>
+    <div class="ink" style="font:bold 22px/28px Arial,Helvetica,sans-serif;letter-spacing:-.5px;color:#0f1522;mso-line-height-rule:exactly;">Two minutes, three stops</div>
+    <div style="height:24px;line-height:24px;font-size:0;">&nbsp;</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody>
+      <tr><td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td><td width="28" class="rline" style="width:28px;border-left:2px solid #c3d4f1;" valign="top"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-left:-10px;"><tbody><tr><td width="14" height="14" class="dot" style="width:14px;height:14px;background:#fdfdfe;border:2px solid #2f7bf6;border-radius:9px;font-size:0;line-height:0;">&nbsp;</td></tr></tbody></table></td><td valign="top" style="padding:0 0 22px;">
+        <div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">STOP 01</div><div style="height:5px;line-height:5px;font-size:0;">&nbsp;</div>
+        <div class="ink" style="font:bold 17px/23px Arial,Helvetica,sans-serif;color:#0f1522;">Download DriveIQ</div><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div>
+        <div class="body" style="font:400 15px/23px Arial,Helvetica,sans-serif;color:#4b5567;mso-line-height-rule:exactly;">Free on iPhone and Android. Use the buttons above.</div>
+      </td></tr>
+      <tr><td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td><td width="28" class="rline" style="width:28px;border-left:2px solid #c3d4f1;" valign="top"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-left:-10px;"><tbody><tr><td width="14" height="14" class="dot" style="width:14px;height:14px;background:#fdfdfe;border:2px solid #2f7bf6;border-radius:9px;font-size:0;line-height:0;">&nbsp;</td></tr></tbody></table></td><td valign="top" style="padding:0 0 22px;">
+        <div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">STOP 02</div><div style="height:5px;line-height:5px;font-size:0;">&nbsp;</div>
+        <div class="ink" style="font:bold 17px/23px Arial,Helvetica,sans-serif;color:#0f1522;">Sign up with this email address</div><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div>
+        <div class="body" style="font:400 15px/23px Arial,Helvetica,sans-serif;color:#4b5567;mso-line-height-rule:exactly;">The one this email came to. Your Premium week switches on by itself as soon as your account is made.</div>
+      </td></tr>
+      <tr><td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td><td width="28" class="rule" style="width:28px;border-left:2px solid transparent;" valign="top"><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-left:-10px;"><tbody><tr><td width="14" height="14" class="dot" style="width:14px;height:14px;background:#fdfdfe;border:2px solid #2f7bf6;border-radius:9px;font-size:0;line-height:0;">&nbsp;</td></tr></tbody></table></td><td valign="top" style="padding:0;">
+        <div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">STOP 03 · ONLY IF NEEDED</div><div style="height:5px;line-height:5px;font-size:0;">&nbsp;</div>
+        <div class="ink" style="font:bold 17px/23px Arial,Helvetica,sans-serif;color:#0f1522;">Used Apple, Google or another email?</div><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div>
+        <div class="body" style="font:400 15px/23px Arial,Helvetica,sans-serif;color:#4b5567;mso-line-height-rule:exactly;">Open the menu, tap <span class="ink" style="font-weight:bold;color:#0f1522;">Claim waitlist week</span> and enter this email address. We'll send your personal code straight here.</div>
+      </td></tr>
+    </tbody></table>
+  </td></tr>
+
+  <!-- A real alert -->
+  <tr><td class="pad" style="padding:36px 40px 0;">
+    <div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">WHAT IT SOUNDS LIKE</div>
+    <div style="height:10px;line-height:10px;font-size:0;">&nbsp;</div>
+    <div class="ink" style="font:bold 22px/28px Arial,Helvetica,sans-serif;letter-spacing:-.5px;color:#0f1522;mso-line-height-rule:exactly;">You hear first, mid-shift</div>
+    <div style="height:18px;line-height:18px;font-size:0;">&nbsp;</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr><td class="tint" style="background:#f5f7fb;border:1px solid #e3e8f0;border-radius:14px;padding:14px 16px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr>
+        <td width="32" valign="top" style="width:32px;padding-top:1px;"><img src="https://driveiq.app/assets/driveiq-pin.png" width="20" alt="" style="display:block;width:20px;height:auto;border:0;"></td>
+        <td valign="top"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr><td><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">DRIVEIQ · FLIGHTS</div></td><td align="right" class="muted" style="font:400 12px Arial,Helvetica,sans-serif;color:#6b7587;">now</td></tr></tbody></table><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div>
+          <div class="ink" style="font:bold 15px/21px Arial,Helvetica,sans-serif;color:#0f1522;">U2 8538 has landed</div>
+          <div class="body" style="font:400 14px/20px Arial,Helvetica,sans-serif;color:#3d4757;">From Faro, landed 21:50 · Terminal N.</div></td>
+      </tr></tbody></table>
+    </td></tr>
+    <tr><td style="height:10px;line-height:10px;font-size:0;">&nbsp;</td></tr>
+    <tr><td class="tint" style="background:#f5f7fb;border:1px solid #e3e8f0;border-radius:14px;padding:14px 16px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr>
+        <td width="32" valign="top" style="width:32px;padding-top:1px;"><img src="https://driveiq.app/assets/driveiq-pin.png" width="20" alt="" style="display:block;width:20px;height:auto;border:0;"></td>
+        <td valign="top"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr><td><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">DRIVEIQ · RAIL</div></td><td align="right" class="muted" style="font:400 12px Arial,Helvetica,sans-serif;color:#6b7587;">2m ago</td></tr></tbody></table><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div>
+          <div class="ink" style="font:bold 15px/21px Arial,Helvetica,sans-serif;color:#0f1522;">Piccadilly: Part Suspended</div>
+          <div class="body" style="font:400 14px/20px Arial,Helvetica,sans-serif;color:#3d4757;">No service between Cockfosters and Arnos Grove. Expect busy ranks nearby.</div></td>
+      </tr></tbody></table>
+    </td></tr></tbody></table>
+  </td></tr>
+
+  <!-- What's in the week -->
+  <tr><td class="pad" style="padding:40px 40px 0;">
+    <div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">YOUR PREMIUM WEEK</div>
+    <div style="height:10px;line-height:10px;font-size:0;">&nbsp;</div>
+    <div class="ink" style="font:bold 22px/28px Arial,Helvetica,sans-serif;letter-spacing:-.5px;color:#0f1522;mso-line-height-rule:exactly;">Everything, unlocked</div>
+    <div style="height:18px;line-height:18px;font-size:0;">&nbsp;</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody>
+      <tr><td colspan="2" class="rule" style="border-top:1px solid #e6eaf0;font-size:0;line-height:0;">&nbsp;</td></tr>
+      <tr>
+        <td class="col" width="50%" valign="top" style="width:50%;padding:18px 18px 18px 0;"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">EVENTS</div><div style="height:7px;line-height:7px;font-size:0;">&nbsp;</div><div class="ink" style="font:bold 16px/22px Arial,Helvetica,sans-serif;color:#0f1522;">The whole week ahead</div><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div><div class="body" style="font:400 14px/21px Arial,Helvetica,sans-serif;color:#4b5567;mso-line-height-rule:exactly;">Gigs, matches and shows, with when the crowd comes out.</div></td>
+        <td class="col colr" width="50%" valign="top" style="width:50%;padding:18px 0 18px 18px;border-left:1px solid #e6eaf0;"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">FLIGHTS</div><div style="height:7px;line-height:7px;font-size:0;">&nbsp;</div><div class="ink" style="font:bold 16px/22px Arial,Helvetica,sans-serif;color:#0f1522;">The full day, five airports</div><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div><div class="body" style="font:400 14px/21px Arial,Helvetica,sans-serif;color:#4b5567;mso-line-height-rule:exactly;">Watch any flight: landed, delayed or early, you're told.</div></td>
+      </tr>
+      <tr><td colspan="2" class="rule" style="border-top:1px solid #e6eaf0;font-size:0;line-height:0;">&nbsp;</td></tr>
+      <tr>
+        <td class="col" width="50%" valign="top" style="width:50%;padding:18px 18px 18px 0;"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">STATIONS</div><div style="height:7px;line-height:7px;font-size:0;">&nbsp;</div><div class="ink" style="font:bold 16px/22px Arial,Helvetica,sans-serif;color:#0f1522;">All 7 London hubs</div><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div><div class="body" style="font:400 14px/21px Arial,Helvetica,sans-serif;color:#4b5567;mso-line-height-rule:exactly;">Live Tube, Elizabeth line and National Rail status.</div></td>
+        <td class="col colr" width="50%" valign="top" style="width:50%;padding:18px 0 18px 18px;border-left:1px solid #e6eaf0;"><div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">AI AGENT</div><div style="height:7px;line-height:7px;font-size:0;">&nbsp;</div><div class="ink" style="font:bold 16px/22px Arial,Helvetica,sans-serif;color:#0f1522;">Plan the whole shift</div><div style="height:4px;line-height:4px;font-size:0;">&nbsp;</div><div class="body" style="font:400 14px/21px Arial,Helvetica,sans-serif;color:#4b5567;mso-line-height-rule:exactly;">Ask as much as you like. Straight answers, not links.</div></td>
+      </tr>
+      <tr><td colspan="2" class="rule" style="border-top:1px solid #e6eaf0;font-size:0;line-height:0;">&nbsp;</td></tr>
+    </tbody></table>
+  </td></tr>
+
+  <!-- After the week -->
+  <tr><td style="padding:36px 10px 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;"><tbody><tr><td class="tint pad" style="background:#f5f7fb;border:1px solid #e3e8f0;border-radius:16px;padding:28px 30px;">
+      <div class="muted" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#6b7587;">AFTER YOUR WEEK</div>
+      <div style="height:10px;line-height:10px;font-size:0;">&nbsp;</div>
+      <div class="ink" style="font:bold 20px/26px Arial,Helvetica,sans-serif;letter-spacing:-.4px;color:#0f1522;mso-line-height-rule:exactly;">Nothing to cancel. You choose.</div>
+      <div style="height:8px;line-height:8px;font-size:0;">&nbsp;</div>
+      <div class="body" style="font:400 15px/23px Arial,Helvetica,sans-serif;color:#3d4757;mso-line-height-rule:exactly;">Your free week ends on its own and you keep the free plan for good, with live alerts for everyone. Want to keep Premium? It's £6.99 a month or £49.99 a year, from the Premium screen in the app.</div>
+    </td></tr></tbody></table>
+  </td></tr>
+
+  <!-- Socials -->
+  <tr><td class="pad" style="padding:40px 40px 0;">
+    <div class="blue" style="font:bold 11px/15px 'Courier New',Courier,monospace;letter-spacing:.14em;color:#2563d9;">FOLLOW ALONG</div><div style="height:10px;line-height:10px;font-size:0;">&nbsp;</div>
+    <div class="body" style="font:400 15px/23px Arial,Helvetica,sans-serif;color:#3d4757;mso-line-height-rule:exactly;">Big event nights and new features land on our socials first. We're <span class="ink" style="font-weight:bold;color:#0f1522;">@driveiqapp</span> on
+      <a href="https://www.instagram.com/driveiqapp" class="blue" style="color:#2563d9;text-decoration:none;font-weight:bold;">Instagram</a>,
+      <a href="https://www.tiktok.com/@driveiqapp" class="blue" style="color:#2563d9;text-decoration:none;font-weight:bold;">TikTok</a> and
+      <a href="https://www.facebook.com/share/1ERPBzM6qh/?mibextid=wwXIfr" class="blue" style="color:#2563d9;text-decoration:none;font-weight:bold;">Facebook</a>.</div>
+  </td></tr>
+
+  <tr><td class="pad" style="padding:32px 40px 40px;">
+    <div class="body" style="font:400 16px/25px Arial,Helvetica,sans-serif;color:#3d4757;mso-line-height-rule:exactly;">Thanks for waiting with us. Good shifts ahead.<br><span class="ink" style="font-weight:bold;color:#0f1522;">The DriveIQ team</span></div>
+  </td></tr>
+</tbody></table>
+
+<!-- Footer -->
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="w" style="width:600px;max-width:600px;">
+  <tbody><tr><td align="center" class="pad" style="padding:28px 24px 0;">
+    <div class="muted" style="font:400 13px/21px Arial,Helvetica,sans-serif;color:#6b7587;">Questions? Just reply, or write to <a href="mailto:hello@driveiq.app" class="blue" style="color:#2563d9;text-decoration:none;">hello@driveiq.app</a></div>
+    <div style="height:8px;line-height:8px;font-size:0;">&nbsp;</div>
+    <div class="muted" style="font:400 12px/19px Arial,Helvetica,sans-serif;color:#7a8496;">You're getting this because you joined the DriveIQ waitlist.<br><a href="{{ unsubscribe }}" class="muted" style="color:#7a8496;text-decoration:underline;">Unsubscribe</a> · <a href="https://driveiq.app/privacy.html" class="muted" style="color:#7a8496;text-decoration:underline;">Privacy</a> · <a href="https://driveiq.app/terms.html" class="muted" style="color:#7a8496;text-decoration:underline;">Terms</a><br>Drive iQ Technologies Ltd · Company No. 17106675 · London, UK</div>
+  </td></tr>
+</tbody></table>
+
+</td></tr>
+</tbody></table>
+</body></html>

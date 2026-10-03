@@ -39,7 +39,7 @@
         "POST_NOTIFICATIONS",
         "RECEIVE_BOOT_COMPLETED"
       ],
-      "versionCode": 38
+      "versionCode": 39
     },
     "web": {
       "bundler": "metro"

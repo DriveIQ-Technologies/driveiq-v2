@@ -5,6 +5,20 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email is string
+        && exists(/databases/$(database)/documents/adminUsers/$(request.auth.token.email.lower()));
+    }
+
+    // Dashboard access. Doc id is the lowercase email. Written from console / script.
+    match /adminUsers/{email} {
+      allow get: if signedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == email.lower();
+      allow list, write: if false;
+    }
+
     // Runtime knobs (AI cap, copy prompt). App reads only.
     match /config/{doc} {
       allow read: if true;
@@ -46,15 +60,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Full-day board for Premium. Written only by Cloud Functions, same as
-    // airportCache — the app reads it instead of calling AeroDataBox itself.
     match /airportCacheDay/{icao} {
       allow read: if true;
       allow write: if false;
     }
 
-    // National Rail operator status, written only by Cloud Functions. Public
-    // read so the app never needs the Rail Data Marketplace key.
     match /railCache/{id} {
       allow read: if true;
       allow write: if false;
@@ -66,12 +76,12 @@ service cloud.firestore {
     }
 
     match /users/{uid}/notificationState/{doc} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow write: if false;
     }
 
     match /users/{uid}/entitlements/{doc} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow write: if false;
     }
 
@@ -80,22 +90,28 @@ service cloud.firestore {
     }
 
     match /waitlistClaims/{email} {
-      allow read, write: if false;
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     match /waitlistTokens/{token} {
-      allow read, write: if false;
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
-    // Emails are doc ids. Get is allowed so sign-in can match a waitlister.
-    // List is denied so the cohort cannot be dumped.
     match /waitlist/{email} {
       allow get: if signedIn();
-      allow list, write: if false;
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /aiCostLog/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     match /users/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow create: if signedIn()
         && request.auth.uid == uid
         && !request.resource.data.keys().hasAny([
@@ -104,6 +120,12 @@ service cloud.firestore {
           'premiumUntil',
           'waitlistEmail',
           'waitlistClaimedAt',
+          'premiumPlan',
+          'premiumStatus',
+          'premiumSource',
+          'premiumTrialEndsAt',
+          'premiumExpiresAt',
+          'premiumCancelledAt',
         ]);
       allow update: if signedIn()
         && request.auth.uid == uid
@@ -113,10 +135,15 @@ service cloud.firestore {
           'premiumUntil',
           'waitlistEmail',
           'waitlistClaimedAt',
+          'premiumPlan',
+          'premiumStatus',
+          'premiumSource',
+          'premiumTrialEndsAt',
+          'premiumExpiresAt',
+          'premiumCancelledAt',
         ]);
     }
 
-    // Community hazard reports. Writes go through Cloud Functions.
     match /communityReports/{id} {
       allow read: if signedIn();
       allow write: if false;
