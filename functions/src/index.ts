@@ -226,16 +226,15 @@ export const writeQueuedCopy = onSchedule(
 );
 
 /**
- * LHR / LGW near-term board, every 10 minutes during the poll window.
+ * LHR / LGW near-term board, every 5 minutes during the poll window.
  *
- * Was every 5 minutes, riding along inside writeQueuedCopy. Halving the rate
- * saves ~7k AeroDataBox calls a month and flight boards do not move
- * meaningfully inside ten minutes. Kept above the client's cache-age limit so
- * the app never has a reason to call the API itself.
+ * Landing alerts are sent from this cache. Five minutes is as close as the
+ * feed gets without calling it on every request. The other three airports
+ * stay on the 15-minute job.
  */
 export const ingestMajorAirports = onSchedule(
   {
-    schedule: 'every 10 minutes',
+    schedule: 'every 5 minutes',
     timeoutSeconds: 180,
     ...london,
     serviceAccount: WAITLIST_FN_SA,

@@ -34,6 +34,9 @@ export const MANUAL_OTHER_TYPES = ['Music', 'Theatre', 'Comedy', 'Film', 'Family
 
 /** Big non-sports venues the sports table doesn't hold. */
 const EXTRA_VENUES: SportsPlace[] = [
+  // Queen Caroline Street, not the flyover. "Other venue" plus W6 9QH lands
+  // on the postcode centre, which sits on Talgarth Road.
+  { venue: 'Eventim Apollo', latitude: 51.4908, longitude: -0.2242 },
   { venue: 'Royal Albert Hall', latitude: 51.501, longitude: -0.1774 },
   { venue: 'Hyde Park', latitude: 51.5073, longitude: -0.1657 },
   { venue: 'Alexandra Palace', latitude: 51.5942, longitude: -0.1309 },

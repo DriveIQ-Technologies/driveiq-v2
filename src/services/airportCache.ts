@@ -6,7 +6,7 @@
  * stays on the server instead of shipping inside the app binary.
  *
  * Two docs per airport:
- *   airportCache/{icao}     near-term board, refreshed every 10–15 min
+ *   airportCache/{icao}     near-term board, Heathrow/Gatwick every 5 min, others every 15
  *   airportCacheDay/{icao}  full 24h board for Premium, refreshed hourly
  */
 import { db, fsApi } from './firebase';

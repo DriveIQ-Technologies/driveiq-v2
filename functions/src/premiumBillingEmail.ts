@@ -1,9 +1,11 @@
 /**
  * Trial lifecycle mail: the day before the first charge, and a confirmation
  * when they cancel during the free trial.
+ *
+ * Designed HTML matches the welcome emails. Tokens are filled here.
  */
 
-import { type EmailContent, emailShell, escapeHtml } from './emailTheme.js';
+import { type EmailContent, escapeHtml, loadEmailTemplate } from './emailTheme.js';
 import type { PremiumPlan } from './premiumWelcomeEmail.js';
 import { firstNameFrom } from './welcomeEmail.js';
 
@@ -17,9 +19,14 @@ const PLAN_NAME: Record<PremiumPlan, string> = {
   annual: 'Premium Annual',
 };
 
-const AFTER: Record<PremiumPlan, string> = {
+const PRICE_LINE: Record<PremiumPlan, string> = {
   monthly: '£6.99 a month',
   annual: '£49.99 a year',
+};
+
+const CHARGE_DETAIL: Record<PremiumPlan, string> = {
+  monthly: '£6.99 is charged tomorrow, then every month after that.',
+  annual: '£49.99 is charged tomorrow, then once a year after that.',
 };
 
 export function formatChargeLondon(at: Date): string {
@@ -32,9 +39,23 @@ export function formatChargeLondon(at: Date): string {
   }).format(at);
 }
 
-function greeting(displayName?: string | null): string {
+const FIRSTNAME_TAG = '{% if params.FIRSTNAME %}, {{ params.FIRSTNAME }}{% endif %}';
+const DATE_TAG = '{% if params.TRIAL_END_DATE %}{{ params.TRIAL_END_DATE }}{% else %}Ended{% endif %}';
+const DATE_UPPER_TAG = '{% if params.TRIAL_END_DATE %}{{ params.TRIAL_END_DATE }}{% else %}ENDED{% endif %}';
+const UNTIL_TAG =
+  '{% if params.UNTIL_LINE %}{{ params.UNTIL_LINE }}{% else %}The account goes back to Free. You will not be charged.{% endif %}';
+
+function fill(fileName: string, pairs: Record<string, string>): string {
+  let html = loadEmailTemplate(fileName);
+  const tokens = Object.keys(pairs).sort((a, b) => b.length - a.length);
+  for (const token of tokens) html = html.replaceAll(token, pairs[token] ?? '');
+  return html;
+}
+
+function nameBit(displayName?: string | null): { html: string; text: string } {
   const first = firstNameFrom(displayName);
-  return first ? `Hi ${escapeHtml(first)},` : 'Hi,';
+  if (!first) return { html: '', text: '' };
+  return { html: `, ${escapeHtml(first)}`, text: `, ${first}` };
 }
 
 export function buildTrialDay6Email(opts: {
@@ -42,28 +63,27 @@ export function buildTrialDay6Email(opts: {
   trialEndsAt: Date;
   displayName?: string | null;
 }): EmailContent {
-  const when = escapeHtml(formatChargeLondon(opts.trialEndsAt));
-  const price = PRICE[opts.plan];
+  const when = formatChargeLondon(opts.trialEndsAt);
   const plan = PLAN_NAME[opts.plan];
-  const html = emailShell({
-    preheader: `Your free trial ends tomorrow. ${price} will be charged unless you cancel.`,
-    bodyRows: `
-<tr><td style="padding:8px 8px 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#0E2A3A;">
-  <p style="margin:0 0 12px;">${greeting(opts.displayName)}</p>
-  <p style="margin:0 0 12px;">Your DriveIQ ${plan} free trial ends tomorrow, <strong>${when}</strong>.</p>
-  <p style="margin:0 0 12px;">${price} (${AFTER[opts.plan]}) is charged then, and renews after that. You pay nothing if you cancel before the trial ends.</p>
-  <p style="margin:0 0 8px;">Cancel in a couple of taps:</p>
-  <p style="margin:0 0 6px;"><a href="https://apps.apple.com/account/subscriptions" style="color:#1F62C9;">Manage subscription (iPhone)</a></p>
-  <p style="margin:0 0 12px;"><a href="https://play.google.com/store/account/subscriptions" style="color:#1F62C9;">Manage subscription (Android)</a></p>
-  <p style="margin:0;">Drive safe,<br><strong>The DriveIQ team</strong></p>
-</td></tr>`,
+  const name = nameBit(opts.displayName);
+  const html = fill('trialEndsTomorrow.html', {
+    [FIRSTNAME_TAG]: name.html,
+    '{{ params.PLAN }}': plan,
+    [DATE_UPPER_TAG]: escapeHtml(when.toUpperCase()),
+    '{{ params.PRICE_LINE }}': PRICE_LINE[opts.plan],
+    '{{ params.PRICE }}': PRICE[opts.plan],
+    '{{ params.CHARGE_DETAIL }}': CHARGE_DETAIL[opts.plan],
   });
   const text = [
-    greeting(opts.displayName).replace(/<[^>]+>/g, ''),
+    `Your free trial ends tomorrow${name.text}.`,
     '',
-    `Your DriveIQ ${plan} free trial ends tomorrow, ${formatChargeLondon(opts.trialEndsAt)}.`,
+    `Tomorrow is the first charge on ${plan}. Cancel before then and you pay nothing.`,
     '',
-    `${price} (${AFTER[opts.plan]}) is charged then. Cancel before the trial ends and you will not be charged.`,
+    `Plan: ${plan}`,
+    `Tomorrow: ${PRICE[opts.plan]}`,
+    'Due today: £0.00',
+    '',
+    CHARGE_DETAIL[opts.plan],
     '',
     'iPhone: https://apps.apple.com/account/subscriptions',
     'Android: https://play.google.com/store/account/subscriptions',
@@ -83,28 +103,27 @@ export function buildTrialCancelledEmail(opts: {
   displayName?: string | null;
 }): EmailContent {
   const plan = PLAN_NAME[opts.plan];
-  const until = opts.accessUntil ? escapeHtml(formatChargeLondon(opts.accessUntil)) : '';
-  const untilLine = until
-    ? `You can keep using ${plan} until ${until}. After that the account goes back to Free.`
-    : `The account goes back to Free. You will not be charged.`;
-  const html = emailShell({
-    preheader: 'Your trial is cancelled. You will not be charged.',
-    bodyRows: `
-<tr><td style="padding:8px 8px 0;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#0E2A3A;">
-  <p style="margin:0 0 12px;">${greeting(opts.displayName)}</p>
-  <p style="margin:0 0 12px;">Your DriveIQ ${plan} free trial is cancelled. You will not be charged.</p>
-  <p style="margin:0 0 12px;">${untilLine}</p>
-  <p style="margin:0;">Drive safe,<br><strong>The DriveIQ team</strong></p>
-</td></tr>`,
+  const name = nameBit(opts.displayName);
+  const when = opts.accessUntil ? formatChargeLondon(opts.accessUntil) : 'Ended';
+  const untilLine = opts.accessUntil
+    ? `You can keep using ${plan} until ${when}. After that the account goes back to Free.`
+    : 'The account goes back to Free. You will not be charged.';
+  const html = fill('trialCancelled.html', {
+    [FIRSTNAME_TAG]: name.html,
+    '{{ params.PLAN }}': plan,
+    [DATE_UPPER_TAG]: escapeHtml(when.toUpperCase()),
+    [DATE_TAG]: escapeHtml(when),
+    [UNTIL_TAG]: escapeHtml(untilLine),
   });
   const text = [
-    greeting(opts.displayName).replace(/<[^>]+>/g, ''),
+    `Your trial is cancelled${name.text}.`,
     '',
     `Your DriveIQ ${plan} free trial is cancelled. You will not be charged.`,
     '',
-    opts.accessUntil
-      ? `You can keep using ${plan} until ${formatChargeLondon(opts.accessUntil)}. After that the account goes back to Free.`
-      : 'The account goes back to Free.',
+    untilLine,
+    '',
+    'iPhone: https://apps.apple.com/account/subscriptions',
+    'Android: https://play.google.com/store/account/subscriptions',
     '',
     'The DriveIQ team',
   ].join('\n');
