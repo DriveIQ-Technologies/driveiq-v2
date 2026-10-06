@@ -46,6 +46,7 @@ import { handleDeleteAccount } from './deleteAccount.js';
 import { handleRegisterAccount } from './accountLifecycle.js';
 import { handleNotifyPremiumStarted } from './premiumStarted.js';
 import { handleRevenueCatWebhook, handleTrialDay6Reminders, webhookAuthorized } from './premiumBilling.js';
+import { handlePremiumExtendedEmails } from './premiumExtendedEmail.js';
 
 initializeApp();
 const db = getFirestore();
@@ -1232,5 +1233,30 @@ export const premiumTrialDay6 = onSchedule(
       },
     });
     logger.info('premium_day6.done', result);
+  },
+);
+
+/**
+ * Waitlisters whose week was added after their store trial: a note about
+ * three days before the trial ends, while they can still turn off auto-renew.
+ */
+export const premiumExtendedReminder = onSchedule(
+  {
+    schedule: 'every day 09:00',
+    timeoutSeconds: 120,
+    ...london,
+    serviceAccount: WAITLIST_FN_SA,
+    secrets: [brevoApiKey, brevoSenderEmail, brevoSenderName],
+  },
+  async () => {
+    const result = await handlePremiumExtendedEmails({
+      db,
+      brevo: {
+        apiKey: await keyOrEmpty(brevoApiKey),
+        senderEmail: await keyOrEmpty(brevoSenderEmail),
+        senderName: await keyOrEmpty(brevoSenderName),
+      },
+    });
+    logger.info('premium_extended.done', result);
   },
 );

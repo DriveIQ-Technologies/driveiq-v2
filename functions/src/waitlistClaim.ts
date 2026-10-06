@@ -61,6 +61,9 @@ interface UserEntitlementDoc {
   tier?: string;
   entitlement?: string;
   premiumUntil?: string;
+  /** Store subscription state, written by premiumBilling / premiumStarted. */
+  premiumStatus?: string;
+  premiumTrialEndsAt?: string;
   waitlistEmail?: string;
   waitlistToken?: string;
   waitlistClaimedAt?: string;
@@ -84,6 +87,22 @@ export function isPremiumUntilActive(until: string | undefined | null, nowMs = D
 export function buildGrantEnds(nowMs = Date.now(), premiumDays = 7): string {
   const ms = Math.max(1, premiumDays) * 24 * 60 * 60 * 1000;
   return new Date(nowMs + ms).toISOString();
+}
+
+/**
+ * When a waitlist week should start. Someone already in a store free trial
+ * gets the week after the trial ends (the store trial can't be paused), so
+ * the two add up to 14 free days instead of overlapping. A trial cancelled
+ * before its end still runs to that end, so it counts too.
+ */
+export function waitlistGrantStartMs(
+  user: { premiumStatus?: unknown; premiumTrialEndsAt?: unknown },
+  nowMs = Date.now(),
+): number {
+  const status = String(user.premiumStatus ?? '');
+  if (status !== 'trial' && status !== 'cancelled') return nowMs;
+  const trialEnd = typeof user.premiumTrialEndsAt === 'string' ? Date.parse(user.premiumTrialEndsAt) : NaN;
+  return Number.isFinite(trialEnd) && trialEnd > nowMs ? trialEnd : nowMs;
 }
 
 export function userMessageForStatus(status: WaitlistClaimStatus): string {
@@ -358,7 +377,9 @@ export async function handleClaimWaitlistPremium(opts: {
     }
 
     const premiumDays = Number.isFinite(tokenDoc.premiumDays) ? Number(tokenDoc.premiumDays) : 7;
-    const premiumUntil = buildGrantEnds(nowMs, premiumDays);
+    const startMs = waitlistGrantStartMs(user, nowMs);
+    const premiumUntil = buildGrantEnds(startMs, premiumDays);
+    const afterTrial = startMs > nowMs;
     const claimedAt = new Date(nowMs).toISOString();
     const usedCount = Number.isFinite(tokenDoc.usedCount) ? Number(tokenDoc.usedCount) : 0;
     const maxUses = Number.isFinite(tokenDoc.maxUses) ? Number(tokenDoc.maxUses) : 1;
@@ -398,6 +419,7 @@ export async function handleClaimWaitlistPremium(opts: {
         waitlistEmail: tokenDoc.email ?? null,
         waitlistClaimedAt: claimedAt,
         waitlistToken: token,
+        waitlistStartsAt: new Date(startMs).toISOString(),
         updatedAt: claimedAt,
       },
       { merge: true },
@@ -412,6 +434,7 @@ export async function handleClaimWaitlistPremium(opts: {
         waitlistEmail: tokenDoc.email ?? null,
         waitlistClaimedAt: claimedAt,
         waitlistToken: token,
+        waitlistStartsAt: new Date(startMs).toISOString(),
         updatedAt: claimedAt,
       },
       { merge: true },
@@ -435,7 +458,9 @@ export async function handleClaimWaitlistPremium(opts: {
       premiumUntil,
       waitlistEmail: typeof tokenDoc.email === 'string' ? tokenDoc.email : null,
       token,
-      message: userMessageForStatus('granted'),
+      message: afterTrial
+        ? 'Your free waitlist week is added after your trial, so Premium stays free for 7 more days.'
+        : userMessageForStatus('granted'),
     };
   });
 }

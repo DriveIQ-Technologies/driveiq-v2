@@ -29,6 +29,7 @@ waitlist-emails-stress.txt
 waitlist-email-claim-preview.html
 waitlist-email-launch-preview.html
 waitlist-brevo-test.csv
+waitlist-import-*.csv
 
 # Local Claude settings
 .claude/

@@ -70,34 +70,32 @@ export function buildPremiumWelcomeEmail(opts: {
     opts.plan === 'monthly' ? 'premiumWelcomeMonthly.html' : 'premiumWelcomeAnnual.html';
   const html = fillWelcomeTemplate(file, nameBit, trialEnd);
   const textName = first ? `, ${first}` : '';
-  const after =
-    opts.plan === 'monthly'
-      ? `After the trial: £6.99 a month.`
-      : `After the trial: £49.99 a year (£4.17 a month).`;
-  const charge =
-    opts.plan === 'monthly'
-      ? `£6.99 is charged on ${formatTrialEndLondon(ends)}, then every month.`
-      : `£49.99 is charged on ${formatTrialEndLondon(ends)}, then once a year.`;
+  const price = opts.plan === 'monthly' ? '£6.99 a month' : '£49.99 a year';
+  const every = opts.plan === 'monthly' ? 'every month' : 'every year';
 
   const text = [
     `Welcome to Premium${textName}.`,
     '',
-    'Your 7-day free trial has started. You pay nothing today.',
+    'Your 7-day free trial has started. You pay nothing today, and everything',
+    'is unlocked from now.',
     '',
     `Plan: Premium ${opts.plan === 'monthly' ? 'Monthly' : 'Annual'}`,
-    'Due today: £0.00',
-    `Free until: ${formatTrialEndLondon(ends)}`,
-    after,
+    `Trial ends: ${formatTrialEndLondon(ends)}`,
+    `First payment: ${price}, charged on ${formatTrialEndLondon(ends)}, then ${every} after that.`,
+    "Cancel at least 24 hours before the trial ends and you won't be charged.",
     '',
-    'Unlocked: the full week of events, venue demand ranking, all-day',
-    'flights at all five airports, unlimited watched flights, all station',
-    'hubs, and unlimited AI.',
+    'Unlocked for you:',
+    '- The whole day of flights at all five airports; watch as many as you like',
+    '- Events about two weeks ahead',
+    "- All 7 stations saved",
+    '- Unlimited DriveIQ AI',
+    '- Alerts stay instant, on every plan',
     '',
-    charge,
-    'Cancel in App Store or Google Play subscriptions before then and you',
-    'will not be charged.',
+    'Manage or cancel any time: in the app, Menu, then Manage subscription.',
+    'Or in your App Store or Google Play subscriptions.',
     '',
     'Questions? hello@driveiq.app',
+    'DriveIQ Technologies Ltd · 124 City Road, London EC1V 2NX',
   ].join('\n');
 
   return {

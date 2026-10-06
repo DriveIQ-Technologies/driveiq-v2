@@ -20,5 +20,22 @@
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "public": "hosting",
+    "ignore": [
+      "**/.*"
+    ],
+    "headers": [
+      {
+        "source": "/assets/email/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=86400"
+          }
+        ]
+      }
+    ]
   }
 }

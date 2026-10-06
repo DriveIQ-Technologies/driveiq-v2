@@ -6,7 +6,7 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "build": "tsc && cp src/premiumWelcomeAnnual.html src/premiumWelcomeMonthly.html src/welcomeFree.html src/trialEndsTomorrow.html src/trialCancelled.html lib/",
+    "build": "tsc && cp src/premiumWelcomeAnnual.html src/premiumWelcomeMonthly.html src/welcomeFree.html src/trialEndsTomorrow.html src/trialCancelled.html src/premiumExtended.html lib/",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
     "test": "vitest run",
@@ -16,7 +16,11 @@
     "waitlist:self-test": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs self-test",
     "waitlist:auth": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs auth",
     "waitlist:verify": "NODE_PATH=./node_modules node ../scripts/seed-waitlist-codes.mjs verify",
-    "waitlist:reset": "NODE_PATH=./node_modules node ../scripts/reset-waitlist-claim.mjs"
+    "waitlist:reset": "NODE_PATH=./node_modules node ../scripts/reset-waitlist-claim.mjs",
+    "check:emails": "node scripts/check-email-links.mjs",
+    "waitlist:import": "NODE_PATH=./node_modules node ../scripts/import-waitlist-csv.mjs",
+    "waitlist:after-trial": "NODE_PATH=./node_modules node ../scripts/grant-waitlist-after-trial.mjs",
+    "waitlist:audit-trials": "NODE_PATH=./node_modules node ../scripts/audit-waitlist-trials.mjs"
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.1",
