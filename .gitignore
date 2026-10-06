@@ -22,6 +22,7 @@ functions/node_modules/
 functions/lib/
 functions/serviceAccountKey.json
 serviceAccountKey.json
+admin/admin-dashboard-key.json
 waitlist-brevo-*.csv
 waitlist-codes.csv
 waitlist-emails.txt
