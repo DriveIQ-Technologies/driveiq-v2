@@ -14,6 +14,7 @@ const NAV = [
   { href: '/waitlist', label: 'Waitlist' },
   { href: '/health', label: 'System health' },
   { href: '/ai', label: 'AI usage' },
+  { href: '/flights-api', label: 'Flight API' },
 ];
 
 async function leave() {

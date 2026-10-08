@@ -528,6 +528,50 @@ export async function getAiUsage(days = 14): Promise<{ perDay: AiDay[]; topUsers
   };
 }
 
+export interface FlightApiDay {
+  day: string;
+  calls: number;
+  failed: number;
+}
+
+/** AeroDataBox requests the server actually made. One call is one credit. */
+export async function getFlightApiUsage(days = 14): Promise<{
+  perDay: FlightApiDay[];
+  byAirport: { icao: string; calls: number; failed: number }[];
+}> {
+  if (isDemo()) return demoFlightApi(days);
+  try {
+    const snap = await getDocs(
+      query(collection(clientDb(), 'flightApiLog'), where('createdAt', '>=', isoDaysAgo(days)), limit(10000)),
+    );
+    const byDay = new Map<string, FlightApiDay>(
+      lastDays(days).map((day) => [day, { day, calls: 0, failed: 0 }]),
+    );
+    const byAirport = new Map<string, { icao: string; calls: number; failed: number }>();
+    for (const d of snap.docs) {
+      const r = d.data();
+      const day = londonDay(String(r.createdAt ?? ''));
+      const bucket = byDay.get(day);
+      const failed = r.ok === false;
+      if (bucket) {
+        bucket.calls += 1;
+        if (failed) bucket.failed += 1;
+      }
+      const icao = String(r.icao ?? 'unknown');
+      const airport = byAirport.get(icao) ?? { icao, calls: 0, failed: 0 };
+      airport.calls += 1;
+      if (failed) airport.failed += 1;
+      byAirport.set(icao, airport);
+    }
+    return {
+      perDay: [...byDay.values()],
+      byAirport: [...byAirport.values()].sort((a, b) => b.calls - a.calls),
+    };
+  } catch {
+    return { perDay: lastDays(days).map((day) => ({ day, calls: 0, failed: 0 })), byAirport: [] };
+  }
+}
+
 // ── Demo data (DEMO_DATA=1 only) ───────────────────────────────────────────
 
 const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
@@ -628,6 +672,17 @@ function demoWaitlist(): WaitlistRow[] {
     { code: 'W9LB-4H', email: 'priya@example.com', status: 'unclaimed', expiresAt: new Date(Date.now() + 9 * 86_400_000).toISOString(), claimedAt: null, premiumUntil: null, claimedByUid: null },
     { code: 'B2ZN-7F', email: 'dan.e@example.com', status: 'expired', expiresAt: minsAgo(2880), claimedAt: null, premiumUntil: null, claimedByUid: null },
   ];
+}
+
+function demoFlightApi(days: number): { perDay: FlightApiDay[]; byAirport: { icao: string; calls: number; failed: number }[] } {
+  return {
+    perDay: lastDays(days).map((day, i) => ({ day, calls: 40 + (i % 5) * 8, failed: i % 7 === 0 ? 1 : 0 })),
+    byAirport: [
+      { icao: 'EGLL', calls: 420, failed: 2 },
+      { icao: 'EGKK', calls: 400, failed: 1 },
+      { icao: 'EGSS', calls: 140, failed: 0 },
+    ],
+  };
 }
 
 function demoAi(days: number) {

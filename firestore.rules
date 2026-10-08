@@ -111,6 +111,12 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // One row per AeroDataBox request, written by the airport ingest functions.
+    match /flightApiLog/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // One row per phone session (anonymous browse or a real account).
     // The app writes its own uid. Coordinates are already rounded.
     match /installs/{uid} {

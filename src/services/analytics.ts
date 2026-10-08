@@ -97,6 +97,10 @@ function getClient(): PostHog | null {
   client = new PostHog(POSTHOG_KEY, {
     host: POSTHOG_HOST,
     captureAppLifecycleEvents: true,
+    // Send each event on its own. The default batch waits for 20 events, so a
+    // short session never reached the dashboard.
+    flushAt: 1,
+    flushInterval: 10000,
   });
   return client;
 }

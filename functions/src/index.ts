@@ -176,9 +176,6 @@ export const writeQueuedCopy = onSchedule(
       logger.warn('ingest.live_fail', { error: e instanceof Error ? e.message : 'error' });
     }
 
-    const apiKey = await keyOrEmpty(anthropicKey);
-    await processCopyQueue(apiKey);
-
     try {
       // national-rail dropped: TfL reports every operator as a permanent
       // "Special Service", so rail alerts could never fire. Real per-operator
@@ -223,6 +220,12 @@ export const writeQueuedCopy = onSchedule(
     } catch (e) {
       logger.warn('dispatch.fail', { error: e instanceof Error ? e.message : 'error' });
     }
+
+    // After the alerts. Phrasing the notification copy used to run first, so
+    // a batch of new road incidents waited on the model and then all left
+    // the phone together.
+    const apiKey = await keyOrEmpty(anthropicKey);
+    await processCopyQueue(apiKey);
   },
 );
 

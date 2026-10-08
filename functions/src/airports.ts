@@ -153,16 +153,36 @@ export function looksLikeParsedBoard(flights: CachedFlight[]): boolean {
   return broken / flights.length <= 0.5;
 }
 
+/** One AeroDataBox FIDS request. Logged as one credit for the admin dashboard. */
+async function noteFlightCall(
+  db: Firestore,
+  row: { icao: string; purpose: string; ok: boolean; status: number },
+): Promise<void> {
+  try {
+    if (typeof db.collection !== 'function') return;
+    await db.collection('flightApiLog').add({
+      createdAt: new Date().toISOString(),
+      provider: 'aerodatabox',
+      credits: 1,
+      ...row,
+    });
+  } catch (e) {
+    logger.warn('flightapi.log_fail', { error: e instanceof Error ? e.message : 'error' });
+  }
+}
+
 /**
  * One FIDS window. Returns null when the REQUEST failed, which is not the same
  * as an airport genuinely having no flights — callers must not treat a failure
  * as an empty board, or a bad key / exhausted quota silently wipes the cache.
  */
 async function fetchWindow(
+  db: Firestore,
   apiKey: string,
   icao: string,
   from: Date,
   to: Date,
+  purpose: string,
 ): Promise<CachedFlight[] | null> {
   // withLeg MUST be false. With withLeg=true AeroDataBox returns departure/
   // arrival objects and omits `movement`, which is the only thing normalizeOne
@@ -182,6 +202,7 @@ async function fetchWindow(
   });
   if (!res.ok) {
     logger.warn('airport.http', { icao, status: res.status });
+    await noteFlightCall(db, { icao, purpose, ok: false, status: res.status });
     return null;
   }
   const raw = (await res.json()) as AdbFidsResponse;
@@ -193,8 +214,10 @@ async function fetchWindow(
       flights: flights.length,
       sampleKeys: Object.keys(raw.arrivals?.[0] ?? raw.departures?.[0] ?? {}),
     });
+    await noteFlightCall(db, { icao, purpose, ok: false, status: res.status });
     return null;
   }
+  await noteFlightCall(db, { icao, purpose, ok: true, status: res.status });
   return flights;
 }
 
@@ -209,7 +232,7 @@ export async function ingestAirport(
 
   const from = new Date(now.getTime() - 60 * 60 * 1000);
   const to = new Date(now.getTime() + 10 * 60 * 60 * 1000);
-  const fetched = await fetchWindow(apiKey, icao, from, to);
+  const fetched = await fetchWindow(db, apiKey, icao, from, to, 'board');
   if (fetched === null) {
     // Request failed (bad key, exhausted quota, upstream outage). Leave the
     // last good board in place — the app has no fallback of its own, so
@@ -315,7 +338,7 @@ export async function ingestAirportDay(
         Math.min((i + 1) * WINDOW_HOURS, DAY_BOARD_HOURS) * 3600_000,
     );
 
-    const chunk = await fetchWindow(apiKey, icao, from, to);
+    const chunk = await fetchWindow(db, apiKey, icao, from, to, 'day');
     if (chunk === null) {
       // Leave the previous copy of this window in place.
       logger.warn('ingest.airport_day_window_failed_keeping_cache', {

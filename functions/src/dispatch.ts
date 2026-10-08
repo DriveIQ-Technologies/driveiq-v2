@@ -121,6 +121,40 @@ function matchKeyRoad(inc: TrafficIncident): string | null {
   return m ? m[1].toUpperCase() : null;
 }
 
+/**
+ * Several serious-delay alerts discovered in one poll become one notification.
+ * They used to leave the phone as 4–5 banners at the same moment, which is
+ * also how a late batch feels: the feed had been holding them.
+ */
+export function collapseRoadBursts<
+  T extends { title: string; body: string; data: Record<string, string> },
+>(payloads: T[]): T[] {
+  const roads = payloads.filter((p) => p.data.kind === 'road-accident');
+  const rest = payloads.filter((p) => p.data.kind !== 'road-accident');
+  if (roads.length <= 1) return payloads;
+  const named = [
+    ...new Set(
+      roads
+        .map((p) => p.title.match(/\bon the ([A-Z0-9()]+)/i)?.[1]?.toUpperCase())
+        .filter((x): x is string => Boolean(x)),
+    ),
+  ];
+  const extra = Math.max(named.length, roads.length) - 1;
+  const title =
+    named.length >= 1
+      ? `Serious delays on the ${named[0]} and ${extra} other route${extra === 1 ? '' : 's'}`
+      : `Serious delays on ${roads.length} routes`;
+  const first = roads[0];
+  return [
+    {
+      ...first,
+      title,
+      body: 'A few roads changed together. Tap the map to see them and route around it.',
+    },
+    ...rest,
+  ];
+}
+
 function isMajorIncident(inc: TrafficIncident): boolean {
   const keyRoad = matchKeyRoad(inc);
   const isAccident = String(inc.category).toLowerCase() === 'accident';
@@ -185,10 +219,10 @@ export async function dispatchPushNotifications(opts: {
   lines: LineStatus[];
   flightsByAirport: Record<string, CachedFlight[]>;
 }): Promise<void> {
-  if (isQuietHours()) {
-    logger.info('dispatch.quiet_hours');
-    return;
-  }
+  // Quiet hours still record what the roads look like, so 05:00 does not
+  // replay every overnight change as a burst of stale alerts.
+  const quiet = isQuietHours();
+  if (quiet) logger.info('dispatch.quiet_hours');
 
   // Page through EVERY user. This used to be a bare .limit(500) with no
   // cursor: past 500 accounts the same first 500 were served on every run and
@@ -247,7 +281,7 @@ export async function dispatchPushNotifications(opts: {
 
     const payloads: Array<{ title: string; body: string; data: Record<string, string> }> = [];
 
-    if (prefs['road-accidents']) {
+    if (!quiet && prefs['road-accidents']) {
       for (const inc of opts.incidents) {
         if (!isMajorIncident(inc)) continue;
         if (!materialChange(prevIncidents[inc.id], inc)) continue;
@@ -282,7 +316,7 @@ export async function dispatchPushNotifications(opts: {
       }
     }
 
-    if (prefs['line-closures']) {
+    if (!quiet && prefs['line-closures']) {
       for (const l of opts.lines) {
         const before = lineBaseline(l, prevLines, state.railBaseline);
         const after = l.severityBucket;
@@ -306,7 +340,7 @@ export async function dispatchPushNotifications(opts: {
     // Watched flights: evaluated once here; the result feeds both the alerts
     // and the state written below.
     const nextFlightState: Record<string, WatchedFlightState> = {};
-    if (prefs['saved-flights'] && watched.length > 0) {
+    if (!quiet && prefs['saved-flights'] && watched.length > 0) {
       const liveById: Record<string, CachedFlight> = {};
       for (const flights of Object.values(opts.flightsByAirport)) {
         for (const f of flights) liveById[f.id] = f;
@@ -356,7 +390,7 @@ export async function dispatchPushNotifications(opts: {
           })
           .slice(0, 5),
       });
-    } else if (watched.length > 0) {
+    } else if (!quiet && watched.length > 0) {
       logger.info('dispatch.flights', { uid, watched: watched.length, prefOff: true });
     }
 
@@ -364,7 +398,7 @@ export async function dispatchPushNotifications(opts: {
     payloads.sort(
       (a, b) => (ALERT_PRIORITY[a.data.kind] ?? 9) - (ALERT_PRIORITY[b.data.kind] ?? 9),
     );
-    for (const p of payloads.slice(0, 5)) {
+    for (const p of collapseRoadBursts(payloads).slice(0, 5)) {
       const result = await sendPushToTokens(tokens, p);
       for (const t of result.invalidTokens) deadTokens.add(t);
     }
