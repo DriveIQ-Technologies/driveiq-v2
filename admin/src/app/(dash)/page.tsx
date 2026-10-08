@@ -39,8 +39,15 @@ function OverviewView({ o }: { o: Overview }) {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Accounts" value={o.users.total.toLocaleString('en-GB')} hint={`+${o.users.last7} this week`} />
-        <Stat label="Notifications on" value={`${pushPct}%`} hint={`${o.users.ios} iPhone · ${o.users.android} Android`} />
+        <Stat label="Accounts" value={o.users.total.toLocaleString('en-GB')} hint={`+${o.users.last7} this week · people who signed up`} />
+        <Stat label="iPhone accounts" value={o.users.devices.ios.toLocaleString('en-GB')} hint={o.users.devices.unknown ? `${o.users.devices.unknown} accounts not on the updated app yet` : 'Signed-in iPhones'} />
+        <Stat label="Android accounts" value={o.users.devices.android.toLocaleString('en-GB')} hint="Signed-in Android phones" />
+        <Stat
+          label="Downloads"
+          value={o.downloads.total.toLocaleString('en-GB')}
+          hint={`${o.downloads.ios} iPhone · ${o.downloads.android} Android · phones on the latest app`}
+        />
+        <Stat label="Notifications on" value={`${pushPct}%`} hint={`${o.users.pushIos} iPhone · ${o.users.pushAndroid} Android`} />
         <Stat label="Waitlist claimed" value={`${claimed} / ${o.waitlist.total}`} hint={`${o.waitlist.byStatus['week-running'] ?? 0} weeks running now`} />
         <Stat label="AI, last 7 days" value={usd(o.ai.cost7)} hint={`${o.ai.questions7} questions`} />
       </div>

@@ -9,6 +9,8 @@ import { clientAuth } from '@/lib/firebaseClient';
 const NAV = [
   { href: '/', label: 'Overview' },
   { href: '/users', label: 'Users' },
+  { href: '/downloads', label: 'Downloads' },
+  { href: '/emails', label: 'Emails' },
   { href: '/waitlist', label: 'Waitlist' },
   { href: '/health', label: 'System health' },
   { href: '/ai', label: 'AI usage' },

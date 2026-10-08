@@ -52,6 +52,30 @@ export function feedHealth(updatedAtIso: string | null | undefined, everyMinutes
   return 'down';
 }
 
+/**
+ * Airport boards refresh every 30 minutes overnight (01:00–04:15 London)
+ * instead of every 5–15, so the first full-rate run after 04:00 has time to
+ * land before a board is judged on day rates.
+ *
+ * Daytime cadence, or 30 minutes while that night window is open.
+ */
+export function boardEveryMinutes(dayEvery: number, now = Date.now()): number {
+  return isAirportNight(now) ? 30 : dayEvery;
+}
+
+export function isAirportNight(now = Date.now()): boolean {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(now));
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0') % 24;
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+  const mins = hour * 60 + minute;
+  return mins >= 60 && mins < 4 * 60 + 15;
+}
+
 export function ageLabel(updatedAtIso: string | null | undefined, now = Date.now()): string {
   const t = Date.parse(String(updatedAtIso ?? ''));
   if (!Number.isFinite(t)) return 'never';
@@ -61,6 +85,49 @@ export function ageLabel(updatedAtIso: string | null | undefined, now = Date.now
   const h = Math.floor(min / 60);
   if (h < 48) return `${h} h ${min % 60} min ago`;
   return `${Math.floor(h / 24)} days ago`;
+}
+
+// ── Devices ────────────────────────────────────────────────────────────────
+
+export type DevicePlatform = 'ios' | 'android' | 'unknown';
+
+const asPlatform = (v: unknown): DevicePlatform | null =>
+  v === 'ios' || v === 'android' ? v : null;
+
+/**
+ * Which phone a user is on. `platform` is written by the app on every sign-in
+ * and app start; `pushPlatform` only when a push token registers (never on
+ * Android yet), so it is the fallback for users who have not opened the
+ * updated app. Neither → 'unknown'.
+ */
+export function devicePlatform(user: { platform?: unknown; pushPlatform?: unknown }): DevicePlatform {
+  return asPlatform(user.platform) ?? asPlatform(user.pushPlatform) ?? 'unknown';
+}
+
+export interface PlatformCounts {
+  ios: number;
+  android: number;
+  unknown: number;
+}
+
+/**
+ * The same rule as devicePlatform, from server-side counts (Firestore cannot
+ * count "field missing", so legacy pushPlatform users are what is left after
+ * removing those that also carry `platform`).
+ */
+export function platformCounts(c: {
+  total: number;
+  platformIos: number;
+  platformAndroid: number;
+  pushIos: number;
+  pushAndroid: number;
+  /** pushPlatform == X and platform set (ios or android). */
+  pushIosWithPlatform: number;
+  pushAndroidWithPlatform: number;
+}): PlatformCounts {
+  const ios = c.platformIos + Math.max(0, c.pushIos - c.pushIosWithPlatform);
+  const android = c.platformAndroid + Math.max(0, c.pushAndroid - c.pushAndroidWithPlatform);
+  return { ios, android, unknown: Math.max(0, c.total - ios - android) };
 }
 
 // ── Waitlist codes ─────────────────────────────────────────────────────────

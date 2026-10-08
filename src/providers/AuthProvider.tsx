@@ -36,6 +36,7 @@ import { applyWaitlistOnAuth, type WaitlistClaimHints } from '@/services/waitlis
 import { syncPremiumEntitlement } from '@/services/subscription';
 import { identifyPurchasesUser } from '@/services/purchases';
 import { registerPushToken, clearPushTokenOnLogout } from '@/services/pushTokens';
+import { recordInstall, recordUserDevice } from '@/services/userDevice';
 
 export type AccountAction =
   | 'save'
@@ -156,6 +157,10 @@ async function settleAfterSignIn(
       reportAuthFailure(label, 'post_signin', e);
     }
   }
+  // An anonymous session upgraded in place keeps its uid, so the auth-state
+  // listener does not fire again — record the device here as well.
+  void recordInstall();
+  void recordUserDevice();
 }
 
 /**
@@ -387,6 +392,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         void syncPremiumEntitlement();
         void registerPushToken();
+        void recordInstall();
+        void recordUserDevice();
         void (async () => {
           const { refreshWaitlistForCurrentUser } = await import('@/services/waitlist');
           await refreshWaitlistForCurrentUser();
@@ -408,6 +415,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           );
         })();
       } else {
+        void recordInstall();
         void identifyFirebaseUser(
           {
             uid: u.uid,

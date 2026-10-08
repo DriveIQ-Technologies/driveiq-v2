@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 import {
   ageLabel,
   countBy,
+  devicePlatform,
   estimateCostUsd,
   feedHealth,
   lastDays,
   parseAdminEmails,
+  platformCounts,
   subscriptionPlan,
   waitlistStatus,
+  boardEveryMinutes,
+  isAirportNight,
 } from './metrics';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
@@ -104,5 +108,77 @@ describe('subscriptionPlan', () => {
     });
     expect(subscriptionPlan({ premiumPlan: 'monthly', premiumStatus: 'cancelled' }).label).toBe('Free');
     expect(subscriptionPlan({}).label).toBe('Free');
+  });
+});
+
+describe('devicePlatform', () => {
+  it('uses the platform the app records on every start', () => {
+    expect(devicePlatform({ platform: 'android' })).toBe('android');
+    expect(devicePlatform({ platform: 'ios', pushPlatform: 'android' })).toBe('ios');
+  });
+
+  it('falls back to the push platform for users not on the updated app', () => {
+    expect(devicePlatform({ pushPlatform: 'ios' })).toBe('ios');
+  });
+
+  it('is unknown when neither is set', () => {
+    expect(devicePlatform({})).toBe('unknown');
+    expect(devicePlatform({ platform: 'web' })).toBe('unknown');
+  });
+});
+
+describe('platformCounts', () => {
+  it('adds legacy push-only users without double counting', () => {
+    expect(
+      platformCounts({
+        total: 100,
+        platformIos: 30,
+        platformAndroid: 20,
+        // 25 iPhone push users, 10 of whom already report platform.
+        pushIos: 25,
+        pushIosWithPlatform: 10,
+        pushAndroid: 0,
+        pushAndroidWithPlatform: 0,
+      }),
+    ).toEqual({ ios: 45, android: 20, unknown: 35 });
+  });
+
+  it('never goes negative', () => {
+    expect(
+      platformCounts({
+        total: 1,
+        platformIos: 1,
+        platformAndroid: 1,
+        pushIos: 0,
+        pushIosWithPlatform: 1,
+        pushAndroid: 0,
+        pushAndroidWithPlatform: 0,
+      }),
+    ).toEqual({ ios: 1, android: 1, unknown: 0 });
+  });
+});
+
+describe('isAirportNight', () => {
+  it('covers 01:00 to 04:15 London, summer and winter', () => {
+    expect(isAirportNight(Date.parse('2026-10-07T02:08:00+01:00'))).toBe(true);
+    expect(isAirportNight(Date.parse('2026-10-07T04:10:00+01:00'))).toBe(true);
+    expect(isAirportNight(Date.parse('2026-10-07T04:20:00+01:00'))).toBe(false);
+    expect(isAirportNight(Date.parse('2026-10-07T00:50:00+01:00'))).toBe(false);
+    expect(isAirportNight(Date.parse('2026-12-07T02:00:00Z'))).toBe(true);
+  });
+
+  it('a board refreshed 20 minutes ago is healthy at night, not down', () => {
+    const now = Date.parse('2026-10-07T02:08:00+01:00');
+    const at = new Date(now - 20 * 60_000).toISOString();
+    expect(feedHealth(at, isAirportNight(now) ? 30 : 10, now)).toBe('ok');
+  });
+
+  it('treats the 29 minute overnight gap as healthy, and late on the daytime 5 minute clock', () => {
+    const now = Date.parse('2026-10-08T02:01:00+01:00');
+    const at = new Date(now - 29 * 60_000).toISOString();
+    expect(isAirportNight(now)).toBe(true);
+    expect(boardEveryMinutes(5, now)).toBe(30);
+    expect(feedHealth(at, boardEveryMinutes(5, now), now)).toBe('ok');
+    expect(feedHealth(at, 5, now)).toBe('late');
   });
 });

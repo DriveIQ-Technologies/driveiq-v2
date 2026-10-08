@@ -8,7 +8,9 @@ import {
   orderBy,
   query,
   where,
+  type CollectionReference,
   type Firestore,
+  type QueryFieldFilterConstraint,
 } from 'firebase/firestore';
 
 import { isDemo } from './demo';
@@ -16,13 +18,18 @@ import { clientDb } from './firebaseClient';
 import {
   ageLabel,
   countBy,
+  devicePlatform,
   estimateCostUsd,
   feedHealth,
+  isAirportNight,
   lastDays,
   londonDay,
+  platformCounts,
   waitlistStatus,
   subscriptionPlan,
+  type DevicePlatform,
   type Health,
+  type PlatformCounts,
   type WaitlistStatus,
   type WaitlistTokenRow,
 } from './metrics';
@@ -44,16 +51,26 @@ export interface Feed {
   updatedAt: string | null;
   age: string;
   everyMinutes: number;
+  /** Human schedule, including the overnight slowdown when it is in force. */
+  schedule: string;
   health: Health;
 }
 
-const FEEDS: { name: string; path: string; everyMinutes: number; detail: (d: Doc) => string }[] = [
-  { name: 'Heathrow board', path: 'airportCache/EGLL', everyMinutes: 10, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
-  { name: 'Gatwick board', path: 'airportCache/EGKK', everyMinutes: 10, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
-  { name: 'Stansted board', path: 'airportCache/EGSS', everyMinutes: 15, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
-  { name: 'Luton board', path: 'airportCache/EGGW', everyMinutes: 15, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
-  { name: 'London City board', path: 'airportCache/EGLC', everyMinutes: 15, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
-  { name: 'Heathrow all-day board', path: 'airportCacheDay/EGLL-0', everyMinutes: 60, detail: () => 'Premium full-day view' },
+// nightEveryMinutes: the schedule between 01:00 and 04:00 London, when the
+// airport jobs slow down (boards every 30 min; the all-day boards pause).
+const FEEDS: {
+  name: string;
+  path: string;
+  everyMinutes: number;
+  nightEveryMinutes?: number;
+  detail: (d: Doc) => string;
+}[] = [
+  { name: 'Heathrow board', path: 'airportCache/EGLL', everyMinutes: 5, nightEveryMinutes: 30, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
+  { name: 'Gatwick board', path: 'airportCache/EGKK', everyMinutes: 5, nightEveryMinutes: 30, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
+  { name: 'Stansted board', path: 'airportCache/EGSS', everyMinutes: 15, nightEveryMinutes: 30, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
+  { name: 'Luton board', path: 'airportCache/EGGW', everyMinutes: 15, nightEveryMinutes: 30, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
+  { name: 'London City board', path: 'airportCache/EGLC', everyMinutes: 15, nightEveryMinutes: 30, detail: (d) => `${num(d.flightCount) ?? 0} flights` },
+  { name: 'Heathrow all-day board', path: 'airportCacheDay/EGLL-0', everyMinutes: 60, nightEveryMinutes: 4 * 60, detail: () => 'Premium full-day view' },
   { name: 'National Rail', path: 'railCache/national', everyMinutes: 5, detail: (d) => `${Array.isArray(d.operators) ? d.operators.length : 0} operators` },
   { name: 'Events catalogue', path: 'eventsPublishedMeta/current', everyMinutes: 12 * 60, detail: (d) => `${num(d.count) ?? 0} events published` },
 ];
@@ -62,16 +79,25 @@ export async function getHealth(): Promise<Feed[]> {
   if (isDemo()) return demoHealth();
   const db = clientDb();
   const snaps = await Promise.all(FEEDS.map((f) => getDoc(pathRef(db, f.path))));
+  const night = isAirportNight();
   const feeds: Feed[] = FEEDS.map((f, i) => {
     const d = (snaps[i].data() ?? {}) as Doc;
     const updatedAt = str(d.updatedAt);
+    const every = f.nightEveryMinutes && night ? f.nightEveryMinutes : f.everyMinutes;
+    const schedule =
+      f.nightEveryMinutes && night
+        ? `every ${f.nightEveryMinutes} min overnight`
+        : every >= 60
+          ? `every ${every / 60} h`
+          : `every ${every} min`;
     return {
       name: f.name,
       detail: snaps[i].exists() ? f.detail(d) : 'no data',
       updatedAt,
       age: ageLabel(updatedAt),
-      everyMinutes: f.everyMinutes,
-      health: feedHealth(updatedAt, f.everyMinutes),
+      everyMinutes: every,
+      schedule,
+      health: feedHealth(updatedAt, every),
     };
   });
   const roads = await getDocs(query(collection(db, 'roadCorridors'), orderBy('updatedAt', 'desc'), limit(1)));
@@ -82,6 +108,7 @@ export async function getHealth(): Promise<Feed[]> {
     updatedAt: roadAt,
     age: ageLabel(roadAt),
     everyMinutes: 5,
+    schedule: 'every 5 min',
     health: feedHealth(roadAt, 5),
   });
   return feeds;
@@ -90,27 +117,45 @@ export async function getHealth(): Promise<Feed[]> {
 // ── Overview ───────────────────────────────────────────────────────────────
 
 export interface Overview {
-  users: { total: number; last7: number; withPush: number; ios: number; android: number };
+  users: {
+    total: number;
+    last7: number;
+    /** Push token registered (pushPlatform set), split by phone. */
+    withPush: number;
+    pushIos: number;
+    pushAndroid: number;
+    /** Every account by phone, push or not. */
+    devices: PlatformCounts;
+  };
   signups: { day: string; count: number }[];
   waitlist: { total: number; byStatus: Partial<Record<WaitlistStatus, number>> };
   ai: { questions7: number; cost7: number };
+  downloads: DownloadStats;
   feedsDown: number;
   feedsLate: number;
+}
+
+export interface DownloadStats {
+  total: number;
+  ios: number;
+  android: number;
+  withAccount: number;
+  last7: number;
 }
 
 export async function getOverview(): Promise<Overview> {
   if (isDemo()) return demoOverview();
   const db = clientDb();
   const users = collection(db, 'users');
-  const [total, last7, ios, android, recent, tokens, ai, feeds] = await Promise.all([
+  const [total, last7, devices, recent, tokens, ai, feeds, downloads] = await Promise.all([
     getCountFromServer(users),
     getCountFromServer(query(users, where('createdAt', '>=', isoDaysAgo(7)))),
-    getCountFromServer(query(users, where('pushPlatform', '==', 'ios'))),
-    getCountFromServer(query(users, where('pushPlatform', '==', 'android'))),
+    countDevices(users),
     getDocs(query(users, where('createdAt', '>=', isoDaysAgo(14)))),
     getDocs(query(collection(db, 'waitlistTokens'), limit(5000))),
     getDocs(query(collection(db, 'aiCostLog'), where('createdAt', '>=', isoDaysAgo(7)), limit(5000))),
     getHealth(),
+    countInstalls(db),
   ]);
   const perDay = countBy(
     recent.docs.map((d) => str(d.data().createdAt)).filter((x): x is string => Boolean(x)),
@@ -121,9 +166,10 @@ export async function getOverview(): Promise<Overview> {
     users: {
       total: total.data().count,
       last7: last7.data().count,
-      withPush: ios.data().count + android.data().count,
-      ios: ios.data().count,
-      android: android.data().count,
+      withPush: devices.pushIos + devices.pushAndroid,
+      pushIos: devices.pushIos,
+      pushAndroid: devices.pushAndroid,
+      devices: platformCounts({ total: total.data().count, ...devices }),
     },
     signups: lastDays(14).map((day) => ({ day, count: perDay[day] ?? 0 })),
     waitlist: { total: tokenRows.length, byStatus: countBy(tokenRows, (t) => waitlistStatus(t)) },
@@ -131,9 +177,169 @@ export async function getOverview(): Promise<Overview> {
       questions7: ai.size,
       cost7: ai.docs.reduce((sum, d) => sum + estimateCostUsd(d.data()), 0),
     },
+    downloads,
     feedsDown: feeds.filter((f) => f.health === 'down').length,
     feedsLate: feeds.filter((f) => f.health === 'late').length,
   };
+}
+
+/**
+ * Counts behind platformCounts. Equality-only filters, so Firestore serves
+ * them from single-field indexes — no composite index to deploy.
+ */
+async function countDevices(users: CollectionReference) {
+  const n = (...filters: QueryFieldFilterConstraint[]) =>
+    getCountFromServer(query(users, ...filters)).then((s) => s.data().count);
+  const eq = (field: string, value: string) => where(field, '==', value);
+  const [platformIos, platformAndroid, pushIos, pushAndroid, pIosOnIos, pIosOnAndroid, pAndOnIos, pAndOnAndroid] =
+    await Promise.all([
+      n(eq('platform', 'ios')),
+      n(eq('platform', 'android')),
+      n(eq('pushPlatform', 'ios')),
+      n(eq('pushPlatform', 'android')),
+      n(eq('pushPlatform', 'ios'), eq('platform', 'ios')),
+      n(eq('pushPlatform', 'ios'), eq('platform', 'android')),
+      n(eq('pushPlatform', 'android'), eq('platform', 'ios')),
+      n(eq('pushPlatform', 'android'), eq('platform', 'android')),
+    ]);
+  return {
+    platformIos,
+    platformAndroid,
+    pushIos,
+    pushAndroid,
+    pushIosWithPlatform: pIosOnIos + pIosOnAndroid,
+    pushAndroidWithPlatform: pAndOnIos + pAndOnAndroid,
+  };
+}
+
+async function countInstalls(db: Firestore): Promise<DownloadStats> {
+  const empty = { total: 0, ios: 0, android: 0, withAccount: 0, last7: 0 };
+  try {
+    const installs = collection(db, 'installs');
+    const n = (...filters: QueryFieldFilterConstraint[]) =>
+      getCountFromServer(query(installs, ...filters)).then((s) => s.data().count);
+    const [total, ios, android, withAccount, last7] = await Promise.all([
+      n(),
+      n(where('platform', '==', 'ios')),
+      n(where('platform', '==', 'android')),
+      n(where('account', '==', true)),
+      n(where('firstSeenAt', '>=', isoDaysAgo(7))),
+    ]);
+    return { total, ios, android, withAccount, last7 };
+  } catch {
+    return empty;
+  }
+}
+
+export interface PlacePin {
+  id: string;
+  platform: DevicePlatform;
+  area: string | null;
+  lat: number;
+  lng: number;
+  lastSeenAt: string | null;
+  account: boolean;
+}
+
+export async function getDownloadActivity(): Promise<{
+  perDay: { day: string; count: number }[];
+  places: PlacePin[];
+}> {
+  if (isDemo()) return demoDownloadActivity();
+  const db = clientDb();
+  try {
+    const [opened, seen] = await Promise.all([
+      getDocs(query(collection(db, 'installs'), where('firstSeenAt', '>=', isoDaysAgo(14)), limit(2000))),
+      getDocs(query(collection(db, 'installs'), where('lastSeenAt', '>=', isoDaysAgo(2)), limit(500))),
+    ]);
+    const perDay = countBy(
+      opened.docs.map((d) => str(d.data().firstSeenAt)).filter((x): x is string => Boolean(x)),
+      (iso) => londonDay(iso),
+    );
+    const places: PlacePin[] = [];
+    for (const d of seen.docs) {
+      const data = d.data();
+      const lat = num(data.lat);
+      const lng = num(data.lng);
+      if (lat == null || lng == null) continue;
+      places.push({
+        id: d.id,
+        platform: devicePlatform(data),
+        area: str(data.area),
+        lat,
+        lng,
+        lastSeenAt: str(data.lastSeenAt),
+        account: data.account === true,
+      });
+    }
+    return {
+      perDay: lastDays(14).map((day) => ({ day, count: perDay[day] ?? 0 })),
+      places,
+    };
+  } catch {
+    return { perDay: lastDays(14).map((day) => ({ day, count: 0 })), places: [] };
+  }
+}
+
+export interface AudienceRow {
+  email: string;
+  name: string | null;
+  source: string;
+  platform: string;
+  joined: string | null;
+  marketing: boolean;
+}
+
+/** Account emails plus waitlist emails, one row per address, for a Brevo import. */
+export async function listAudience(): Promise<AudienceRow[]> {
+  if (isDemo()) return demoAudience();
+  const db = clientDb();
+  const [users, tokens] = await Promise.all([
+    getDocs(query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(2000))),
+    getDocs(query(collection(db, 'waitlistTokens'), limit(5000))),
+  ]);
+  const byEmail = new Map<string, AudienceRow>();
+  for (const d of users.docs) {
+    const data = d.data();
+    const email = str(data.email)?.trim().toLowerCase();
+    if (!email) continue;
+    byEmail.set(email, {
+      email,
+      name: str(data.displayName),
+      source: 'Account',
+      platform: devicePlatform(data) === 'ios' ? 'iPhone' : devicePlatform(data) === 'android' ? 'Android' : '',
+      joined: str(data.createdAt),
+      marketing: data.marketingConsent === true,
+    });
+  }
+  for (const d of tokens.docs) {
+    const email = str(d.data().email)?.trim().toLowerCase();
+    if (!email) continue;
+    const existing = byEmail.get(email);
+    if (existing) {
+      existing.source = existing.source.includes('Waitlist') ? existing.source : `${existing.source} + waitlist`;
+    } else {
+      byEmail.set(email, {
+        email,
+        name: null,
+        source: 'Waitlist',
+        platform: '',
+        joined: null,
+        marketing: false,
+      });
+    }
+  }
+  return [...byEmail.values()].sort((a, b) => String(b.joined ?? '').localeCompare(String(a.joined ?? '')));
+}
+
+export function audienceCsv(rows: AudienceRow[]): string {
+  const header = ['email', 'name', 'source', 'platform', 'joined', 'marketing_opt_in'];
+  const lines = rows.map((r) =>
+    [r.email, r.name ?? '', r.source, r.platform, r.joined ?? '', r.marketing ? 'yes' : 'no']
+      .map((cell) => (/[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell))
+      .join(','),
+  );
+  return [header.join(','), ...lines].join('\n');
 }
 
 // ── Users ──────────────────────────────────────────────────────────────────
@@ -145,6 +351,10 @@ export interface UserRow {
   createdAt: string | null;
   provider: string | null;
   push: string | null;
+  /** Phone from `platform`, falling back to pushPlatform; 'unknown' until they open the updated app. */
+  device: DevicePlatform;
+  appVersion: string | null;
+  lastSeenAt: string | null;
   watchedFlights: number;
   savedEvents: number;
   planLabel: string;
@@ -159,6 +369,9 @@ function toUserRow(uid: string, d: Doc): UserRow {
     createdAt: str(d.createdAt),
     provider: str(d.authProvider),
     push: Array.isArray(d.fcmTokens) && d.fcmTokens.length > 0 ? (str(d.pushPlatform) ?? 'yes') : null,
+    device: devicePlatform(d),
+    appVersion: str(d.appVersion),
+    lastSeenAt: str(d.lastSeenAt),
     watchedFlights: Array.isArray(d.savedFlights) ? d.savedFlights.length : 0,
     savedEvents: num(d.savedEventsCount) ?? (Array.isArray(d.savedEvents) ? d.savedEvents.length : 0),
     planLabel: subscriptionPlan(d).label,
@@ -319,6 +532,23 @@ export async function getAiUsage(days = 14): Promise<{ perDay: AiDay[]; topUsers
 
 const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
+function demoDownloadActivity(): { perDay: { day: string; count: number }[]; places: PlacePin[] } {
+  return {
+    perDay: lastDays(14).map((day, i) => ({ day, count: [4, 6, 3, 9, 8, 5, 11, 7, 14, 12, 8, 16, 20, 13][i] ?? 0 })),
+    places: [
+      { id: 'p1', platform: 'ios', area: 'Croydon', lat: 51.37, lng: -0.1, lastSeenAt: minsAgo(20), account: true },
+      { id: 'p2', platform: 'android', area: 'Ealing', lat: 51.51, lng: -0.3, lastSeenAt: minsAgo(50), account: false },
+    ],
+  };
+}
+
+function demoAudience(): AudienceRow[] {
+  return [
+    { email: 'amir.k@example.com', name: 'Amir K', source: 'Account + waitlist', platform: 'iPhone', joined: minsAgo(40), marketing: false },
+    { email: 'jo.cab@example.com', name: null, source: 'Waitlist', platform: '', joined: null, marketing: false },
+  ];
+}
+
 function demoHealth(): Feed[] {
   const rows: [string, string, number, number][] = [
     ['Heathrow board', '453 flights', 10, 4],
@@ -337,25 +567,34 @@ function demoHealth(): Feed[] {
     updatedAt: minsAgo(ago),
     age: ageLabel(minsAgo(ago)),
     everyMinutes: every,
+    schedule: every >= 60 ? `every ${every / 60} h` : `every ${every} min`,
     health: feedHealth(minsAgo(ago), every),
   }));
 }
 
 function demoOverview(): Overview {
   return {
-    users: { total: 412, last7: 63, withPush: 297, ios: 241, android: 56 },
+    users: {
+      total: 412,
+      last7: 63,
+      withPush: 241,
+      pushIos: 241,
+      pushAndroid: 0,
+      devices: { ios: 288, android: 71, unknown: 53 },
+    },
     signups: lastDays(14).map((day, i) => ({ day, count: [3, 5, 2, 8, 6, 4, 9, 7, 12, 10, 6, 14, 18, 11][i] ?? 0 })),
     waitlist: { total: 398, byStatus: { 'week-running': 41, 'week-ended': 27, unclaimed: 301, expiring: 18, expired: 11 } },
     ai: { questions7: 184, cost7: 2.37 },
+    downloads: { total: 640, ios: 510, android: 130, withAccount: 412, last7: 88 },
     feedsDown: 0,
     feedsLate: 1,
   };
 }
 
 const DEMO_USERS: UserRow[] = [
-  { uid: 'demo-u1', email: 'amir.k@example.com', name: 'Amir K', createdAt: minsAgo(40), provider: 'apple', push: 'ios', watchedFlights: 2, savedEvents: 5, planLabel: 'Premium Monthly', planTrial: true },
-  { uid: 'demo-u2', email: 'sarah.driver@example.com', name: 'Sarah M', createdAt: minsAgo(300), provider: 'google', push: 'android', watchedFlights: 0, savedEvents: 1, planLabel: 'Free', planTrial: false },
-  { uid: 'demo-u3', email: 'tomasz@example.com', name: null, createdAt: minsAgo(1500), provider: 'password', push: null, watchedFlights: 1, savedEvents: 0, planLabel: 'Free', planTrial: false },
+  { uid: 'demo-u1', email: 'amir.k@example.com', name: 'Amir K', createdAt: minsAgo(40), provider: 'apple', push: 'ios', device: 'ios', appVersion: '6.3.8', lastSeenAt: minsAgo(12), watchedFlights: 2, savedEvents: 5, planLabel: 'Premium Monthly', planTrial: true },
+  { uid: 'demo-u2', email: 'sarah.driver@example.com', name: 'Sarah M', createdAt: minsAgo(300), provider: 'google', push: null, device: 'android', appVersion: '6.3.8', lastSeenAt: minsAgo(95), watchedFlights: 0, savedEvents: 1, planLabel: 'Free', planTrial: false },
+  { uid: 'demo-u3', email: 'tomasz@example.com', name: null, createdAt: minsAgo(1500), provider: 'password', push: null, device: 'unknown', appVersion: null, lastSeenAt: null, watchedFlights: 1, savedEvents: 0, planLabel: 'Free', planTrial: false },
 ];
 
 function demoUsers(q?: string): UserRow[] {

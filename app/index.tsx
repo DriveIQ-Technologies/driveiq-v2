@@ -54,7 +54,7 @@ import { RouteInfoPanel } from '@/components/RouteInfoPanel';
 import { RoadsPanel } from '@/components/RoadsPanel';
 import { SplashLoading } from '@/components/SplashLoading';
 import { TrafficIncidentSheet } from '@/components/TrafficIncidentSheet';
-import { TrafficMarker } from '@/components/TrafficMarker';
+import { TrafficMapPin } from '@/components/TrafficMarker';
 import { loadCachedEvents, saveCachedEvents } from '@/services/eventCache';
 import { reminderDialogMessage } from '@/services/eventReminders';
 import { isPlausibleLondonEvent } from '@/services/eventSanity';
@@ -102,7 +102,7 @@ import {
 } from '@/services/savedEvents';
 import { addEventToCalendar } from '@/services/calendar';
 import { ReportSheet } from '@/components/ReportSheet';
-import { ReportMarker } from '@/components/ReportMarker';
+import { ReportMapPin } from '@/components/ReportMarker';
 import { ReportPlaceOverlay } from '@/components/ReportPlaceOverlay';
 import { ReportDetailSheet } from '@/components/ReportDetailSheet';
 import {
@@ -142,11 +142,13 @@ import {
   readCurrentLocation,
 } from '@/services/deviceLocation';
 import { startPushTokenRefresh } from '@/services/pushTokens';
+import { recordUsagePlace } from '@/services/userDevice';
 import {
   hasSeenSignupInvite,
   markSignupInviteSeen,
 } from '@/services/onboarding';
-import { colors } from '@/theme/colors';
+import { darkMapStyle } from '@/theme/mapStyle';
+import { makeStyles, useTheme } from '@/theme/ThemeProvider';
 import type { AppEvent } from '@/types/event';
 import {
   buildFilterChips,
@@ -215,6 +217,8 @@ function claimTokenFromUrl(url: string): string | null {
 }
 
 export default function MapScreen() {
+  const { colors, isDark } = useTheme();
+  const styles = useStyles();
   const {
     requireAccount,
     accountPrompt,
@@ -515,6 +519,13 @@ export default function MapScreen() {
       cancelled = true;
     };
   }, [tourDone]);
+
+  // Last place the app was open, rounded, for the admin map. The helper
+  // ignores repeat ticks in the same kilometre.
+  useEffect(() => {
+    if (!userLocation) return;
+    void recordUsagePlace(userLocation);
+  }, [userLocation]);
 
   // Re-read the GPS fix whenever the app returns to the foreground. Location
   // was only read once on mount, so if the user moved while the app was
@@ -1559,6 +1570,8 @@ export default function MapScreen() {
         ref={mapRef}
         provider={MAP_PROVIDER}
         style={StyleSheet.absoluteFill}
+        customMapStyle={isDark ? darkMapStyle : []}
+        userInterfaceStyle={isDark ? 'dark' : 'light'}
         initialRegion={initialRegion}
         // Live road-flow overlay from the maps API, tied to the Traffic layer
         // toggle (same switch that shows the incident pins).
@@ -1639,32 +1652,20 @@ export default function MapScreen() {
 
         {!destination &&
           reports.map((report) => (
-            <Marker
-              key={report.id}
-              coordinate={{ latitude: report.latitude, longitude: report.longitude }}
-              onPress={() => handleReportPress(report)}
-              anchor={{ x: 0.5, y: 1 }}
-              tracksViewChanges={false}
-            >
-              <ReportMarker category={report.category} confirms={report.confirmCount} />
-            </Marker>
+            <ReportMapPin key={report.id} report={report} onPress={handleReportPress} />
           ))}
 
         {!destination && layers.traffic &&
           majorIncidents.map((inc) => (
-            <Marker
+            <TrafficMapPin
               key={`traffic-${inc.id}`}
-              coordinate={{ latitude: inc.latitude, longitude: inc.longitude }}
+              latitude={inc.latitude}
+              longitude={inc.longitude}
+              color={incidentColor(inc.severity)}
+              iconName={incidentIconName(inc.category, inc.hasClosures)}
+              selected={selectedIncident?.id === inc.id}
               onPress={() => setSelectedIncident(inc)}
-              anchor={{ x: 0.5, y: 0.5 }}
-              tracksViewChanges={false}
-            >
-              <TrafficMarker
-                color={incidentColor(inc.severity)}
-                iconName={incidentIconName(inc.category, inc.hasClosures)}
-                selected={selectedIncident?.id === inc.id}
-              />
-            </Marker>
+            />
           ))}
 
         {/*
@@ -1720,9 +1721,9 @@ export default function MapScreen() {
               longitude: destination.longitude,
             }}
             anchor={{ x: 0.5, y: 1 }}
-            tracksViewChanges={false}
+            tracksViewChanges
           >
-            <View style={styles.destinationPin}>
+            <View collapsable={false} style={styles.destinationPin}>
               <View style={styles.destinationPinInner} />
             </View>
           </Marker>
@@ -1767,6 +1768,23 @@ export default function MapScreen() {
               </View>
               <Text style={styles.brandText}>DriveIQ</Text>
             </View>
+            <View style={styles.brandSpacer} />
+            <Pressable
+              onPress={() => {
+                track('ai_support_opened', { source: 'map' });
+                setAiSupportOpen(true);
+              }}
+              style={({ pressed }) => [
+                styles.aiBtn,
+                pressed && styles.menuBtnPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Open DriveIQ AI"
+              hitSlop={8}
+            >
+              <Ionicons name="sparkles" size={16} color={colors.textOnPrimary} />
+              <Text style={styles.aiBtnText}>AI</Text>
+            </Pressable>
           </View>
           <FilterBar
             active={filter}
@@ -2298,7 +2316,7 @@ export default function MapScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   root: {
     flex: 1,
     backgroundColor: colors.background,
@@ -2373,6 +2391,29 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.6,
   },
+  brandSpacer: {
+    flex: 1,
+  },
+  aiBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: colors.primary,
+    shadowColor: colors.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  aiBtnText: {
+    color: colors.textOnPrimary,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
   bottomOverlay: {
     position: 'absolute',
     bottom: 0,
@@ -2404,7 +2445,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceRaised,
     marginBottom: 8,
     borderWidth: 1,
     borderColor: colors.border,
@@ -2470,4 +2511,4 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: colors.primary,
   },
-});
+}));

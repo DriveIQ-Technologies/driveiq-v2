@@ -99,15 +99,34 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Holds each waitlister's claimToken, so no client read: the claim
+    // functions resolve waitlist/{email} server side (admin SDK).
     match /waitlist/{email} {
-      allow get: if signedIn();
-      allow list: if isAdmin();
+      allow read: if isAdmin();
       allow write: if false;
     }
 
     match /aiCostLog/{id} {
       allow read: if isAdmin();
       allow write: if false;
+    }
+
+    // One row per phone session (anonymous browse or a real account).
+    // The app writes its own uid. Coordinates are already rounded.
+    match /installs/{uid} {
+      allow read: if isAdmin();
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly([
+          'platform', 'appVersion', 'firstSeenAt', 'lastSeenAt',
+          'account', 'email', 'lat', 'lng', 'area'
+        ])
+        && request.resource.data.platform in ['ios', 'android']
+        && request.resource.data.account is bool
+        && request.resource.data.lastSeenAt is string
+        && (request.resource.data.email == null
+          || (request.auth.token.email is string
+            && request.resource.data.email == request.auth.token.email));
     }
 
     match /users/{uid} {
