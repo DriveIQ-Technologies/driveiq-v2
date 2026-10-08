@@ -117,6 +117,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Cached App Store and Play download totals. Written by the admin server.
+    match /storeStats/{id} {
+      allow read, write: if false;
+    }
+
     // One row per phone session (anonymous browse or a real account).
     // The app writes its own uid. Coordinates are already rounded.
     match /installs/{uid} {

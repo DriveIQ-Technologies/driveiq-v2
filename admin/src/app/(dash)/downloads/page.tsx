@@ -2,37 +2,47 @@
 
 import { Load } from '@/components/Load';
 import { Bars, Card, fmtDate, PageHeader, Stat } from '@/components/ui';
-import { getDownloadActivity, getOverview } from '@/lib/data';
+import { getDownloadActivity } from '@/lib/data';
+import { fetchStoreDownloads } from '@/lib/storeClient';
+import { storeSetupNote } from '@/lib/storeReports';
 
 export default function DownloadsPage() {
   return (
     <Load
       load={async () => {
-        const [overview, activity] = await Promise.all([getOverview(), getDownloadActivity()]);
-        return { overview, activity };
+        const [store, activity] = await Promise.all([fetchStoreDownloads(), getDownloadActivity()]);
+        return { store, activity };
       }}
     >
-      {({ overview: o, activity }) => {
-        const browsing = Math.max(0, o.downloads.total - o.downloads.withAccount);
+      {({ store, activity }) => {
+        const note = storeSetupNote(store.missing);
+        const ios = store.ios ?? 0;
+        const android = store.android ?? 0;
         return (
           <>
             <PageHeader
               title="Downloads"
-              subtitle="Phones that have opened DriveIQ. Separate from accounts, which are people who signed up."
+              subtitle="First downloads from the App Store and Google Play. Reports usually land a day or two after the day itself."
             />
+            {note ? <p className="mb-4 text-sm text-slate-500">{note}</p> : null}
+            {store.error ? <p className="mb-4 text-sm text-slate-500">{store.error}</p> : null}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="Downloads" value={o.downloads.total.toLocaleString('en-GB')} hint={`+${o.downloads.last7} in the last 7 days`} />
-              <Stat label="iPhone" value={o.downloads.ios.toLocaleString('en-GB')} hint="Opened on iPhone" />
-              <Stat label="Android" value={o.downloads.android.toLocaleString('en-GB')} hint="Opened on Android" />
-              <Stat label="No account yet" value={browsing.toLocaleString('en-GB')} hint={`${o.downloads.withAccount.toLocaleString('en-GB')} of these later signed up`} />
+              <Stat label="Downloads" value={(store.ios == null && store.android == null ? 0 : ios + android).toLocaleString('en-GB')} hint="App Store first downloads plus Play installs" />
+              <Stat label="iPhone" value={store.ios == null ? '—' : ios.toLocaleString('en-GB')} hint="App Store, last 35 days" />
+              <Stat label="Android" value={store.android == null ? '—' : android.toLocaleString('en-GB')} hint="Play, total user installs" />
+              <Stat label="Last 7 days" value={store.last7.toLocaleString('en-GB')} hint={store.through ? `Through ${store.through}` : 'Store reporting days'} />
             </div>
 
             <Card className="mt-4">
               <div className="mb-4 flex items-baseline justify-between">
                 <h2 className="font-semibold">New downloads per day</h2>
-                <span className="text-xs text-slate-500">last 14 days</span>
+                <span className="text-xs text-slate-500">last 14 store days</span>
               </div>
-              <Bars data={activity.perDay.map((s) => ({ label: s.day, value: s.count }))} />
+              {store.perDay.length ? (
+                <Bars data={store.perDay.map((s) => ({ label: s.day, value: s.count }))} />
+              ) : (
+                <p className="text-sm text-slate-500">No store days yet.</p>
+              )}
             </Card>
 
             <Card className="mt-4">

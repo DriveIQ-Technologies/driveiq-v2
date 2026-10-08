@@ -6,16 +6,41 @@ import { Load } from '@/components/Load';
 import { Bars, Card, PageHeader, Stat, usd, WAITLIST_LABEL } from '@/components/ui';
 import { getOverview, type Overview } from '@/lib/data';
 import type { WaitlistStatus } from '@/lib/metrics';
+import { fetchStoreDownloads } from '@/lib/storeClient';
+import { storeSetupNote, type StoreDownloadResponse } from '@/lib/storeReports';
 
 const ORDER: WaitlistStatus[] = ['week-running', 'week-ended', 'unclaimed', 'expiring', 'expired', 'disabled'];
 
 export default function OverviewPage() {
   return (
-    <Load load={getOverview}>{(o) => <OverviewView o={o} />}</Load>
+    <Load load={async () => ({ o: await getOverview(), store: await fetchStoreDownloads() })}>
+      {({ o, store }) => <OverviewView o={o} store={store} />}
+    </Load>
   );
 }
 
-function OverviewView({ o }: { o: Overview }) {
+function downloadValue(store: StoreDownloadResponse, o: Overview): number {
+  if (store.ios == null && store.android == null) return o.downloads.total;
+  return (store.ios ?? 0) + (store.android ?? 0);
+}
+
+function downloadHint(store: StoreDownloadResponse): string {
+  if (store.ios == null && store.android == null) {
+    return storeSetupNote(store.missing) ?? store.error ?? 'App Store and Play figures land here';
+  }
+  const parts = [
+    store.ios != null ? `${store.ios.toLocaleString('en-GB')} iPhone` : null,
+    store.android != null ? `${store.android.toLocaleString('en-GB')} Android` : null,
+    'App Store and Play',
+  ].filter((part): part is string => Boolean(part));
+  if (store.ios == null || store.android == null) {
+    const gap = storeSetupNote(store.missing);
+    if (gap) parts.push(gap.replace(/\.$/, ''));
+  }
+  return parts.join(' · ');
+}
+
+function OverviewView({ o, store }: { o: Overview; store: StoreDownloadResponse }) {
   const claimed = (o.waitlist.byStatus['week-running'] ?? 0) + (o.waitlist.byStatus['week-ended'] ?? 0);
   const pushPct = o.users.total ? Math.round((o.users.withPush / o.users.total) * 100) : 0;
 
@@ -39,16 +64,20 @@ function OverviewView({ o }: { o: Overview }) {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Accounts" value={o.users.total.toLocaleString('en-GB')} hint={`+${o.users.last7} this week · people who signed up`} />
-        <Stat label="iPhone accounts" value={o.users.devices.ios.toLocaleString('en-GB')} hint={o.users.devices.unknown ? `${o.users.devices.unknown} accounts not on the updated app yet` : 'Signed-in iPhones'} />
-        <Stat label="Android accounts" value={o.users.devices.android.toLocaleString('en-GB')} hint="Signed-in Android phones" />
         <Stat
-          label="Downloads"
-          value={o.downloads.total.toLocaleString('en-GB')}
-          hint={`${o.downloads.ios} iPhone · ${o.downloads.android} Android · phones on the latest app`}
+          label="Accounts"
+          value={o.users.total.toLocaleString('en-GB')}
+          hint={
+            o.users.devices.unknown
+              ? `+${o.users.last7} this week · ${o.users.devices.unknown} still on an older build`
+              : `+${o.users.last7} this week · people who signed up`
+          }
         />
+        <Stat label="iPhone accounts" value={o.users.devices.ios.toLocaleString('en-GB')} hint="Signed-in iPhones" />
+        <Stat label="Android accounts" value={o.users.devices.android.toLocaleString('en-GB')} hint="Signed-in Android phones" />
+        <Stat label="Downloads" value={downloadValue(store, o).toLocaleString('en-GB')} hint={downloadHint(store)} />
         <Stat label="Notifications on" value={`${pushPct}%`} hint={`${o.users.pushIos} iPhone · ${o.users.pushAndroid} Android`} />
-        <Stat label="Waitlist claimed" value={`${claimed} / ${o.waitlist.total}`} hint={`${o.waitlist.byStatus['week-running'] ?? 0} weeks running now`} />
+        <Stat label="Waitlist claimed" value={`${claimed} / ${o.waitlist.total}`} hint={`${o.waitlist.byStatus['week-running'] ?? 0} in their free week`} />
         <Stat label="AI, last 7 days" value={usd(o.ai.cost7)} hint={`${o.ai.questions7} questions`} />
       </div>
 
